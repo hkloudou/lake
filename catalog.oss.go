@@ -56,14 +56,15 @@ func (m catalog) WriteJsonData(merge int, reqid int, field string, data []byte) 
 }
 
 func (m catalog) WriteSnap(obj *buildDataResult) error {
-	data, err := json.Marshal(obj.Data)
+	if obj.LastModifiedUnix == 0 {
+		return nil
+	}
+	data, err := json.Marshal(obj)
 	if err != nil {
 		return err
 	}
 	//need't snap
-	if obj.LastModifiedUnix == 0 {
-		return nil
-	}
+
 	// arr := strings.Trim(field, ".")
 	// fieldPath := ""
 	// if arr != "" {
@@ -122,6 +123,9 @@ func (m catalog) BuildData(beforeUnix int64) (*buildDataResult, error) {
 		sort.Slice(snaps, func(i, j int) bool {
 			return snaps[i].LastModified.Unix() < snaps[j].LastModified.Unix()
 		})
+		for i := 0; i < len(snaps)-1; i++ {
+			// m.newClient()
+		}
 		lastSnap = &snaps[len(snaps)-1]
 		wg.Add(1)
 		go func() {
@@ -136,19 +140,24 @@ func (m catalog) BuildData(beforeUnix int64) (*buildDataResult, error) {
 				lastError = err
 				return
 			}
-			err = json.Unmarshal(data, &result.Data)
+			err = json.Unmarshal(data, &result)
 			if err != nil {
 				lastError = err
 				return
 			}
-			result.LastModifiedUnix = lastSnap.LastModified.Unix()
-			result.Files = append(result.Files, []interface{}{"snap", lastSnap.Key, lastSnap.LastModified.Unix()})
+
+			// result.Files = append(make([][]interface{}, 0), []interface{}{"snap", lastSnap.Key, lastSnap.LastModified.Unix()})
 		}()
 	}
+	wg.Wait()
+	if result.LastModifiedUnix != 0 {
+		result.Files = append(make([][]interface{}, 0), []interface{}{"snap", lastSnap.Key, result.LastModifiedUnix})
+	}
+	//result.LastModifiedUnix = lastSnap.LastModified.Unix()
 	var files = make([]*SourceFile, 0)
 	for i := 0; i < len(jsons); i++ {
 		//skip file before snap
-		if lastSnap != nil && jsons[i].LastModified.Unix() < lastSnap.LastModified.Unix() {
+		if jsons[i].LastModified.Unix() < result.LastModifiedUnix {
 			continue
 		}
 

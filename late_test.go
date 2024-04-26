@@ -47,6 +47,7 @@ func TestXxx(t *testing.T) {
 }
 
 func TestRead(t *testing.T) {
+
 	c, err := lake.NewOssCatalog("cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "91110108717743469K", "1_1_1100")
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +56,6 @@ func TestRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// t.Log()
 	for i := 0; i < len(result.Files); i++ {
 		fmt.Println(result.Files[i][0], "\t", result.Files[i][1], "\t", result.Files[i][2])
 	}
