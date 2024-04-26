@@ -39,8 +39,9 @@ type SourceFile struct {
 
 type buildDataResult struct {
 	Data             map[string]any
-	LastModifiedUnix int64
 	Files            [][]interface{}
+	LastModifiedUnix int64
+	SampleUnix       int64
 }
 
 func (m catalog) WriteJsonData(merge int, reqid int, field string, data []byte) error {
@@ -128,7 +129,7 @@ func (m catalog) BuildData(beforeUnix int64) (*buildDataResult, error) {
 			// m.newClient()
 		}
 		lastSnap = &snaps[len(snaps)-1]
-		fmt.Println("snap", lastSnap.Key)
+		// fmt.Println("snap", lastSnap.Key)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -159,7 +160,7 @@ func (m catalog) BuildData(beforeUnix int64) (*buildDataResult, error) {
 	var files = make([]*SourceFile, 0)
 	for i := 0; i < len(jsons); i++ {
 		//skip file before snap
-		if jsons[i].LastModified.Unix() < result.LastModifiedUnix {
+		if lastSnap != nil && jsons[i].LastModified.Unix() < result.SampleUnix {
 			continue
 		}
 
@@ -213,7 +214,7 @@ func (m catalog) BuildData(beforeUnix int64) (*buildDataResult, error) {
 		}
 		result.Files = append(result.Files, []interface{}{"json", file.FullPath, file.LastModified.Unix()})
 	}
-
+	result.SampleUnix = beforeUnix
 	return result, nil
 }
 
