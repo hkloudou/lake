@@ -2,6 +2,7 @@ package lake_test
 
 import (
 	_ "embed"
+	"fmt"
 	"testing"
 	"time"
 
@@ -18,19 +19,24 @@ var accessKeySecret string
 var bucketName string
 
 func TestXxx(t *testing.T) {
+
 	c, err := lake.NewOssCatalog("cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "91110108717743469K", "1_1_1100")
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = c.WriteJsonData(0, "s", []byte(`{"key2": "value"}`))
+	err = c.WriteJsonData(0, 1001, "s", []byte(`{"key2": "value"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = c.WriteJsonData(1, "", []byte(`{"key2": "value"}`))
+	err = c.WriteJsonData(1, 123, "", []byte(`{"key2": "value"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = c.WriteJsonData(1, "", []byte(`{"key2": "value"}`))
+	err = c.WriteJsonData(1, 24, "", []byte(`{"key2": "value"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.WriteJsonData(0, 2, "s", []byte(`{"key2": "value"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,9 +47,13 @@ func TestRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := c.BuildData(time.Now())
+	data, files, err := c.BuildData(time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
+	for i := 0; i < len(files); i++ {
+		fmt.Println(files[i].LastModified, files[i].FullPath)
+	}
+	// t.Log(files)
 	t.Log(data)
 }

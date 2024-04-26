@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,7 +37,7 @@ type SourceFile struct {
 	Value map[string]interface{}
 }
 
-func (m catalog) WriteJsonData(merge int, field string, data []byte) error {
+func (m catalog) WriteJsonData(merge int, reqid int, field string, data []byte) error {
 	if merge != 0 && merge != 1 {
 		return fmt.Errorf("unknown merge")
 	}
@@ -45,10 +46,10 @@ func (m catalog) WriteJsonData(merge int, field string, data []byte) error {
 	if arr != "" {
 		fieldPath = strings.ReplaceAll(arr, ".", "/") + "/"
 	}
-	return m.newClient().PutObject(fmt.Sprintf("%s/data/%s%s_%d.json", m.path, fieldPath, uuid.New().String(), merge), bytes.NewReader(data))
+	return m.newClient().PutObject(fmt.Sprintf("%s/data/%s%06d_%s_%d.json", m.path, fieldPath, reqid, uuid.New().String(), merge), bytes.NewReader(data))
 }
 
-func (m catalog) BuildData(before time.Time) (map[string]any, error) {
+func (m catalog) BuildData(before time.Time) (map[string]any, []*SourceFile, error) {
 	//list information
 	snaps := make([]oss.ObjectProperties, 0)
 	jsons := make([]oss.ObjectProperties, 0)
@@ -58,7 +59,7 @@ func (m catalog) BuildData(before time.Time) (map[string]any, error) {
 		oss.MaxKeys(500),
 		oss.ObjectStorageClass(oss.StorageStandard),
 	); err != nil {
-		return nil, err
+		return nil, nil, err
 	} else {
 		for i := 0; i < len(items.Objects); i++ {
 			obj := items.Objects[i]
@@ -108,7 +109,7 @@ func (m catalog) BuildData(before time.Time) (map[string]any, error) {
 	for i := 0; i < len(jsons); i++ {
 		wg.Add(1)
 		go func(i2 int) {
-			fmt.Println(i2)
+			// fmt.Println(i2)
 			defer wg.Done()
 			obj, err := m.readOssSourceFile(jsons[i2])
 			if err != nil {
@@ -123,22 +124,36 @@ func (m catalog) BuildData(before time.Time) (map[string]any, error) {
 			lock.Unlock()
 		}(i)
 	}
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].LastModified.Before(files[j].LastModified)
-	})
-	wg.Wait()
-	if lastError != nil {
-		return nil, lastError
+
+	// getNumericPart 解析文件名中的数字部分
+	getNumericPart := func(filename string) int {
+		parts := strings.Split(filename, "_")
+		if len(parts) > 0 {
+			num, err := strconv.Atoi(parts[0])
+			if err == nil {
+				return num
+			}
+		}
+		return 0 // 如果解析失败，返回0（或者可以选择处理错误）
 	}
-	fmt.Println(len(files))
-	// for i := 0; i < len(files); i++ {
-	// 	fmt.Println(files[i].Field)
-	// }
+	wg.Wait()
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].LastModified.UnixNano() == files[j].LastModified.UnixNano() {
+			// 如果时间相同，则按文件名排序
+			return getNumericPart(files[i].FileName) < getNumericPart(files[j].FileName)
+		}
+		return files[i].LastModified.UnixNano() < (files[j].LastModified.UnixNano())
+	})
+
+	if lastError != nil {
+		return nil, nil, lastError
+	}
+
 	for _, file := range files {
 		updateResult(snapObject, file)
 	}
 
-	return snapObject, nil
+	return snapObject, files, nil
 }
 
 func updateResult(result map[string]any, file *SourceFile) {
@@ -206,9 +221,9 @@ func (m catalog) readOssSourceFile(file oss.ObjectProperties) (*SourceFile, erro
 		return nil, err
 	}
 	var ret = &SourceFile{
-		Prefix:   m.path,
-		FullPath: file.Key,
-		// FileName:     f,
+		Prefix:       m.path,
+		FullPath:     file.Key,
+		FileName:     pathSplit[len(pathSplit)-1],
 		Merge:        merge,
 		Type:         file.Type,
 		ETag:         file.ETag,
