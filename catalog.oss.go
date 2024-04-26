@@ -56,10 +56,14 @@ func (m catalog) WriteJsonData(merge int, reqid int, field string, data []byte) 
 	return m.newClient().PutObject(fmt.Sprintf("%s/data/%s%06d_%s_%d.json", m.path, fieldPath, reqid, uuid.New().String(), merge), bytes.NewReader(data))
 }
 
-func (m catalog) WriteSnap(obj *buildDataResult) error {
+func (m catalog) WriteSnap(obj *buildDataResult, window time.Duration) error {
 	if obj.LastModifiedUnix == 0 {
 		return nil
 	}
+	if time.Now().Unix()-obj.SampleUnix < int64(window.Seconds()) {
+		return fmt.Errorf("too short time")
+	}
+
 	data, err := json.Marshal(obj)
 	if err != nil {
 		return err
