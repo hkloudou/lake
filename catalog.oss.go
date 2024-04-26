@@ -37,6 +37,12 @@ type SourceFile struct {
 	Value map[string]interface{}
 }
 
+type buildDataResult struct {
+	Data                 map[string]any
+	LastModifiedUnixNano int64
+	Files                [][]interface{}
+}
+
 func (m catalog) WriteJsonData(merge int, reqid int, field string, data []byte) error {
 	if merge != 0 && merge != 1 {
 		return fmt.Errorf("unknown merge")
@@ -49,7 +55,7 @@ func (m catalog) WriteJsonData(merge int, reqid int, field string, data []byte) 
 	return m.newClient().PutObject(fmt.Sprintf("%s/data/%s%06d_%s_%d.json", m.path, fieldPath, reqid, uuid.New().String(), merge), bytes.NewReader(data))
 }
 
-func (m catalog) BuildData(before time.Time) (map[string]any, []*SourceFile, error) {
+func (m catalog) BuildData(beforeNano int64) (*buildDataResult, error) {
 	//list information
 	snaps := make([]oss.ObjectProperties, 0)
 	jsons := make([]oss.ObjectProperties, 0)
@@ -59,11 +65,11 @@ func (m catalog) BuildData(before time.Time) (map[string]any, []*SourceFile, err
 		oss.MaxKeys(500),
 		oss.ObjectStorageClass(oss.StorageStandard),
 	); err != nil {
-		return nil, nil, err
+		return nil, err
 	} else {
 		for i := 0; i < len(items.Objects); i++ {
 			obj := items.Objects[i]
-			if obj.LastModified.UnixNano() > (before.UnixNano()) {
+			if obj.LastModified.UnixNano() > (beforeNano) {
 				continue
 			}
 			if strings.HasSuffix(obj.Key, ".snap") {
@@ -75,10 +81,13 @@ func (m catalog) BuildData(before time.Time) (map[string]any, []*SourceFile, err
 	}
 
 	var lock = sync.RWMutex{}
-	// var result = make(map[string]*DataItem[map[string]any])
 	var wg = sync.WaitGroup{}
 	var lastError error
-	var snapObject = make(map[string]any, 0)
+	result := &buildDataResult{
+		Data:                 make(map[string]any, 0),
+		Files:                make([][]interface{}, 0),
+		LastModifiedUnixNano: 0,
+	}
 	if len(snaps) > 0 {
 		wg.Add(1)
 		go func() {
@@ -98,11 +107,13 @@ func (m catalog) BuildData(before time.Time) (map[string]any, []*SourceFile, err
 				lastError = err
 				return
 			}
-			err = json.Unmarshal(data, &snapObject)
+			err = json.Unmarshal(data, &result.Data)
 			if err != nil {
 				lastError = err
 				return
 			}
+			result.LastModifiedUnixNano = lastSnap.LastModified.UnixNano()
+			result.Files = append(result.Files, []interface{}{"snap", lastSnap.Key, lastSnap.LastModified.UnixNano()})
 		}()
 	}
 	var files = make([]*SourceFile, 0)
@@ -120,6 +131,7 @@ func (m catalog) BuildData(before time.Time) (map[string]any, []*SourceFile, err
 				return
 			}
 			lock.Lock()
+
 			files = append(files, obj)
 			lock.Unlock()
 		}(i)
@@ -146,14 +158,18 @@ func (m catalog) BuildData(before time.Time) (map[string]any, []*SourceFile, err
 	})
 
 	if lastError != nil {
-		return nil, nil, lastError
+		return nil, lastError
 	}
 
 	for _, file := range files {
-		updateResult(snapObject, file)
+		updateResult(result.Data, file)
+		if file.LastModified.UnixNano() > result.LastModifiedUnixNano {
+			result.LastModifiedUnixNano = file.LastModified.UnixNano()
+		}
+		result.Files = append(result.Files, []interface{}{"data", file.FullPath, file.LastModified.UnixNano()})
 	}
 
-	return snapObject, files, nil
+	return result, nil
 }
 
 func updateResult(result map[string]any, file *SourceFile) {

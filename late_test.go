@@ -2,7 +2,6 @@ package lake_test
 
 import (
 	_ "embed"
-	"fmt"
 	"testing"
 	"time"
 
@@ -47,13 +46,11 @@ func TestRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, files, err := c.BuildData(time.Now())
+	// tim := time.Now()
+	result, err := c.BuildData(time.Now().UnixNano() - time.Minute.Nanoseconds())
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < len(files); i++ {
-		fmt.Println(files[i].LastModified, files[i].FullPath)
-	}
-	// t.Log(files)
-	t.Log(data)
+	t.Log(result.Files)
+	t.Log(result.LastModifiedUnixNano, result.Data)
 }
