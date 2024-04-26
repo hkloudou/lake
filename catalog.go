@@ -1,0 +1,57 @@
+package lake
+
+import (
+	"fmt"
+	"hash/crc32"
+	"log"
+	"regexp"
+	"strconv"
+
+	"github.com/aliyun/aliyun-oss-go-sdk/oss"
+)
+
+// data Catalog
+type catalog struct {
+	StorageClass    StorageClass
+	Endpoint        string
+	accessKeyID     string
+	accessKeySecret string
+	Bucket          string
+	// Client          *oss.Bucket
+	// Path         string
+	CreditCode string
+	path       string
+}
+
+func (m catalog) newClient() *oss.Bucket {
+	client, err := oss.New(fmt.Sprintf("http://oss-%s.aliyuncs.com", m.Endpoint), m.accessKeyID, m.accessKeySecret)
+	if err != nil {
+		log.Panicln(err)
+	}
+	bucketClient, err := client.Bucket(m.Bucket)
+	if err != nil {
+		log.Panicln(err)
+	}
+	return bucketClient
+}
+
+func NewOssCatalog(
+	endpoint string, bucket, accessKeyID string, accessKeySecret string,
+	creditCode string,
+	nameSpace string,
+) (*catalog, error) {
+	if !regexp.MustCompile(`^[1|5|9][1|2|3]\d{6}[^_IOZSVa-z\W]{10}$`).MatchString(creditCode) {
+		return nil, fmt.Errorf("invalid credit code")
+	}
+
+	return &catalog{
+		StorageClass:    StorageClassOSS,
+		Endpoint:        endpoint,
+		accessKeyID:     accessKeyID,
+		accessKeySecret: accessKeySecret,
+		Bucket:          bucket,
+		// Client:          bucketClient,
+		path:       fmt.Sprintf("%s/%s/%s", strconv.FormatUint(uint64(crc32.ChecksumIEEE([]byte(creditCode))), 16)[:4], creditCode, nameSpace),
+		CreditCode: creditCode,
+	}, nil
+}
