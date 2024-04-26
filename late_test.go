@@ -60,5 +60,5 @@ func TestRead(t *testing.T) {
 		fmt.Println(result.Files[i][0], "\t", result.Files[i][1], "\t", result.Files[i][2])
 	}
 	t.Log(result.LastModifiedUnix, sampleUnix, result.Data)
-	// c.WriteSnap(result, sampleUnix, 5*time.Second)
+	c.WriteSnap(result, sampleUnix, 1*time.Hour)
 }
