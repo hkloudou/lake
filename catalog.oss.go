@@ -119,6 +119,7 @@ func (m catalog) BuildData(beforeUnix int64) (*buildDataResult, error) {
 	})
 	var lastSnap *oss.ObjectProperties
 	// := snaps[len(snaps)-1]
+	fmt.Println("len(snap)", len(snaps))
 	if len(snaps) > 0 {
 		sort.Slice(snaps, func(i, j int) bool {
 			return snaps[i].LastModified.Unix() < snaps[j].LastModified.Unix()
@@ -127,6 +128,7 @@ func (m catalog) BuildData(beforeUnix int64) (*buildDataResult, error) {
 			// m.newClient()
 		}
 		lastSnap = &snaps[len(snaps)-1]
+		fmt.Println("snap", lastSnap.Key)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
