@@ -37,6 +37,9 @@ type SourceFile struct {
 }
 
 func (m catalog) WriteJsonData(merge int, field string, data []byte) error {
+	if merge != 0 && merge != 1 {
+		return fmt.Errorf("unknown merge")
+	}
 	arr := strings.Trim(field, ".")
 	fieldPath := ""
 	if arr != "" {
@@ -59,7 +62,7 @@ func (m catalog) BuildData(before time.Time) (map[string]any, error) {
 	} else {
 		for i := 0; i < len(items.Objects); i++ {
 			obj := items.Objects[i]
-			if obj.LastModified.Unix() > (before.Unix()) {
+			if obj.LastModified.UnixNano() > (before.UnixNano()) {
 				continue
 			}
 			if strings.HasSuffix(obj.Key, ".snap") {
@@ -80,7 +83,7 @@ func (m catalog) BuildData(before time.Time) (map[string]any, error) {
 		go func() {
 			defer wg.Done()
 			sort.Slice(snaps, func(i, j int) bool {
-				return snaps[i].LastModified.Before(snaps[j].LastModified)
+				return snaps[i].LastModified.UnixNano() < snaps[j].LastModified.UnixNano()
 			})
 			lastSnap := snaps[len(snaps)-1]
 			// bucket.GetObject(lastSnap.Key)
@@ -189,7 +192,7 @@ func (m catalog) readOssSourceFile(file oss.ObjectProperties) (*SourceFile, erro
 	} else if strings.HasSuffix(file.Key, "_1.json") {
 		merge = 1
 	} else {
-		panic("unknown merge")
+		return nil, fmt.Errorf("unknown merge")
 	}
 	// fieldKey := ""
 	// fmt.Println(file.Key, pathSplit)

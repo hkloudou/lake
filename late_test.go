@@ -30,6 +30,10 @@ func TestXxx(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	err = c.WriteJsonData(1, "", []byte(`{"key2": "value"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestRead(t *testing.T) {
