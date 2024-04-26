@@ -52,13 +52,13 @@ func TestRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := c.BuildData(time.Now().Unix() - 60)
+	result, sampleUnix, err := c.BuildData(time.Now().Unix() - 60)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < len(result.Files); i++ {
 		fmt.Println(result.Files[i][0], "\t", result.Files[i][1], "\t", result.Files[i][2])
 	}
-	t.Log(result.LastModifiedUnix, result.SampleUnix, result.Data)
-	c.WriteSnap(result, 5*time.Second)
+	t.Log(result.LastModifiedUnix, sampleUnix, result.Data)
+	// c.WriteSnap(result, sampleUnix, 5*time.Second)
 }

@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -41,7 +41,7 @@ type buildDataResult struct {
 	Data             map[string]any
 	Files            [][]interface{}
 	LastModifiedUnix int64
-	SampleUnix       int64
+	// SampleUnix       int64
 }
 
 func (m catalog) WriteJsonData(merge int, reqid int, field string, data []byte) error {
@@ -56,11 +56,11 @@ func (m catalog) WriteJsonData(merge int, reqid int, field string, data []byte) 
 	return m.newClient().PutObject(fmt.Sprintf("%s/data/%s%06d_%s_%d.json", m.path, fieldPath, reqid, uuid.New().String(), merge), bytes.NewReader(data))
 }
 
-func (m catalog) WriteSnap(obj *buildDataResult, window time.Duration) error {
-	if obj.LastModifiedUnix == 0 {
+func (m catalog) WriteSnap(obj *buildDataResult, sampleUnix int64, window time.Duration) error {
+	if obj.LastModifiedUnix == 0 || sampleUnix == 0 {
 		return nil
 	}
-	if time.Now().Unix()-obj.SampleUnix < int64(window.Seconds()) {
+	if time.Now().Unix()-sampleUnix < int64(window.Seconds()) {
 		return fmt.Errorf("too short time")
 	}
 
@@ -76,7 +76,7 @@ func (m catalog) WriteSnap(obj *buildDataResult, window time.Duration) error {
 	// 	fieldPath = strings.ReplaceAll(arr, ".", "/") + "/"
 	// }
 	return m.newClient().PutObject(
-		fmt.Sprintf("%s/data/snap/%s.snap", m.path, uuid.New().String()), bytes.NewReader(data),
+		fmt.Sprintf("%s/data/snap/%d.snap", m.path, sampleUnix), bytes.NewReader(data),
 		// oss.SetHeader(oss.HTTPHeaderLastModified, ""),
 		oss.Meta("Last-Modified", time.Unix(obj.LastModifiedUnix, 0).Format(time.RFC1123)),
 	)
@@ -86,7 +86,7 @@ func (m catalog) WriteSnap(obj *buildDataResult, window time.Duration) error {
 	// }
 }
 
-func (m catalog) BuildData(beforeUnix int64) (*buildDataResult, error) {
+func (m catalog) BuildData(sampleUnix int64) (*buildDataResult, int64, error) {
 	//list information
 	snaps := make([]oss.ObjectProperties, 0)
 	jsons := make([]oss.ObjectProperties, 0)
@@ -96,11 +96,11 @@ func (m catalog) BuildData(beforeUnix int64) (*buildDataResult, error) {
 		oss.MaxKeys(500),
 		oss.ObjectStorageClass(oss.StorageStandard),
 	); err != nil {
-		return nil, err
+		return nil, 0, err
 	} else {
 		for i := 0; i < len(items.Objects); i++ {
 			obj := items.Objects[i]
-			if obj.LastModified.Unix() > (beforeUnix) {
+			if obj.LastModified.Unix() > (sampleUnix) {
 				continue
 			}
 			if strings.HasSuffix(obj.Key, ".snap") {
@@ -127,7 +127,9 @@ func (m catalog) BuildData(beforeUnix int64) (*buildDataResult, error) {
 	fmt.Println("len(snap)", len(snaps))
 	if len(snaps) > 0 {
 		sort.Slice(snaps, func(i, j int) bool {
-			return snaps[i].LastModified.Unix() < snaps[j].LastModified.Unix()
+			// filepath.(snaps[i].Key)
+			return getNumericPart(path.Base(snaps[i].Key), 0) < getNumericPart(path.Base(snaps[j].Key), 0)
+			// return snaps[i].LastModified.Unix() < snaps[j].LastModified.Unix()
 		})
 		for i := 0; i < len(snaps)-1; i++ {
 			// m.newClient()
@@ -156,15 +158,13 @@ func (m catalog) BuildData(beforeUnix int64) (*buildDataResult, error) {
 			// result.Files = append(make([][]interface{}, 0), []interface{}{"snap", lastSnap.Key, lastSnap.LastModified.Unix()})
 		}()
 	}
-	wg.Wait()
-	if result.LastModifiedUnix != 0 {
-		result.Files = append(make([][]interface{}, 0), []interface{}{"snap", lastSnap.Key, result.LastModifiedUnix})
-	}
+	// wg.Wait()
+
 	//result.LastModifiedUnix = lastSnap.LastModified.Unix()
 	var files = make([]*SourceFile, 0)
 	for i := 0; i < len(jsons); i++ {
 		//skip file before snap
-		if lastSnap != nil && jsons[i].LastModified.Unix() < result.SampleUnix {
+		if lastSnap != nil && jsons[i].LastModified.Unix() < getNumericPart(path.Base(lastSnap.Key), 0) {
 			continue
 		}
 
@@ -187,30 +187,23 @@ func (m catalog) BuildData(beforeUnix int64) (*buildDataResult, error) {
 		}(i)
 	}
 
-	// getNumericPart 解析文件名中的数字部分
-	getNumericPart := func(filename string) int {
-		parts := strings.Split(filename, "_")
-		if len(parts) > 0 {
-			num, err := strconv.Atoi(parts[0])
-			if err == nil {
-				return num
-			}
-		}
-		return 0 // 如果解析失败，返回0（或者可以选择处理错误）
-	}
 	wg.Wait()
 	sort.Slice(files, func(i, j int) bool {
 		if files[i].LastModified.Unix() == files[j].LastModified.Unix() {
 			// 如果时间相同，则按文件名排序
-			return getNumericPart(files[i].FileName) < getNumericPart(files[j].FileName)
+			return getNumericPart(files[i].FileName, 0) < getNumericPart(files[j].FileName, 0)
 		}
 		return files[i].LastModified.Unix() < (files[j].LastModified.Unix())
 	})
 
 	if lastError != nil {
-		return nil, lastError
+		return nil, 0, lastError
 	}
 
+	//snap
+	if lastSnap != nil {
+		result.Files = append(make([][]interface{}, 0), []interface{}{"snap", lastSnap.Key, getNumericPart(path.Base(lastSnap.Key), 0)})
+	}
 	for _, file := range files {
 		updateResult(result.Data, file)
 		if file.LastModified.Unix() > result.LastModifiedUnix {
@@ -218,8 +211,8 @@ func (m catalog) BuildData(beforeUnix int64) (*buildDataResult, error) {
 		}
 		result.Files = append(result.Files, []interface{}{"json", file.FullPath, file.LastModified.Unix()})
 	}
-	result.SampleUnix = beforeUnix
-	return result, nil
+	// result.SampleUnix = beforeUnix
+	return result, sampleUnix, nil
 }
 
 func updateResult(result map[string]any, file *SourceFile) {
