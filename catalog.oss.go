@@ -75,11 +75,18 @@ func (m catalog) WriteSnap(obj *buildDataResult, sampleUnix int64, window time.D
 	// if arr != "" {
 	// 	fieldPath = strings.ReplaceAll(arr, ".", "/") + "/"
 	// }
-	return m.newClient().PutObject(
+	err = m.newClient().PutObject(
 		fmt.Sprintf("%s/data/snap/%d.snap", m.path, sampleUnix), bytes.NewReader(data),
 		// oss.SetHeader(oss.HTTPHeaderLastModified, ""),
 		oss.Meta("Last-Modified", time.Unix(obj.LastModifiedUnix, 0).Format(time.RFC1123)),
 	)
+	if err != nil {
+		return err
+	}
+	/*
+		尝试归档
+	*/
+	return nil
 	// 设置对象的HTTP头部
 	// options := []oss.Option{
 	// 	oss.Meta("Last-Modified", time.Unix(obj.LastModifiedUnix, 0).Format(time.RFC1123)),
@@ -125,6 +132,7 @@ func (m catalog) BuildData(sampleUnix int64) (*buildDataResult, int64, error) {
 	var lastSnap *oss.ObjectProperties
 	// := snaps[len(snaps)-1]
 	fmt.Println("len(snap)", len(snaps))
+	var deletingKeys = make([]string, 0)
 	if len(snaps) > 0 {
 		sort.Slice(snaps, func(i, j int) bool {
 			// filepath.(snaps[i].Key)
@@ -133,6 +141,9 @@ func (m catalog) BuildData(sampleUnix int64) (*buildDataResult, int64, error) {
 		})
 		for i := 0; i < len(snaps)-1; i++ {
 			// m.newClient()
+			//旧的snaps文件
+			// m.newClient().PutObjectTagging()
+			deletingKeys = append(deletingKeys, snaps[i].Key)
 		}
 		lastSnap = &snaps[len(snaps)-1]
 		// fmt.Println("snap", lastSnap.Key)
@@ -165,6 +176,7 @@ func (m catalog) BuildData(sampleUnix int64) (*buildDataResult, int64, error) {
 	for i := 0; i < len(jsons); i++ {
 		//skip file before snap
 		if lastSnap != nil && jsons[i].LastModified.Unix() < getNumericPart(path.Base(lastSnap.Key), 0) {
+			deletingKeys = append(deletingKeys, jsons[i].Key)
 			continue
 		}
 
@@ -212,6 +224,8 @@ func (m catalog) BuildData(sampleUnix int64) (*buildDataResult, int64, error) {
 		result.Files = append(result.Files, []interface{}{"json", file.FullPath, file.LastModified.Unix()})
 	}
 	// result.SampleUnix = beforeUnix
+	// fmt.Println("deletingKeys", deletingKeys)
+	m.newClient().DeleteObjects(deletingKeys)
 	return result, sampleUnix, nil
 }
 
