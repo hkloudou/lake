@@ -38,9 +38,9 @@ type SourceFile struct {
 }
 
 type buildDataResult struct {
-	Data                 map[string]any
-	LastModifiedUnixNano int64
-	Files                [][]interface{}
+	Data             map[string]any
+	LastModifiedUnix int64
+	Files            [][]interface{}
 }
 
 func (m catalog) WriteJsonData(merge int, reqid int, field string, data []byte) error {
@@ -55,7 +55,32 @@ func (m catalog) WriteJsonData(merge int, reqid int, field string, data []byte) 
 	return m.newClient().PutObject(fmt.Sprintf("%s/data/%s%06d_%s_%d.json", m.path, fieldPath, reqid, uuid.New().String(), merge), bytes.NewReader(data))
 }
 
-func (m catalog) BuildData(beforeNano int64) (*buildDataResult, error) {
+func (m catalog) WriteSnap(obj *buildDataResult) error {
+	data, err := json.Marshal(obj.Data)
+	if err != nil {
+		return err
+	}
+	//need't snap
+	if obj.LastModifiedUnix == 0 {
+		return nil
+	}
+	// arr := strings.Trim(field, ".")
+	// fieldPath := ""
+	// if arr != "" {
+	// 	fieldPath = strings.ReplaceAll(arr, ".", "/") + "/"
+	// }
+	return m.newClient().PutObject(
+		fmt.Sprintf("%s/data/snap/%s.snap", m.path, uuid.New().String()), bytes.NewReader(data),
+		// oss.SetHeader(oss.HTTPHeaderLastModified, ""),
+		oss.Meta("Last-Modified", time.Unix(obj.LastModifiedUnix, 0).Format(time.RFC1123)),
+	)
+	// 设置对象的HTTP头部
+	// options := []oss.Option{
+	// 	oss.Meta("Last-Modified", time.Unix(obj.LastModifiedUnix, 0).Format(time.RFC1123)),
+	// }
+}
+
+func (m catalog) BuildData(beforeUnix int64) (*buildDataResult, error) {
 	//list information
 	snaps := make([]oss.ObjectProperties, 0)
 	jsons := make([]oss.ObjectProperties, 0)
@@ -69,7 +94,7 @@ func (m catalog) BuildData(beforeNano int64) (*buildDataResult, error) {
 	} else {
 		for i := 0; i < len(items.Objects); i++ {
 			obj := items.Objects[i]
-			if obj.LastModified.UnixNano() > (beforeNano) {
+			if obj.LastModified.Unix() > (beforeUnix) {
 				continue
 			}
 			if strings.HasSuffix(obj.Key, ".snap") {
@@ -84,19 +109,23 @@ func (m catalog) BuildData(beforeNano int64) (*buildDataResult, error) {
 	var wg = sync.WaitGroup{}
 	var lastError error
 	result := &buildDataResult{
-		Data:                 make(map[string]any, 0),
-		Files:                make([][]interface{}, 0),
-		LastModifiedUnixNano: 0,
+		Data:             make(map[string]any, 0),
+		Files:            make([][]interface{}, 0),
+		LastModifiedUnix: 0,
 	}
+	sort.Slice(snaps, func(i, j int) bool {
+		return snaps[i].LastModified.Unix() < snaps[j].LastModified.Unix()
+	})
+	var lastSnap *oss.ObjectProperties
+	// := snaps[len(snaps)-1]
 	if len(snaps) > 0 {
+		sort.Slice(snaps, func(i, j int) bool {
+			return snaps[i].LastModified.Unix() < snaps[j].LastModified.Unix()
+		})
+		lastSnap = &snaps[len(snaps)-1]
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sort.Slice(snaps, func(i, j int) bool {
-				return snaps[i].LastModified.UnixNano() < snaps[j].LastModified.UnixNano()
-			})
-			lastSnap := snaps[len(snaps)-1]
-			// bucket.GetObject(lastSnap.Key)
 			buffer, err := m.newClient().GetObject(lastSnap.Key)
 			if err != nil {
 				lastError = err
@@ -112,12 +141,17 @@ func (m catalog) BuildData(beforeNano int64) (*buildDataResult, error) {
 				lastError = err
 				return
 			}
-			result.LastModifiedUnixNano = lastSnap.LastModified.UnixNano()
-			result.Files = append(result.Files, []interface{}{"snap", lastSnap.Key, lastSnap.LastModified.UnixNano()})
+			result.LastModifiedUnix = lastSnap.LastModified.Unix()
+			result.Files = append(result.Files, []interface{}{"snap", lastSnap.Key, lastSnap.LastModified.Unix()})
 		}()
 	}
 	var files = make([]*SourceFile, 0)
 	for i := 0; i < len(jsons); i++ {
+		//skip file before snap
+		if lastSnap != nil && jsons[i].LastModified.Unix() < lastSnap.LastModified.Unix() {
+			continue
+		}
+
 		wg.Add(1)
 		go func(i2 int) {
 			// fmt.Println(i2)
@@ -150,11 +184,11 @@ func (m catalog) BuildData(beforeNano int64) (*buildDataResult, error) {
 	}
 	wg.Wait()
 	sort.Slice(files, func(i, j int) bool {
-		if files[i].LastModified.UnixNano() == files[j].LastModified.UnixNano() {
+		if files[i].LastModified.Unix() == files[j].LastModified.Unix() {
 			// 如果时间相同，则按文件名排序
 			return getNumericPart(files[i].FileName) < getNumericPart(files[j].FileName)
 		}
-		return files[i].LastModified.UnixNano() < (files[j].LastModified.UnixNano())
+		return files[i].LastModified.Unix() < (files[j].LastModified.Unix())
 	})
 
 	if lastError != nil {
@@ -163,10 +197,10 @@ func (m catalog) BuildData(beforeNano int64) (*buildDataResult, error) {
 
 	for _, file := range files {
 		updateResult(result.Data, file)
-		if file.LastModified.UnixNano() > result.LastModifiedUnixNano {
-			result.LastModifiedUnixNano = file.LastModified.UnixNano()
+		if file.LastModified.Unix() > result.LastModifiedUnix {
+			result.LastModifiedUnix = file.LastModified.Unix()
 		}
-		result.Files = append(result.Files, []interface{}{"data", file.FullPath, file.LastModified.UnixNano()})
+		result.Files = append(result.Files, []interface{}{"json", file.FullPath, file.LastModified.Unix()})
 	}
 
 	return result, nil

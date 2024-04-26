@@ -2,6 +2,7 @@ package lake_test
 
 import (
 	_ "embed"
+	"fmt"
 	"testing"
 	"time"
 
@@ -23,22 +24,26 @@ func TestXxx(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = c.WriteJsonData(0, 1001, "s", []byte(`{"key2": "value"}`))
+	err = c.WriteJsonData(0, 1001, "s", []byte(`{"qs": "value"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = c.WriteJsonData(1, 123, "", []byte(`{"key2": "value"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = c.WriteJsonData(1, 24, "", []byte(`{"key2": "value"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = c.WriteJsonData(0, 2, "s", []byte(`{"key2": "value"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	// err = c.WriteJsonData(1, 1001, "s", []byte(`{"aas": "value"}`))
+	// if err != nil {
+	// 	t.Fatal(err)
+	// }
+	// err = c.WriteJsonData(1, 123, "", []byte(`{"key2": "value"}`))
+	// if err != nil {
+	// 	t.Fatal(err)
+	// }
+	// err = c.WriteJsonData(1, 24, "", []byte(`{"key2": "value"}`))
+	// if err != nil {
+	// 	t.Fatal(err)
+	// }
+	// err = c.WriteJsonData(0, 2, "s", []byte(`{"key2": "value"}`))
+	// if err != nil {
+	// 	t.Fatal(err)
+	// }
 }
 
 func TestRead(t *testing.T) {
@@ -46,11 +51,14 @@ func TestRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// tim := time.Now()
-	result, err := c.BuildData(time.Now().UnixNano() - time.Minute.Nanoseconds())
+	result, err := c.BuildData(time.Now().Unix() - 60)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Log(result.Files)
-	t.Log(result.LastModifiedUnixNano, result.Data)
+	// t.Log()
+	for i := 0; i < len(result.Files); i++ {
+		fmt.Println(result.Files[i][0], "\t", result.Files[i][1], "\t", result.Files[i][2])
+	}
+	t.Log(result.LastModifiedUnix, result.Data)
+	// c.WriteSnap(result)
 }
