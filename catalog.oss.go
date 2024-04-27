@@ -131,22 +131,17 @@ func (m catalog) BuildData(sampleUnix int64) (*buildDataResult, int64, error) {
 	})
 	var lastSnap *oss.ObjectProperties
 	// := snaps[len(snaps)-1]
-	fmt.Println("len(snap)", len(snaps))
+	// fmt.Println("len(snap)", len(snaps))
 	var deletingKeys = make([]string, 0)
 	if len(snaps) > 0 {
 		sort.Slice(snaps, func(i, j int) bool {
-			// filepath.(snaps[i].Key)
 			return getNumericPart(path.Base(snaps[i].Key), 0) < getNumericPart(path.Base(snaps[j].Key), 0)
-			// return snaps[i].LastModified.Unix() < snaps[j].LastModified.Unix()
 		})
 		for i := 0; i < len(snaps)-1; i++ {
-			// m.newClient()
 			//旧的snaps文件
-			// m.newClient().PutObjectTagging()
 			deletingKeys = append(deletingKeys, snaps[i].Key)
 		}
 		lastSnap = &snaps[len(snaps)-1]
-		// fmt.Println("snap", lastSnap.Key)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -165,8 +160,6 @@ func (m catalog) BuildData(sampleUnix int64) (*buildDataResult, int64, error) {
 				lastError = err
 				return
 			}
-
-			// result.Files = append(make([][]interface{}, 0), []interface{}{"snap", lastSnap.Key, lastSnap.LastModified.Unix()})
 		}()
 	}
 	// wg.Wait()
@@ -182,7 +175,6 @@ func (m catalog) BuildData(sampleUnix int64) (*buildDataResult, int64, error) {
 
 		wg.Add(1)
 		go func(i2 int) {
-			// fmt.Println(i2)
 			defer wg.Done()
 			obj, err := m.readOssSourceFile(jsons[i2])
 			if err != nil {
