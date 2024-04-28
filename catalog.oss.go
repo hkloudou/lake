@@ -39,13 +39,13 @@ func (m catalog) TrySnap(obj *ossDataResult, window time.Duration) error {
 	if obj.SampleUnix-obj.LastModifiedUnix < int64(window.Seconds()) {
 		return fmt.Errorf("too short time")
 	}
-
+	// fmt.Println("snap")
 	data, err := json.Marshal(obj)
 	if err != nil {
 		return err
 	}
 	err = m.newClient().PutObject(
-		fmt.Sprintf("%s/%d.snap", m.path, obj.LastModifiedUnix), bytes.NewReader(data),
+		fmt.Sprintf("%s/%d_%d.snap", m.path, obj.LastModifiedUnix, obj.SampleUnix), bytes.NewReader(data),
 	)
 	if err != nil {
 		return err
@@ -71,18 +71,24 @@ func (m catalog) TagSnaped(obj *ossDataResult) {
 	}
 }
 
-func (m catalog) RemoveSnaped(obj *ossDataResult) error {
+func (m catalog) RemoveSnaped(obj *ossDataResult, windows time.Duration) error {
 	if obj.LastSnap == nil {
+		return nil
+	}
+	// fmt.Println(time.Now().Unix(), obj.SampleUnix, obj.LastSnap.SeqID, windows.Seconds())
+	if obj.SampleUnix-obj.LastSnap.SeqID < int64(windows.Seconds()) {
 		return nil
 	}
 	var deleteList = make([]string, 0)
 	for i := 0; i < len(obj.Files); i++ {
 		if obj.Files[i].Ignore &&
-			obj.Files[i].Unix <= obj.LastSnap.Unix && obj.Files[i].Property.Key != obj.LastSnap.Property.Key {
+			obj.Files[i].Unix <= obj.LastSnap.Unix &&
+			obj.Files[i].Property.Key != obj.LastSnap.Property.Key {
 			deleteList = append(deleteList, obj.Files[i].Property.Key)
 		}
 	}
 	if len(deleteList) > 0 {
+		fmt.Println("deleteList", deleteList)
 		_, err := m.newClient().DeleteObjects(deleteList)
 		return err
 	}

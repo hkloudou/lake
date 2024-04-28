@@ -155,9 +155,9 @@ func (m ossFilePropertySlice) Merga() *ossDataResult {
 			}
 		}
 	}
-	if result.SampleUnix == 0 {
-		result.SampleUnix = time.Now().Unix()
-	}
+	// if result.SampleUnix == 0 {
+	result.SampleUnix = time.Now().Unix()
+	// }
 	result.LastSnap = m.LastSnap()
 	return &result
 }
@@ -209,7 +209,7 @@ func (m catalog) ListOssFiles() (ossFilePropertySlice, error) {
 				Property: obj,
 				Format:   TextFormatSNAP,
 				Unix:     getSliceNumericPart(parts, 0),
-				SeqID:    0,
+				SeqID:    getSliceNumericPart(parts, 1),
 			})
 		} else if strings.HasSuffix(obj.Key, ".json") {
 			result = append(result, ossFileProperty{

@@ -44,7 +44,7 @@ func TestRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	// go func() {
-	c.RemoveSnaped(result)
+	c.RemoveSnaped(result, 1*time.Minute)
 	// }()
 
 	data, err := json.Marshal(result)
