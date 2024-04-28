@@ -52,7 +52,7 @@ func TestRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Log(string(data))
-	err = c.WriteSnap(result, 1*time.Minute)
+	err = c.TrySnap(result, 1*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}

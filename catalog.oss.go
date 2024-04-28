@@ -29,7 +29,7 @@ func (m catalog) WriteJsonData(timeUnix int64, seqid int64, merge MergeType, fie
 	return m.newClient().PutObject(fmt.Sprintf("%s/%s%d_%06d_%d_%s.json", m.path, fieldPath, timeUnix, seqid, merge, strings.Split(uuid.New().String(), "-")[0]), bytes.NewReader(data))
 }
 
-func (m catalog) WriteSnap(obj *ossDataResult, window time.Duration) error {
+func (m catalog) TrySnap(obj *ossDataResult, window time.Duration) error {
 	if !obj.ShouldSnap(window) {
 		return nil
 	}
