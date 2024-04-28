@@ -29,7 +29,7 @@ func TestXxx(t *testing.T) {
 	// if err != nil {
 	// 	t.Fatal(err)
 	// }
-	err = c.WriteJsonData(time.Now().Unix(), 2, lake.MergeTypeOver, "as", []byte(`{"qs2": "value"}`))
+	err = c.WriteJsonData(time.Now().Unix(), 2, lake.MergeTypeOver, "as", []byte(`1`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,13 +40,14 @@ func TestRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := c.BuildData(time.Now().Unix())
+	result, err := c.BuildData(0)
 	// result, sampleUnix, err := c.BuildData(0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	b, _ := json.Marshal(result)
 	fmt.Println(string(b))
+	result.Files.RemoveOld(c)
 	// for i := 0; i < len(result.Files); i++ {
 	// 	fmt.Println(result.Files[i][0], "\t", result.Files[i][1], "\t", result.Files[i][2])
 	// }

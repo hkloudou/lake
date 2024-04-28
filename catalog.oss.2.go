@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 )
@@ -88,6 +89,7 @@ func (m ossFilePropertySlice) Fetch(c *catalog) error {
 		go func(i2 int) {
 			defer wg.Done()
 			file := m[i2]
+			// fmt.Println("read", file.Property.Key)
 			buffer, err := c.newClient().GetObject(file.Property.Key)
 			if err != nil {
 				lastError = err
@@ -148,6 +150,9 @@ func (m ossFilePropertySlice) Merga(sampleUnix int64) *ossDataResult {
 			}
 		}
 	}
+	if result.SampleUnix == 0 {
+		result.SampleUnix = time.Now().Unix() + 1
+	}
 	return &result
 }
 
@@ -156,17 +161,18 @@ func (m ossFilePropertySlice) RemoveOld(c *catalog) {
 	if lastSnap != nil {
 		var deleteList = make([]string, 0)
 		for i := 0; i < len(m); i++ {
-			if m[i].Unix < lastSnap.Unix {
-				deleteList = append(deleteList, lastSnap.Property.Key)
+			if m[i].Unix < lastSnap.Unix && len(lastSnap.Property.Key) > 0 && m[i].Property.Key != lastSnap.Property.Key {
+				deleteList = append(deleteList, m[i].Property.Key)
 			}
 		}
+		// fmt.Println("deleteList", deleteList)
 		if len(deleteList) > 0 {
 			c.newClient().DeleteObjects(deleteList)
 		}
 	}
 }
 
-func (m catalog) ListOssFiles(sampleUnix int64) (ossFilePropertySlice, error) {
+func (m catalog) ListOssFiles(sampleUnixBefore int64) (ossFilePropertySlice, error) {
 	items, err := m.newClient().ListObjectsV2(
 		oss.Prefix(m.path),
 		oss.MaxKeys(500),
@@ -181,9 +187,9 @@ func (m catalog) ListOssFiles(sampleUnix int64) (ossFilePropertySlice, error) {
 		fileName := path.Base(obj.Key)
 		parts := strings.Split(strings.ReplaceAll(fileName, ".", "_"), "_")
 		pathSplit := strings.Split(strings.Trim(strings.Replace(obj.Key, m.path, "", 1), "/"), "/")
-		if sampleUnix != 0 {
-			unixTime := getSliceNumericPart(parts, 0)
-			if unixTime > (sampleUnix) {
+		if sampleUnixBefore != 0 {
+			//only ignore data before sampleUnix
+			if getSliceNumericPart(parts, 0) >= (sampleUnixBefore) {
 				continue
 			}
 		}
@@ -212,6 +218,7 @@ func (m catalog) ListOssFiles(sampleUnix int64) (ossFilePropertySlice, error) {
 	lastSnap := result.LastSnap()
 	if lastSnap != nil {
 		for i := 0; i < len(result); i++ {
+			//only ignore data before snap
 			if result[i].Unix < lastSnap.Unix {
 				result[i].Ignore = true
 			}

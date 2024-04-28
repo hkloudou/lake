@@ -63,9 +63,9 @@ func (m catalog) WriteSnap(obj *ossDataResult, window time.Duration) error {
 	// }
 }
 
-func (m catalog) BuildData(sampleUnix int64) (*ossDataResult, error) {
+func (m catalog) BuildData(sampleUnixBefore int64) (*ossDataResult, error) {
 	//list information
-	items, err := m.ListOssFiles(sampleUnix)
+	items, err := m.ListOssFiles(sampleUnixBefore)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +73,7 @@ func (m catalog) BuildData(sampleUnix int64) (*ossDataResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	return items.Merga(sampleUnix), nil
+	return items.Merga(sampleUnixBefore), nil
 }
 
 func updateResult(result map[string]any, file *ossFileProperty) {
