@@ -3,7 +3,6 @@ package lake_test
 import (
 	_ "embed"
 	"encoding/json"
-	"fmt"
 	"testing"
 	"time"
 
@@ -53,12 +52,8 @@ func TestRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Log(string(data))
-	if result.ShouldSnap(1 * time.Minute) {
-		fmt.Println("snap")
-		err = c.WriteSnap(result, 1*time.Minute)
-		if err != nil {
-			t.Fatal(err)
-		}
-		//remove old
+	err = c.WriteSnap(result, 1*time.Minute)
+	if err != nil {
+		t.Fatal(err)
 	}
 }

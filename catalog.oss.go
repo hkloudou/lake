@@ -30,6 +30,9 @@ func (m catalog) WriteJsonData(timeUnix int64, seqid int64, merge MergeType, fie
 }
 
 func (m catalog) WriteSnap(obj *ossDataResult, window time.Duration) error {
+	if !obj.ShouldSnap(window) {
+		return nil
+	}
 	if obj.LastModifiedUnix == 0 || obj.SampleUnix == 0 {
 		return nil
 	}
