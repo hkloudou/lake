@@ -161,6 +161,9 @@ func (m ossFilePropertySlice) RemoveOld(c *catalog) {
 	if lastSnap != nil {
 		var deleteList = make([]string, 0)
 		for i := 0; i < len(m); i++ {
+			if len(m[i].Property.Key) == 0 {
+				panic("key is empty")
+			}
 			if m[i].Unix < lastSnap.Unix && len(lastSnap.Property.Key) > 0 && m[i].Property.Key != lastSnap.Property.Key {
 				deleteList = append(deleteList, m[i].Property.Key)
 			}
