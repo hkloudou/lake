@@ -43,14 +43,7 @@ func NewOssCatalog(
 	endpoint string, bucket, accessKeyID string, accessKeySecret string,
 	// nameSpace string,
 	path string,
-) (*catalog, error) {
-	// if !regexp.MustCompile(`^[1|5|9][1|2|3]\d{6}[^_IOZSVa-z\W]{10}$`).MatchString(creditCode) {
-	// 	return nil, fmt.Errorf("invalid credit code")
-	// }
-	if strings.HasPrefix(path, "/") || strings.HasSuffix(path, "/") {
-		return nil, fmt.Errorf("path should not start with / or end with /")
-	}
-
+) *catalog {
 	return &catalog{
 		internal:        internal,
 		StorageClass:    StorageClassOSS,
@@ -61,6 +54,6 @@ func NewOssCatalog(
 		// Client:          bucketClient,
 		// path:    fmt.Sprintf("%s/%s/%s", strconv.FormatUint(uint64(crc32.ChecksumIEEE([]byte(nameSpace+boxName))), 16)[:4], nameSpace, boxName),
 		// BoxName: boxName,
-		path: path,
-	}, nil
+		path: strings.Trim(path, "/"),
+	}
 }

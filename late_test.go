@@ -20,31 +20,27 @@ var bucketName string
 
 func TestXxx(t *testing.T) {
 
-	c, err := lake.NewOssCatalog(false, "cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "test/91110108717743469K")
-	if err != nil {
-		t.Fatal(err)
-	}
+	client := lake.NewOssCatalog(false, "cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "test/91110108717743469K")
+
 	// err = c.WriteJsonData(time.Now().Unix(), 1, lake.MergeTypeOver, "s", []byte(`{"qs": "value"}`))
 	// if err != nil {
 	// 	t.Fatal(err)
 	// }
-	err = c.WriteJsonData(time.Now().Unix(), 2, lake.MergeTypeOver, "as", []byte(`1`))
+	err := client.WriteJsonData(time.Now().Unix(), 2, lake.MergeTypeOver, "as", []byte(`1`))
 	if err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestRead(t *testing.T) {
-	c, err := lake.NewOssCatalog(false, "cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "test/91110108717743469K")
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := c.BuildData()
+	client := lake.NewOssCatalog(false, "cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "test/91110108717743469K")
+
+	result, err := client.BuildData()
 	if err != nil {
 		t.Fatal(err)
 	}
 	// go func() {
-	c.RemoveSnaped(result, 1*time.Minute)
+	client.RemoveSnaped(result, 1*time.Minute)
 	// }()
 
 	data, err := json.Marshal(result)
@@ -52,7 +48,7 @@ func TestRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Log(string(data))
-	err = c.TrySnap(result, 1*time.Minute)
+	err = client.TrySnap(result, 1*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
