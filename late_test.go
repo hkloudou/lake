@@ -21,7 +21,7 @@ var bucketName string
 
 func TestXxx(t *testing.T) {
 
-	c, err := lake.NewOssCatalog(false, "cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "1/1/91110108717743469K")
+	c, err := lake.NewOssCatalog(false, "cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "test/91110108717743469K")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestXxx(t *testing.T) {
 }
 
 func TestRead(t *testing.T) {
-	c, err := lake.NewOssCatalog(false, "cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "MX3056457040702439/1_1")
+	c, err := lake.NewOssCatalog(false, "cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "test/91110108717743469K")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,19 +44,20 @@ func TestRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	c.TagSnaped(result)
 
 	data, err := json.Marshal(result)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Log(string(data))
-
-	if result.ShouldSnap() {
+	if result.ShouldSnap(1 * time.Minute) {
 		fmt.Println("snap")
-		// err = c.WriteSnap(result, 1*time.Minute)
-		// if err != nil {
-		// 	t.Fatal(err)
-		// }
+		err = c.WriteSnap(result, 1*time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
 		//remove old
+
 	}
 }

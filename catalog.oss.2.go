@@ -23,11 +23,11 @@ type ossDataResult struct {
 	Files            ossFilePropertySlice // [ignore, format, unix, seqid, merge, uuid, key
 	LastModifiedUnix int64
 	SampleUnix       int64
-	lastSnap         *ossFileProperty
+	LastSnap         *ossFileProperty `json:"-"`
 }
 
-func (o ossDataResult) ShouldSnap() bool {
-	return o.SampleUnix-o.LastModifiedUnix > 60
+func (o ossDataResult) ShouldSnap(window time.Duration) bool {
+	return o.SampleUnix-o.LastModifiedUnix > int64(window.Seconds()) && (o.LastSnap == nil || o.LastSnap.Unix != o.LastModifiedUnix)
 }
 
 type ossFileProperty struct {
@@ -158,28 +158,35 @@ func (m ossFilePropertySlice) Merga() *ossDataResult {
 	if result.SampleUnix == 0 {
 		result.SampleUnix = time.Now().Unix()
 	}
-	result.lastSnap = m.LastSnap()
+	result.LastSnap = m.LastSnap()
 	return &result
 }
 
-func (m ossFilePropertySlice) RemoveOld(c *catalog) {
-	lastSnap := m.LastSnap()
-	if lastSnap != nil {
-		var deleteList = make([]string, 0)
-		for i := 0; i < len(m); i++ {
-			if len(m[i].Property.Key) == 0 {
-				panic("key is empty")
-			}
-			if m[i].Unix < lastSnap.Unix && len(lastSnap.Property.Key) > 0 && m[i].Property.Key != lastSnap.Property.Key {
-				deleteList = append(deleteList, m[i].Property.Key)
-			}
-		}
-		// fmt.Println("deleteList", deleteList)
-		if len(deleteList) > 0 {
-			c.newClient().DeleteObjects(deleteList)
-		}
-	}
-}
+// func (m ossFilePropertySlice) RemoveOld(c *catalog) {
+// 	lastSnap := m.LastSnap()
+// 	if lastSnap != nil {
+// 		var deleteList = make([]string, 0)
+// 		for i := 0; i < len(m); i++ {
+// 			if len(m[i].Property.Key) == 0 {
+// 				panic("key is empty")
+// 			}
+// 			if m[i].Unix <= lastSnap.Unix && len(lastSnap.Property.Key) > 0 && m[i].Property.Key != lastSnap.Property.Key {
+// 				deleteList = append(deleteList, m[i].Property.Key)
+// 			}
+// 		}
+// 		// fmt.Println("deleteList", deleteList)
+// 		// if len(deleteList) > 0 {
+// 		// 	c.newClient().PutObjectTagging(deleteList)
+// 		// }
+// 		for i := 0; i < len(deleteList); i++ {
+// 			c.newClient().PutObjectTagging(deleteList[i], oss.Tagging{
+// 				Tags: []oss.Tag{
+// 					{Key: "hkloudou.lake-deleting", Value: "true"},
+// 				},
+// 			})
+// 		}
+// 	}
+// }
 
 func (m catalog) ListOssFiles() (ossFilePropertySlice, error) {
 	items, err := m.newClient().ListObjectsV2(
