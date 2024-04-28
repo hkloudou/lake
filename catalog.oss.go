@@ -80,9 +80,9 @@ func updateResult(result map[string]any, file *ossFileProperty) {
 	current := result
 	for i, field := range file.Field {
 		if i == len(file.Field)-1 { // Last element
-			if file.Merge == 0 {
+			if file.Merge == MergeTypeOver {
 				current[field] = file.Value
-			} else if file.Merge == 1 {
+			} else if file.Merge == MergeTypeUpsert {
 				if _, ok := current[field]; !ok {
 					current[field] = make(map[string]any)
 				}
@@ -98,9 +98,9 @@ func updateResult(result map[string]any, file *ossFileProperty) {
 		}
 	}
 	if len(file.Field) == 0 { // Root directory operation
-		if file.Merge == 0 {
+		if file.Merge == MergeTypeOver {
 			result = file.Value.(map[string]any)
-		} else if file.Merge == 1 {
+		} else if file.Merge == MergeTypeUpsert {
 			for k, v := range file.Value.(map[string]any) {
 				result[k] = v
 			}

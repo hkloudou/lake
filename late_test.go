@@ -29,7 +29,7 @@ func TestXxx(t *testing.T) {
 	// if err != nil {
 	// 	t.Fatal(err)
 	// }
-	err = c.WriteJsonData(time.Now().Unix(), 1, lake.MergeTypeOver, "as", []byte(`{"qs": "value"}`))
+	err = c.WriteJsonData(time.Now().Unix(), 2, lake.MergeTypeOver, "as", []byte(`{"qs2": "value"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
