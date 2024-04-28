@@ -10,6 +10,7 @@ import (
 
 // data Catalog
 type catalog struct {
+	internal        bool
 	StorageClass    StorageClass
 	Endpoint        string
 	accessKeyID     string
@@ -22,7 +23,11 @@ type catalog struct {
 }
 
 func (m catalog) newClient() *oss.Bucket {
-	client, err := oss.New(fmt.Sprintf("http://oss-%s.aliyuncs.com", m.Endpoint), m.accessKeyID, m.accessKeySecret)
+	internalStr := ""
+	if m.internal {
+		internalStr = "-internal"
+	}
+	client, err := oss.New(fmt.Sprintf("http://oss-%s%s.aliyuncs.com", m.Endpoint, internalStr), m.accessKeyID, m.accessKeySecret)
 	if err != nil {
 		log.Panicln(err)
 	}
@@ -34,6 +39,7 @@ func (m catalog) newClient() *oss.Bucket {
 }
 
 func NewOssCatalog(
+	internal bool,
 	endpoint string, bucket, accessKeyID string, accessKeySecret string,
 	// nameSpace string,
 	path string,
@@ -46,6 +52,7 @@ func NewOssCatalog(
 	}
 
 	return &catalog{
+		internal:        internal,
 		StorageClass:    StorageClassOSS,
 		Endpoint:        endpoint,
 		accessKeyID:     accessKeyID,

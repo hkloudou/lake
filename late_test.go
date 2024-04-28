@@ -21,7 +21,7 @@ var bucketName string
 
 func TestXxx(t *testing.T) {
 
-	c, err := lake.NewOssCatalog("cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "1/1/91110108717743469K")
+	c, err := lake.NewOssCatalog(false, "cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "1/1/91110108717743469K")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestXxx(t *testing.T) {
 }
 
 func TestRead(t *testing.T) {
-	c, err := lake.NewOssCatalog("cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "1/1/91110108717743469K")
+	c, err := lake.NewOssCatalog(false, "cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "1/1/91110108717743469K")
 	if err != nil {
 		t.Fatal(err)
 	}
