@@ -68,6 +68,24 @@ func (m catalog) TagSnaped(obj *ossDataResult) {
 	}
 }
 
+func (m catalog) RemoveSnaped(obj *ossDataResult) error {
+	if obj.LastSnap == nil {
+		return nil
+	}
+	var deleteList = make([]string, 0)
+	for i := 0; i < len(obj.Files); i++ {
+		if obj.Files[i].Ignore &&
+			obj.Files[i].Unix <= obj.LastSnap.Unix && obj.Files[i].Property.Key != obj.LastSnap.Property.Key {
+			deleteList = append(deleteList, obj.Files[i].Property.Key)
+		}
+	}
+	if len(deleteList) > 0 {
+		_, err := m.newClient().DeleteObjects(deleteList)
+		return err
+	}
+	return nil
+}
+
 func (m catalog) BuildData() (*ossDataResult, error) {
 	//list information
 	items, err := m.ListOssFiles()

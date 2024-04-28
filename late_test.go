@@ -44,7 +44,9 @@ func TestRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.TagSnaped(result)
+	// go func() {
+	c.RemoveSnaped(result)
+	// }()
 
 	data, err := json.Marshal(result)
 	if err != nil {
@@ -58,6 +60,5 @@ func TestRead(t *testing.T) {
 			t.Fatal(err)
 		}
 		//remove old
-
 	}
 }
