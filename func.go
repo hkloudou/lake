@@ -7,6 +7,11 @@ import (
 
 func getNumericPart(filename string, index int) int64 {
 	parts := strings.Split(strings.ReplaceAll(filename, ".", "_"), "_")
+	return getSliceNumericPart(parts, index)
+}
+
+func getSliceNumericPart(parts []string, index int) int64 {
+	// parts := strings.Split(strings.ReplaceAll(filename, ".", "_"), "_")
 	if len(parts) > 0 {
 		num, err := strconv.Atoi(parts[index])
 		if err == nil {

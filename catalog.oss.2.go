@@ -2,40 +2,146 @@ package lake
 
 import (
 	"encoding/json"
+	"io"
 	"path"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 )
 
 // ossFileProperty properties of an OSS file
 /*
-File: ${unix}_${%06d:seq_id}_${uuid}.${format}
-SNAP: ${unix}_${%06d:seq_id}_${uuid}.snap
+File: ${unix}_${%06d:seq_id}_${merge}_${uuid}.${format}
+SNAP: ${unix}.snap
 */
+
+type ossDataResult struct {
+	Data             map[string]any
+	Files            any // [ignore, format, unix, seqid, merge, uuid, key
+	LastModifiedUnix int64
+	SampleUnix       int64
+}
 
 type ossFileProperty struct {
 	Property oss.ObjectProperties
 	Format   TextFormat
-	Unix     int64
-	SeqID    int64
+
+	Field []string
+
+	Unix    int64
+	SeqID   int64
+	Merge   MergeType
+	UUID    string
+	Ignore  bool
+	Fetched bool
+
+	Value any
 }
 
 func (o ossFileProperty) MarshalJSON() ([]byte, error) {
-	return json.Marshal([]any{o.Format, o.Unix, o.SeqID, o.Property.Key})
+	return json.Marshal([]any{!o.Ignore, o.Format, o.Unix, o.SeqID, o.Merge, o.UUID, o.Property.Key})
 }
 
 // sort by Unix,SeqID
 type ossFilePropertySlice []ossFileProperty
 
-func (a ossFilePropertySlice) Len() int      { return len(a) }
-func (a ossFilePropertySlice) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
-func (a ossFilePropertySlice) Less(i, j int) bool {
-	if a[i].Unix == a[j].Unix {
-		return a[i].SeqID < a[j].SeqID
+func (m ossFilePropertySlice) Len() int      { return len(m) }
+func (m ossFilePropertySlice) Swap(i, j int) { m[i], m[j] = m[j], m[i] }
+func (m ossFilePropertySlice) Less(i, j int) bool {
+	if m[i].Format == TextFormatSNAP && m[j].Format != TextFormatSNAP {
+		return true
+	} else if m[j].Format == TextFormatSNAP && m[i].Format != TextFormatSNAP {
+		return false
 	}
-	return a[i].Unix < a[j].Unix
+
+	if m[i].Unix == m[j].Unix {
+		return m[i].SeqID < m[j].SeqID
+	}
+	return m[i].Unix < m[j].Unix
+}
+
+func (m ossFilePropertySlice) LastSnap() *ossFileProperty {
+	for i := len(m) - 1; i >= 0; i-- {
+		if m[i].Format == TextFormatSNAP {
+			return &m[i]
+		}
+	}
+	return nil
+}
+
+func (m ossFilePropertySlice) Fetch(c *catalog) error {
+	var wg = sync.WaitGroup{}
+	var lastError error
+	for i := 0; i < len(m); i++ {
+		if m[i].Ignore || m[i].Fetched {
+			continue
+		}
+		wg.Add(1)
+		go func(i2 int) {
+			defer wg.Done()
+			file := m[i2]
+			buffer, err := c.newClient().GetObject(file.Property.Key)
+			if err != nil {
+				lastError = err
+				return
+			}
+			data, err := io.ReadAll(buffer)
+			if err != nil {
+				lastError = err
+				return
+			}
+			// var tmp = ossDataResult{}
+			if file.Format == TextFormatSNAP {
+				var tmp ossDataResult
+				err = json.Unmarshal(data, &tmp)
+				if err != nil {
+					lastError = err
+					return
+				}
+				m[i2].Value = tmp
+				// fmt.Println("snap", tmp)
+			} else {
+				var tmp any
+				err = json.Unmarshal(data, &tmp)
+				if err != nil {
+					lastError = err
+					return
+				}
+				m[i2].Value = tmp
+			}
+			m[i2].Fetched = true
+		}(i)
+	}
+	wg.Wait()
+	return lastError
+}
+
+func (m ossFilePropertySlice) Merga(sampleUnix int64) *ossDataResult {
+	// var result = make(map[string]any, 0)
+	result := ossDataResult{
+		Data:             make(map[string]any, 0),
+		Files:            m,
+		LastModifiedUnix: 0,
+		SampleUnix:       sampleUnix,
+	}
+	for i := 0; i < len(m); i++ {
+		if m[i].Ignore {
+			continue
+		}
+		switch m[i].Value.(type) {
+		case ossDataResult:
+			result = (m[i].Value.(ossDataResult))
+			result.SampleUnix = sampleUnix
+		default:
+			updateResult(result.Data, &m[i])
+			if m[i].Unix > result.LastModifiedUnix {
+				result.LastModifiedUnix = m[i].Unix
+			}
+		}
+	}
+	return &result
 }
 
 func (m catalog) ListOssFiles(sampleUnix int64) (ossFilePropertySlice, error) {
@@ -50,26 +156,44 @@ func (m catalog) ListOssFiles(sampleUnix int64) (ossFilePropertySlice, error) {
 	var result = make(ossFilePropertySlice, 0)
 	for i := 0; i < len(items.Objects); i++ {
 		obj := items.Objects[i]
-		unixTime := getNumericPart(path.Base(obj.Key), 0)
-		if unixTime > (sampleUnix) {
-			continue
+		fileName := path.Base(obj.Key)
+		parts := strings.Split(strings.ReplaceAll(fileName, ".", "_"), "_")
+		pathSplit := strings.Split(strings.Trim(strings.Replace(obj.Key, m.path, "", 1), "/"), "/")
+		if sampleUnix != 0 {
+			unixTime := getSliceNumericPart(parts, 0)
+			if unixTime > (sampleUnix) {
+				continue
+			}
 		}
 		if strings.HasSuffix(obj.Key, ".snap") {
 			result = append(result, ossFileProperty{
 				Property: obj,
 				Format:   TextFormatSNAP,
-				Unix:     getNumericPart(path.Base(obj.Key), 0),
+				Unix:     getSliceNumericPart(parts, 0),
 				SeqID:    0,
 			})
 		} else if strings.HasSuffix(obj.Key, ".json") {
 			result = append(result, ossFileProperty{
 				Property: obj,
 				Format:   TextFormatJSON,
-				Unix:     getNumericPart(path.Base(obj.Key), 0),
-				SeqID:    getNumericPart(path.Base(obj.Key), 1),
+
+				Field: pathSplit[:len(pathSplit)-1],
+
+				Unix:  getSliceNumericPart(parts, 0),
+				SeqID: getSliceNumericPart(parts, 1),
+				Merge: MergeType(getSliceNumericPart(parts, 2)),
+				UUID:  parts[3],
 			})
 		}
 	}
 	sort.Sort(result)
+	lastSnap := result.LastSnap()
+	if lastSnap != nil {
+		for i := 0; i < len(result); i++ {
+			if result[i].Unix < lastSnap.Unix {
+				result[i].Ignore = true
+			}
+		}
+	}
 	return result, nil
 }
