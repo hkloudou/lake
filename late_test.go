@@ -21,7 +21,7 @@ var bucketName string
 
 func TestXxx(t *testing.T) {
 
-	c, err := lake.NewOssCatalog("cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "91110108717743469K", "1_1_1100")
+	c, err := lake.NewOssCatalog("cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "1/1/91110108717743469K")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestXxx(t *testing.T) {
 }
 
 func TestRead(t *testing.T) {
-	c, err := lake.NewOssCatalog("cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "91110108717743469K", "1_1_1100")
+	c, err := lake.NewOssCatalog("cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "1/1/91110108717743469K")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,8 +52,8 @@ func TestRead(t *testing.T) {
 	// 	fmt.Println(result.Files[i][0], "\t", result.Files[i][1], "\t", result.Files[i][2])
 	// }
 	// t.Log(result.LastModifiedUnix, sampleUnix, result.Data)
-	// err = c.WriteSnap(result, 5*time.Minute)
-	// if err != nil {
-	// 	t.Fatal(err)
-	// }
+	err = c.WriteSnap(result, 5*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
 }

@@ -48,7 +48,7 @@ func (m catalog) WriteSnap(obj *ossDataResult, window time.Duration) error {
 	// 	fieldPath = strings.ReplaceAll(arr, ".", "/") + "/"
 	// }
 	err = m.newClient().PutObject(
-		fmt.Sprintf("%s/snap/%d.snap", m.path, obj.SampleUnix), bytes.NewReader(data),
+		fmt.Sprintf("%s/%d.snap", m.path, obj.SampleUnix), bytes.NewReader(data),
 	)
 	if err != nil {
 		return err

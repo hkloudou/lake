@@ -2,9 +2,8 @@ package lake
 
 import (
 	"fmt"
-	"hash/crc32"
 	"log"
-	"strconv"
+	"strings"
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 )
@@ -18,8 +17,8 @@ type catalog struct {
 	Bucket          string
 	// Client          *oss.Bucket
 	// Path         string
-	BoxName string
-	path    string
+	// BoxName string
+	path string
 }
 
 func (m catalog) newClient() *oss.Bucket {
@@ -36,12 +35,15 @@ func (m catalog) newClient() *oss.Bucket {
 
 func NewOssCatalog(
 	endpoint string, bucket, accessKeyID string, accessKeySecret string,
-	nameSpace string,
-	boxName string,
+	// nameSpace string,
+	path string,
 ) (*catalog, error) {
 	// if !regexp.MustCompile(`^[1|5|9][1|2|3]\d{6}[^_IOZSVa-z\W]{10}$`).MatchString(creditCode) {
 	// 	return nil, fmt.Errorf("invalid credit code")
 	// }
+	if strings.HasPrefix(path, "/") || strings.HasSuffix(path, "/") {
+		return nil, fmt.Errorf("path should not start with / or end with /")
+	}
 
 	return &catalog{
 		StorageClass:    StorageClassOSS,
@@ -50,7 +52,8 @@ func NewOssCatalog(
 		accessKeySecret: accessKeySecret,
 		Bucket:          bucket,
 		// Client:          bucketClient,
-		path:    fmt.Sprintf("%s/%s/%s", strconv.FormatUint(uint64(crc32.ChecksumIEEE([]byte(nameSpace+boxName))), 16)[:4], nameSpace, boxName),
-		BoxName: boxName,
+		// path:    fmt.Sprintf("%s/%s/%s", strconv.FormatUint(uint64(crc32.ChecksumIEEE([]byte(nameSpace+boxName))), 16)[:4], nameSpace, boxName),
+		// BoxName: boxName,
+		path: path,
 	}, nil
 }
