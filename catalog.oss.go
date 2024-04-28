@@ -56,7 +56,7 @@ func (m catalog) TagSnaped(obj *ossDataResult) {
 		return
 	}
 	for i := 0; i < len(obj.Files); i++ {
-		if obj.Files[i].Ignore &&
+		if obj.Files[i].Ignore && obj.LastSnap.Fetched &&
 			obj.Files[i].Unix <= obj.LastSnap.Unix && obj.Files[i].Property.Key != obj.LastSnap.Property.Key {
 			fmt.Println("tag", obj.Files[i].Property.Key)
 			m.newClient().PutObjectTagging(obj.Files[i].Property.Key, oss.Tagging{
