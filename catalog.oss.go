@@ -12,7 +12,7 @@ import (
 )
 
 func (m catalog) WriteJsonData(timeUnix int64, seqid int64, merge MergeType, field string, data []byte) error {
-	if merge != 0 && merge != 1 {
+	if merge != MergeTypeOver && merge != MergeTypeUpsert {
 		return fmt.Errorf("unknown merge")
 	}
 	if math.Abs(float64(time.Now().Unix()-timeUnix)) > 60 {
