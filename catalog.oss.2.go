@@ -14,8 +14,8 @@ import (
 
 // ossFileProperty properties of an OSS file
 /*
-File: ${unix}_${%06d:seq_id}_${merge}_${uuid}.${format}
-SNAP: ${unix}.snap
+File: ${dataunix}_${%06d:seq_id}_${merge}_${uuid}.${format}
+SNAP: ${lastdataunix}_${sampleunix}.snap
 */
 
 type ossDataResult struct {
