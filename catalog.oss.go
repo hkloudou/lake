@@ -76,6 +76,7 @@ func (m catalog) RemoveSnaped(obj *ossDataResult, windows time.Duration) error {
 		return nil
 	}
 	// fmt.Println(time.Now().Unix(), obj.SampleUnix, obj.LastSnap.SeqID, windows.Seconds())
+	//make sure snap file is not too new
 	if obj.SampleUnix-obj.LastSnap.SeqID < int64(windows.Seconds()) {
 		return nil
 	}
