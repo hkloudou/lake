@@ -36,24 +36,27 @@ func TestXxx(t *testing.T) {
 }
 
 func TestRead(t *testing.T) {
-	c, err := lake.NewOssCatalog(false, "cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "1/1/91110108717743469K")
+	c, err := lake.NewOssCatalog(false, "cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "MX3056457040702439/1_1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := c.BuildData(0)
-	// result, sampleUnix, err := c.BuildData(0)
+	result, err := c.BuildData()
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := json.Marshal(result)
-	fmt.Println(string(b))
-	result.Files.RemoveOld(c)
-	// for i := 0; i < len(result.Files); i++ {
-	// 	fmt.Println(result.Files[i][0], "\t", result.Files[i][1], "\t", result.Files[i][2])
-	// }
-	// t.Log(result.LastModifiedUnix, sampleUnix, result.Data)
-	err = c.WriteSnap(result, 5*time.Minute)
+
+	data, err := json.Marshal(result)
 	if err != nil {
 		t.Fatal(err)
+	}
+	t.Log(string(data))
+
+	if result.ShouldSnap() {
+		fmt.Println("snap")
+		// err = c.WriteSnap(result, 1*time.Minute)
+		// if err != nil {
+		// 	t.Fatal(err)
+		// }
+		//remove old
 	}
 }

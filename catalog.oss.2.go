@@ -23,6 +23,11 @@ type ossDataResult struct {
 	Files            ossFilePropertySlice // [ignore, format, unix, seqid, merge, uuid, key
 	LastModifiedUnix int64
 	SampleUnix       int64
+	lastSnap         *ossFileProperty
+}
+
+func (o ossDataResult) ShouldSnap() bool {
+	return o.SampleUnix-o.LastModifiedUnix > 60
 }
 
 type ossFileProperty struct {
@@ -57,13 +62,12 @@ type ossFilePropertySlice []ossFileProperty
 func (m ossFilePropertySlice) Len() int      { return len(m) }
 func (m ossFilePropertySlice) Swap(i, j int) { m[i], m[j] = m[j], m[i] }
 func (m ossFilePropertySlice) Less(i, j int) bool {
-	if m[i].Format == TextFormatSNAP && m[j].Format != TextFormatSNAP {
-		return true
-	} else if m[j].Format == TextFormatSNAP && m[i].Format != TextFormatSNAP {
-		return false
-	}
-
 	if m[i].Unix == m[j].Unix {
+		if m[i].Format == TextFormatSNAP && m[j].Format != TextFormatSNAP {
+			return false
+		} else if m[j].Format == TextFormatSNAP && m[i].Format != TextFormatSNAP {
+			return true
+		}
 		return m[i].SeqID < m[j].SeqID
 	}
 	return m[i].Unix < m[j].Unix
@@ -126,13 +130,14 @@ func (m ossFilePropertySlice) Fetch(c *catalog) error {
 	return lastError
 }
 
-func (m ossFilePropertySlice) Merga(sampleUnix int64) *ossDataResult {
+func (m ossFilePropertySlice) Merga() *ossDataResult {
 	// var result = make(map[string]any, 0)
+
 	result := ossDataResult{
 		Data:             make(map[string]any, 0),
 		Files:            m,
 		LastModifiedUnix: 0,
-		SampleUnix:       sampleUnix,
+		// SampleUnix:       sampleUnix,
 	}
 	for i := 0; i < len(m); i++ {
 		if m[i].Ignore {
@@ -141,7 +146,7 @@ func (m ossFilePropertySlice) Merga(sampleUnix int64) *ossDataResult {
 		switch m[i].Value.(type) {
 		case ossDataResult:
 			result = (m[i].Value.(ossDataResult))
-			result.SampleUnix = sampleUnix
+			// result.SampleUnix = time.Now().Unix()
 			result.Files = m
 		default:
 			updateResult(result.Data, &m[i])
@@ -151,8 +156,9 @@ func (m ossFilePropertySlice) Merga(sampleUnix int64) *ossDataResult {
 		}
 	}
 	if result.SampleUnix == 0 {
-		result.SampleUnix = time.Now().Unix() + 1
+		result.SampleUnix = time.Now().Unix()
 	}
+	result.lastSnap = m.LastSnap()
 	return &result
 }
 
@@ -175,7 +181,7 @@ func (m ossFilePropertySlice) RemoveOld(c *catalog) {
 	}
 }
 
-func (m catalog) ListOssFiles(sampleUnixBefore int64) (ossFilePropertySlice, error) {
+func (m catalog) ListOssFiles() (ossFilePropertySlice, error) {
 	items, err := m.newClient().ListObjectsV2(
 		oss.Prefix(m.path),
 		oss.MaxKeys(500),
@@ -190,12 +196,7 @@ func (m catalog) ListOssFiles(sampleUnixBefore int64) (ossFilePropertySlice, err
 		fileName := path.Base(obj.Key)
 		parts := strings.Split(strings.ReplaceAll(fileName, ".", "_"), "_")
 		pathSplit := strings.Split(strings.Trim(strings.Replace(obj.Key, m.path, "", 1), "/"), "/")
-		if sampleUnixBefore != 0 {
-			//only ignore data before sampleUnix
-			if getSliceNumericPart(parts, 0) >= (sampleUnixBefore) {
-				continue
-			}
-		}
+
 		if strings.HasSuffix(obj.Key, ".snap") {
 			result = append(result, ossFileProperty{
 				Property: obj,
@@ -221,8 +222,8 @@ func (m catalog) ListOssFiles(sampleUnixBefore int64) (ossFilePropertySlice, err
 	lastSnap := result.LastSnap()
 	if lastSnap != nil {
 		for i := 0; i < len(result); i++ {
-			//only ignore data before snap
-			if result[i].Unix < lastSnap.Unix {
+			//ignore data lte snaptime
+			if result[i].Unix <= lastSnap.Unix && result[i].Property.Key != lastSnap.Property.Key {
 				result[i].Ignore = true
 			}
 		}
