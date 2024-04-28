@@ -19,7 +19,7 @@ SNAP: ${unix}.snap
 
 type ossDataResult struct {
 	Data             map[string]any
-	Files            any // [ignore, format, unix, seqid, merge, uuid, key
+	Files            ossFilePropertySlice // [ignore, format, unix, seqid, merge, uuid, key
 	LastModifiedUnix int64
 	SampleUnix       int64
 }
@@ -42,6 +42,12 @@ type ossFileProperty struct {
 
 func (o ossFileProperty) MarshalJSON() ([]byte, error) {
 	return json.Marshal([]any{!o.Ignore, o.Format, o.Unix, o.SeqID, o.Merge, o.UUID, o.Property.Key})
+}
+
+func (o ossFileProperty) UnmarshalJSON(data []byte) error {
+	// var obj []interface{}
+	// return json.Marshal([]any{!o.Ignore, o.Format, o.Unix, o.SeqID, o.Merge, o.UUID, o.Property.Key})
+	return nil
 }
 
 // sort by Unix,SeqID
@@ -134,6 +140,7 @@ func (m ossFilePropertySlice) Merga(sampleUnix int64) *ossDataResult {
 		case ossDataResult:
 			result = (m[i].Value.(ossDataResult))
 			result.SampleUnix = sampleUnix
+			result.Files = m
 		default:
 			updateResult(result.Data, &m[i])
 			if m[i].Unix > result.LastModifiedUnix {
@@ -142,6 +149,21 @@ func (m ossFilePropertySlice) Merga(sampleUnix int64) *ossDataResult {
 		}
 	}
 	return &result
+}
+
+func (m ossFilePropertySlice) RemoveOld(c *catalog) {
+	lastSnap := m.LastSnap()
+	if lastSnap != nil {
+		var deleteList = make([]string, 0)
+		for i := 0; i < len(m); i++ {
+			if m[i].Unix < lastSnap.Unix {
+				deleteList = append(deleteList, lastSnap.Property.Key)
+			}
+		}
+		if len(deleteList) > 0 {
+			c.newClient().DeleteObjects(deleteList)
+		}
+	}
 }
 
 func (m catalog) ListOssFiles(sampleUnix int64) (ossFilePropertySlice, error) {
