@@ -12,11 +12,11 @@ import (
 	"github.com/google/uuid"
 )
 
-func (m catalog) WriteJsonData(timeUnix int64, seqid int64, merge MergeType, field string, data []byte) error {
+func (m catalog) WriteJsonData(timeUnix int64, window time.Duration, seqid int64, merge MergeType, field string, data []byte) error {
 	if merge != MergeTypeOver && merge != MergeTypeUpsert {
 		return fmt.Errorf("unknown merge")
 	}
-	if math.Abs(float64(time.Now().Unix()-timeUnix)) > 60 {
+	if math.Abs(float64(time.Now().Unix()-timeUnix)) > window.Seconds() {
 		return fmt.Errorf("time is too far")
 	}
 	arr := strings.Trim(field, ".")
