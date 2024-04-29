@@ -109,6 +109,22 @@ func (m catalog) BuildData() (*ossDataResult, error) {
 	return items.Merga(), nil
 }
 
+func (m catalog) WisebuildData(windows time.Duration) (*ossDataResult, error) {
+	data, err := m.BuildData()
+	if err != nil {
+		return nil, err
+	}
+	err = m.RemoveSnaped(data, windows)
+	if err != nil {
+		return nil, err
+	}
+	err = m.TrySnap(data, windows)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
 func updateResult(result map[string]any, file *ossFileProperty) {
 	current := result
 	for i, field := range file.Field {
