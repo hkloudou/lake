@@ -26,7 +26,7 @@ func TestXxx(t *testing.T) {
 	// if err != nil {
 	// 	t.Fatal(err)
 	// }
-	err := client.WriteJsonData(time.Now().Unix(), 60*time.Second, 2, lake.MergeTypeOver, "as", []byte(`1`))
+	err := client.WriteJsonData(lake.WriteDataRequest{}, []byte(`1`))
 	if err != nil {
 		t.Fatal(err)
 	}

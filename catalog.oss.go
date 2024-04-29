@@ -12,21 +12,57 @@ import (
 	"github.com/google/uuid"
 )
 
-func (m catalog) WriteJsonData(timeUnix int64, window time.Duration, seqid int64, merge MergeType, field string, data []byte) error {
-	if merge != MergeTypeOver && merge != MergeTypeUpsert {
-		return fmt.Errorf("unknown merge")
+type WriteDataRequest struct {
+	Unix       int64
+	UnixWindow time.Duration
+	SeqID      int64
+	Merge      MergeType
+	RequestID  string
+	Field      string
+}
+
+func (m *WriteDataRequest) fix() {
+	if m.Unix == 0 {
+		m.Unix = time.Now().Unix()
 	}
-	if math.Abs(float64(time.Now().Unix()-timeUnix)) > window.Seconds() {
-		return fmt.Errorf("time is too far")
+	if m.UnixWindow == 0 {
+		m.UnixWindow = 60 * time.Second
 	}
-	arr := strings.Trim(field, ".")
+	if m.Merge == 0 {
+		m.Merge = MergeTypeOver
+	}
+	if m.Field == "" {
+		m.Field = "unknow"
+	}
+}
+
+func (m WriteDataRequest) Path(prefixPath string) string {
+	arr := strings.Trim(m.Field, ".")
 	fieldPath := ""
 	if arr != "" {
 		fieldPath = strings.ReplaceAll(arr, ".", "/") + "/"
 	}
-	seqid = seqid & 0xFFFF //0-65535
-	//${unix}_${%06d:seq_id}_${uuid}_${merge}.${format}
-	return m.newClient().PutObject(fmt.Sprintf("%s/%s%d_%06d_%d_%s.json", m.path, fieldPath, timeUnix, seqid, merge, strings.Split(uuid.New().String(), "-")[0]), bytes.NewReader(data))
+	// req.SeqID //= seqid & 0xFFFF //0-65535
+	//${unix}_${%06d:seq_id}_${uuid}_${merge}.${format}\
+	requestID := m.RequestID
+	if requestID == "" {
+		requestID = strings.Split(uuid.New().String(), "-")[0]
+	}
+
+	// fmt.p
+	return fmt.Sprintf("%s/%s%d_%06d_%d_%s.json", prefixPath, fieldPath, m.Unix, m.SeqID, m.Merge, requestID)
+}
+
+func (m catalog) WriteJsonData(req WriteDataRequest, data []byte) error {
+	req.fix()
+	if req.Merge != MergeTypeOver && req.Merge != MergeTypeUpsert {
+		return fmt.Errorf("unknown merge")
+	}
+	if math.Abs(float64(time.Now().Unix()-req.Unix)) > req.UnixWindow.Seconds() {
+		return fmt.Errorf("time is too far")
+	}
+
+	return m.newClient().PutObject(req.Path(m.path), bytes.NewReader(data))
 }
 
 func (m catalog) TrySnap(obj *ossDataResult, window time.Duration) error {
