@@ -47,6 +47,7 @@ type ossFileProperty struct {
 }
 
 func (o ossFileProperty) MarshalJSON() ([]byte, error) {
+	// o.Property.
 	return json.Marshal([]any{!o.Ignore, o.Format, o.Unix, o.SeqID, o.Merge, o.UUID, o.Property.Key})
 }
 
