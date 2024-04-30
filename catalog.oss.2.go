@@ -135,7 +135,7 @@ func (m ossFilePropertySlice) Merga() *OssDataResult {
 	// var result = make(map[string]any, 0)
 
 	result := OssDataResult{
-		Data:             make(map[string]any, 0),
+		Data:             map[string]any{},
 		Files:            m,
 		LastModifiedUnix: 0,
 		// SampleUnix:       sampleUnix,
@@ -150,7 +150,7 @@ func (m ossFilePropertySlice) Merga() *OssDataResult {
 			// result.SampleUnix = time.Now().Unix()
 			result.Files = m
 		default:
-			updateResult(result.Data, &m[i])
+			updateResult(&result.Data, &m[i])
 			if m[i].Unix > result.LastModifiedUnix {
 				result.LastModifiedUnix = m[i].Unix
 			}

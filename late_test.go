@@ -26,7 +26,12 @@ func TestXxx(t *testing.T) {
 	// if err != nil {
 	// 	t.Fatal(err)
 	// }
-	err := client.WriteJsonData(lake.WriteDataRequest{}, []byte(`1`))
+	ti := time.Now()
+	err := client.WriteJsonData(lake.WriteDataRequest{Field: "x", Unix: ti.Unix(), SeqID: 1}, []byte(`1`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = client.WriteJsonData(lake.WriteDataRequest{Unix: ti.Unix(), SeqID: 2}, []byte(`null`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +39,6 @@ func TestXxx(t *testing.T) {
 
 func TestRead(t *testing.T) {
 	client := lake.NewOssCatalog(false, "cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "test/91110108717743469K")
-
 	result, err := client.BuildData()
 	if err != nil {
 		t.Fatal(err)
