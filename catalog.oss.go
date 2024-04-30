@@ -31,9 +31,9 @@ func (m *WriteDataRequest) fix() {
 	if m.Merge == 0 {
 		m.Merge = MergeTypeOver
 	}
-	if m.Field == "" {
-		m.Field = "unknow"
-	}
+	// if m.Field == "" {
+	// 	m.Field = "unknow"
+	// }
 }
 
 func (m WriteDataRequest) Path(prefixPath string) string {
@@ -65,7 +65,7 @@ func (m catalog) WriteJsonData(req WriteDataRequest, data []byte) error {
 	return m.newClient().PutObject(req.Path(m.path), bytes.NewReader(data))
 }
 
-func (m catalog) TrySnap(obj *ossDataResult, window time.Duration) error {
+func (m catalog) TrySnap(obj *OssDataResult, window time.Duration) error {
 	if !obj.ShouldSnap(window) {
 		return nil
 	}
@@ -89,7 +89,7 @@ func (m catalog) TrySnap(obj *ossDataResult, window time.Duration) error {
 	return nil
 }
 
-func (m catalog) TagSnaped(obj *ossDataResult) {
+func (m catalog) TagSnaped(obj *OssDataResult) {
 	// obj * ossDataResult
 	if obj.LastSnap == nil {
 		return
@@ -97,7 +97,7 @@ func (m catalog) TagSnaped(obj *ossDataResult) {
 	for i := 0; i < len(obj.Files); i++ {
 		if obj.Files[i].Ignore && obj.LastSnap.Fetched &&
 			obj.Files[i].Unix <= obj.LastSnap.Unix && obj.Files[i].Property.Key != obj.LastSnap.Property.Key {
-			fmt.Println("tag", obj.Files[i].Property.Key)
+			// fmt.Println("tag", obj.Files[i].Property.Key)
 			m.newClient().PutObjectTagging(obj.Files[i].Property.Key, oss.Tagging{
 				Tags: []oss.Tag{
 					{Key: "hkloudou.lake-deleting", Value: "true"},
@@ -107,7 +107,7 @@ func (m catalog) TagSnaped(obj *ossDataResult) {
 	}
 }
 
-func (m catalog) RemoveSnaped(obj *ossDataResult, windows time.Duration) error {
+func (m catalog) RemoveSnaped(obj *OssDataResult, windows time.Duration) error {
 	if obj.LastSnap == nil {
 		return nil
 	}
@@ -125,14 +125,14 @@ func (m catalog) RemoveSnaped(obj *ossDataResult, windows time.Duration) error {
 		}
 	}
 	if len(deleteList) > 0 {
-		fmt.Println("deleteList", deleteList)
+		// fmt.Println("deleteList", deleteList)
 		_, err := m.newClient().DeleteObjects(deleteList)
 		return err
 	}
 	return nil
 }
 
-func (m catalog) BuildData() (*ossDataResult, error) {
+func (m catalog) BuildData() (*OssDataResult, error) {
 	//list information
 	items, err := m.ListOssFiles()
 	if err != nil {
@@ -145,7 +145,7 @@ func (m catalog) BuildData() (*ossDataResult, error) {
 	return items.Merga(), nil
 }
 
-func (m catalog) WisebuildData(windows time.Duration) (*ossDataResult, error) {
+func (m catalog) WisebuildData(windows time.Duration) (*OssDataResult, error) {
 	data, err := m.BuildData()
 	if err != nil {
 		return nil, err
@@ -166,13 +166,23 @@ func updateResult(result map[string]any, file *ossFileProperty) {
 	for i, field := range file.Field {
 		if i == len(file.Field)-1 { // Last element
 			if file.Merge == MergeTypeOver {
-				current[field] = file.Value
+				if file.Value == nil {
+					delete(current, field)
+				} else {
+					current[field] = file.Value
+				}
+				// current[field] = file.Value
 			} else if file.Merge == MergeTypeUpsert {
 				if _, ok := current[field]; !ok {
 					current[field] = make(map[string]any)
 				}
 				for k, v := range file.Value.(map[string]any) {
-					current[field].(map[string]any)[k] = v
+					//delete support
+					if v == nil {
+						delete(current[field].(map[string]any), k)
+					} else {
+						current[field].(map[string]any)[k] = v
+					}
 				}
 			}
 		} else {
@@ -184,14 +194,22 @@ func updateResult(result map[string]any, file *ossFileProperty) {
 	}
 	if len(file.Field) == 0 { // Root directory operation
 		if file.Merge == MergeTypeOver {
-			result = file.Value.(map[string]any)
+			if file.Value == nil {
+				result = nil
+			} else {
+				result = file.Value.(map[string]any)
+			}
 		} else if file.Merge == MergeTypeUpsert {
 			for k, v := range file.Value.(map[string]any) {
-				result[k] = v
+				if v == nil {
+					delete(result, k)
+				} else {
+					result[k] = v
+				}
 			}
 		}
-		for k, v := range file.Value.(map[string]any) {
-			result[k] = v
-		}
+		// for k, v := range file.Value.(map[string]any) {
+		// 	result[k] = v
+		// }
 	}
 }

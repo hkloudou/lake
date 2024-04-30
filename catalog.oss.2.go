@@ -18,7 +18,7 @@ File: ${dataunix}_${%06d:seq_id}_${merge}_${uuid}.${format}
 SNAP: ${lastdataunix}_${sampleunix}.snap
 */
 
-type ossDataResult struct {
+type OssDataResult struct {
 	Data             map[string]any
 	Files            ossFilePropertySlice // [ignore, format, unix, seqid, merge, uuid, key
 	LastModifiedUnix int64
@@ -26,7 +26,7 @@ type ossDataResult struct {
 	LastSnap         *ossFileProperty `json:"-"`
 }
 
-func (o ossDataResult) ShouldSnap(window time.Duration) bool {
+func (o OssDataResult) ShouldSnap(window time.Duration) bool {
 	return o.SampleUnix-o.LastModifiedUnix > int64(window.Seconds()) && (o.LastSnap == nil || o.LastSnap.Unix != o.LastModifiedUnix)
 }
 
@@ -107,7 +107,7 @@ func (m ossFilePropertySlice) Fetch(c *catalog) error {
 			}
 			// var tmp = ossDataResult{}
 			if file.Format == TextFormatSNAP {
-				var tmp ossDataResult
+				var tmp OssDataResult
 				err = json.Unmarshal(data, &tmp)
 				if err != nil {
 					lastError = err
@@ -131,10 +131,10 @@ func (m ossFilePropertySlice) Fetch(c *catalog) error {
 	return lastError
 }
 
-func (m ossFilePropertySlice) Merga() *ossDataResult {
+func (m ossFilePropertySlice) Merga() *OssDataResult {
 	// var result = make(map[string]any, 0)
 
-	result := ossDataResult{
+	result := OssDataResult{
 		Data:             make(map[string]any, 0),
 		Files:            m,
 		LastModifiedUnix: 0,
@@ -145,8 +145,8 @@ func (m ossFilePropertySlice) Merga() *ossDataResult {
 			continue
 		}
 		switch m[i].Value.(type) {
-		case ossDataResult:
-			result = (m[i].Value.(ossDataResult))
+		case OssDataResult:
+			result = (m[i].Value.(OssDataResult))
 			// result.SampleUnix = time.Now().Unix()
 			result.Files = m
 		default:
