@@ -120,6 +120,7 @@ func (m catalog) RemoveSnaped(obj *OssDataResult, windows time.Duration) error {
 	for i := 0; i < len(obj.Files); i++ {
 		if obj.Files[i].Ignore &&
 			obj.Files[i].Unix <= obj.LastSnap.Unix &&
+			(obj.Files[i].Format != TextFormatSNAP || obj.Files[i].Unix != obj.LastSnap.Unix || obj.Files[i].SeqID < obj.LastSnap.SeqID) && //make sure only delete old seqID whern unix is equal
 			obj.Files[i].Property.Key != obj.LastSnap.Property.Key {
 			deleteList = append(deleteList, obj.Files[i].Property.Key)
 		}
