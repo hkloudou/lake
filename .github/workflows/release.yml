@@ -1,0 +1,30 @@
+name: "aliyun-fc-tagged-release"
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]"
+jobs:
+  tagged-release:
+    name: "Tagged Release"
+    runs-on: "ubuntu-latest"
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+    - uses: actions/setup-go@v3
+      with:
+        go-version: '^1.21.5' # The Go version to download (if necessary) and use.
+    - run: go version 
+    - name: build
+      run: cd /home/runner/work/lake/lake/cmd/aliyun-fc && GOOS=linux GOARCH=amd64 go build . /home/runner/work/mqx/mqx/build/lake-emr-aliyun-fc_linux_amd64
+      shell: bash
+    - uses: "marvinpinto/action-automatic-releases@latest"
+      with:
+        repo_token: "${{ secrets.GITHUB_TOKEN }}"
+        # automatic_release_tag: "latest"
+        prerelease: false
+        # title: "Development Build"
+        files: |
+          /home/runner/work/mqx/mqx/build/lake-emr-aliyun-fc_linux_amd64
