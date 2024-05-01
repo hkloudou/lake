@@ -1,9 +1,15 @@
 name: "aliyun-fc"
 
 on:
-  push:
-    tags:
-      - "cmd/aliyun-fc/v[0-9]+.[0-9]+.[0-9]"
+  # push:
+  #   tags:
+  #     - "cmd/aliyun-fc/v[0-9]+.[0-9]+.[0-9]"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'version'
+        required: true
+        default: '1.0.1'
 jobs:
   tagged-release:
     name: "Tagged Release"
