@@ -1,8 +1,15 @@
 package lake
 
 func updateResult(result *map[string]any, file *ossFileProperty) {
+	if result == nil {
+		tmp := make(map[string]any)
+		result = &tmp
+	}
 	current := *result
 	for i, field := range file.Field {
+		if _, ok := current[field]; !ok {
+			current[field] = make(map[string]any)
+		}
 		if i == len(file.Field)-1 { // Last element
 			if file.Merge == MergeTypeOver {
 				if file.Value == nil {
@@ -23,9 +30,6 @@ func updateResult(result *map[string]any, file *ossFileProperty) {
 				}
 			}
 		} else {
-			if _, ok := current[field]; !ok {
-				current[field] = make(map[string]any)
-			}
 			current = current[field].(map[string]any)
 		}
 	}
