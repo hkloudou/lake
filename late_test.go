@@ -57,3 +57,7 @@ func TestRead(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// func Test_hdfs(t *testing.T) {
+// 	oss.New("https://cs-lake-hdfs.cn-hangzhou.oss-dls.aliyuncs.com", accessKeyId, accessKeySecret)
+// }
