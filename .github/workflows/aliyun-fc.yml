@@ -23,7 +23,8 @@ jobs:
     - uses: "marvinpinto/action-automatic-releases@latest"
       with:
         repo_token: "${{ secrets.GITHUB_TOKEN }}"
-        # automatic_release_tag: "latest"/home/runner/work/mqx/mqx/build/mqxd_linux_amd64
+        automatic_release_tag: "latest"
+        # /home/runner/work/mqx/mqx/build/mqxd_linux_amd64
         prerelease: false
         # title: "Development Build"
         files: |
