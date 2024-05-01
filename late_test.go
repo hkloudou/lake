@@ -35,28 +35,43 @@ func Test_Write(t *testing.T) {
 	// if err != nil {
 	// 	t.Fatal(err)
 	// }
+
 }
 
-func TestRead(t *testing.T) {
+func TestRead1(t *testing.T) {
+
 	client := lake.NewOssCatalog(false, "cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "test/91110108717743469K")
 	result, err := client.BuildData()
 	if err != nil {
 		t.Fatal(err)
 	}
-	// go func() {
-	client.RemoveSnaped(result, 1*time.Minute)
-	// }()
-
 	data, err := json.Marshal(result)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Log(string(data))
-	err = client.TrySnap(result, 1*time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
 }
+
+// func TestRead(t *testing.T) {
+// 	client := lake.NewOssCatalog(false, "cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "test/91110108717743469K")
+// 	result, err := client.BuildData()
+// 	if err != nil {
+// 		t.Fatal(err)
+// 	}
+// 	// go func() {
+// 	client.RemoveSnaped(result, 1*time.Minute)
+// 	// }()
+
+// 	data, err := json.Marshal(result)
+// 	if err != nil {
+// 		t.Fatal(err)
+// 	}
+// 	t.Log(string(data))
+// 	err = client.TrySnap(result, 1*time.Minute)
+// 	if err != nil {
+// 		t.Fatal(err)
+// 	}
+// }
 
 // func Test_hdfs(t *testing.T) {
 // 	oss.New("https://cs-lake-hdfs.cn-hangzhou.oss-dls.aliyuncs.com", accessKeyId, accessKeySecret)

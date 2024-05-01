@@ -2,6 +2,7 @@ package lake
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"path"
 	"sort"
@@ -149,7 +150,9 @@ func (m ossFilePropertySlice) Merga() *OssDataResult {
 			result = (m[i].Value.(OssDataResult))
 			// result.SampleUnix = time.Now().Unix()
 			result.Files = m
+			fmt.Println("SNAP", m[i].Field, m[i].Value)
 		default:
+			fmt.Println("JSON", m[i].Field, m[i].Value)
 			updateResult(&result.Data, &m[i])
 			if m[i].Unix > result.LastModifiedUnix {
 				result.LastModifiedUnix = m[i].Unix
