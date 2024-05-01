@@ -3,7 +3,7 @@ name: "aliyun-fc-tagged-release"
 on:
   push:
     tags:
-      - "v[0-9]+.[0-9]+.[0-9]"
+      - "cmd/aliyun-fc/v[0-9]+.[0-9]+.[0-9]"
 jobs:
   tagged-release:
     name: "Tagged Release"
