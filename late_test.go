@@ -40,7 +40,6 @@ func Test_Write(t *testing.T) {
 }
 
 func TestRead1(t *testing.T) {
-
 	client := lake.NewOssCatalog(false, "cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "test/91110108717743469K")
 	result, err := client.BuildData()
 	if err != nil {
