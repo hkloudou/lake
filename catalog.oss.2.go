@@ -83,6 +83,15 @@ func (m ossFilePropertySlice) LastSnap() *ossFileProperty {
 	return nil
 }
 
+func (m ossFilePropertySlice) LastModified() int64 {
+	for i := len(m) - 1; i >= 0; i-- {
+		if !m[i].Ignore {
+			return m[i].Property.LastModified.Unix()
+		}
+	}
+	return 0
+}
+
 func (m ossFilePropertySlice) Fetch(c *catalog) error {
 	var wg = sync.WaitGroup{}
 	var lastError error
