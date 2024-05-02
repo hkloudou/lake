@@ -31,7 +31,7 @@ func (o OssDataResult) ShouldSnap(window time.Duration) bool {
 }
 
 type ossFileProperty struct {
-	Property oss.ObjectProperties
+	property oss.ObjectProperties
 	Format   TextFormat
 
 	Field []string
@@ -48,7 +48,7 @@ type ossFileProperty struct {
 
 func (o ossFileProperty) MarshalJSON() ([]byte, error) {
 	// o.Property.
-	return json.Marshal([]any{!o.Ignore, o.Format, o.Unix, o.SeqID, o.Merge, o.UUID, o.Property.Key})
+	return json.Marshal([]any{!o.Ignore, o.Format, o.Unix, o.SeqID, o.Merge, o.UUID, o.property.Key})
 }
 
 func (o ossFileProperty) UnmarshalJSON(data []byte) error {
@@ -83,10 +83,10 @@ func (m ossFilePropertySlice) LastSnap() *ossFileProperty {
 	return nil
 }
 
-func (m ossFilePropertySlice) LastModified() int64 {
+func (m ossFilePropertySlice) LastUnix() int64 {
 	for i := len(m) - 1; i >= 0; i-- {
 		if !m[i].Ignore {
-			return m[i].Property.LastModified.Unix()
+			return m[i].Unix
 		}
 	}
 	return 0
@@ -104,7 +104,7 @@ func (m ossFilePropertySlice) Fetch(c *catalog) error {
 			defer wg.Done()
 			file := m[i2]
 			// fmt.Println("read", file.Property.Key)
-			buffer, err := c.newClient().GetObject(file.Property.Key)
+			buffer, err := c.newClient().GetObject(file.property.Key)
 			if err != nil {
 				lastError = err
 				return
@@ -218,14 +218,14 @@ func (m catalog) ListOssFiles() (ossFilePropertySlice, error) {
 
 		if strings.HasSuffix(obj.Key, ".snap") {
 			result = append(result, ossFileProperty{
-				Property: obj,
+				property: obj,
 				Format:   TextFormatSNAP,
 				Unix:     getSliceNumericPart(parts, 0),
 				SeqID:    getSliceNumericPart(parts, 1),
 			})
 		} else if strings.HasSuffix(obj.Key, ".json") {
 			result = append(result, ossFileProperty{
-				Property: obj,
+				property: obj,
 				Format:   TextFormatJSON,
 
 				Field: pathSplit[:len(pathSplit)-1],
@@ -242,7 +242,7 @@ func (m catalog) ListOssFiles() (ossFilePropertySlice, error) {
 	if lastSnap != nil {
 		for i := 0; i < len(result); i++ {
 			//ignore data lte snaptime
-			if result[i].Unix <= lastSnap.Unix && result[i].Property.Key != lastSnap.Property.Key {
+			if result[i].Unix <= lastSnap.Unix && result[i].property.Key != lastSnap.property.Key {
 				result[i].Ignore = true
 			}
 		}
