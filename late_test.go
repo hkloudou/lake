@@ -45,6 +45,7 @@ func TestWiseRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	data, err := json.Marshal(result)
 	if err != nil {
 		t.Fatal(err)

@@ -53,6 +53,8 @@ func updateResult(result *map[string]any, file *ossFileProperty) {
 				}
 			}
 			// }
+		} else {
+			panic("unknow merge")
 		}
 	}
 }

@@ -151,6 +151,7 @@ func (m ossFilePropertySlice) Merga() *OssDataResult {
 		// SampleUnix:       sampleUnix,
 	}
 	for i := 0; i < len(m); i++ {
+		// fmt.Println(!m[i].Ignore, m[i].Value)
 		if m[i].Ignore {
 			continue
 		}
@@ -161,7 +162,9 @@ func (m ossFilePropertySlice) Merga() *OssDataResult {
 		// 	result.Files = m
 		// fmt.Println("SNAP", m[i].Field, m[i].Value)
 		default:
+			// fmt.Println("type", m[i].Value))
 			// fmt.Println("JSON", m[i].Field, m[i].Value)
+			// fmt.Println(!m[i].Ignore, m[i].Value)
 			updateResult(&result.Data, &m[i])
 			if m[i].Unix > result.LastModifiedUnix {
 				result.LastModifiedUnix = m[i].Unix
@@ -221,8 +224,10 @@ func (m catalog) ListOssFiles() (ossFilePropertySlice, error) {
 			result = append(result, ossFileProperty{
 				property: obj,
 				Format:   TextFormatSNAP,
+				Field:    nil,
 				Unix:     getSliceNumericPart(parts, 0),
 				SeqID:    getSliceNumericPart(parts, 1),
+				Merge:    MergeTypeOver,
 			})
 		} else if strings.HasSuffix(obj.Key, ".json") {
 			result = append(result, ossFileProperty{

@@ -1,6 +1,6 @@
 module github.com/hkloudou/lake
 
-go 1.21.5
+go 1.19
 
 require (
 	github.com/aliyun/aliyun-oss-go-sdk v3.0.2+incompatible
