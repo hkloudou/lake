@@ -19,11 +19,11 @@ SNAP: ${lastdataunix}_${sampleunix}.snap
 */
 
 type OssDataResult struct {
-	Data             map[string]any
-	Files            ossFilePropertySlice // [ignore, format, unix, seqid, merge, uuid, key
-	LastModifiedUnix int64
-	SampleUnix       int64
-	LastSnap         *ossFileProperty `json:"-"`
+	Data             map[string]any       `json:"data"`
+	Files            ossFilePropertySlice `json:"-"` // [ignore, format, unix, seqid, merge, uuid, key
+	LastModifiedUnix int64                `json:"lastModifiedUnix"`
+	SampleUnix       int64                `json:"sampleUnix"`
+	LastSnap         *ossFileProperty     `json:"-"`
 }
 
 func (o OssDataResult) ShouldSnap(window time.Duration) bool {
@@ -115,16 +115,17 @@ func (m ossFilePropertySlice) Fetch(c *catalog) error {
 				return
 			}
 			// var tmp = ossDataResult{}
-			if file.Format == TextFormatSNAP {
-				var tmp OssDataResult
-				err = json.Unmarshal(data, &tmp)
-				if err != nil {
-					lastError = err
-					return
-				}
-				m[i2].Value = tmp
-				// fmt.Println("snap", tmp)
-			} else {
+			// if file.Format == TextFormatSNAP || file.Format == TextFormatJSON {
+			// var tmp OssDataResult
+			// err = json.Unmarshal(data, &tmp)
+			// if err != nil {
+			// 	lastError = err
+			// 	return
+			// }
+			// m[i2].Value = tmp
+			// fmt.Println("snap", tmp)
+			// }
+			if file.Format == TextFormatSNAP || file.Format == TextFormatJSON {
 				var tmp any
 				err = json.Unmarshal(data, &tmp)
 				if err != nil {
@@ -154,11 +155,11 @@ func (m ossFilePropertySlice) Merga() *OssDataResult {
 			continue
 		}
 		switch m[i].Value.(type) {
-		case OssDataResult:
-			result = (m[i].Value.(OssDataResult))
-			// result.SampleUnix = time.Now().Unix()
-			result.Files = m
-			// fmt.Println("SNAP", m[i].Field, m[i].Value)
+		// case OssDataResult:
+		// 	result = (m[i].Value.(OssDataResult))
+		// 	// result.SampleUnix = time.Now().Unix()
+		// 	result.Files = m
+		// fmt.Println("SNAP", m[i].Field, m[i].Value)
 		default:
 			// fmt.Println("JSON", m[i].Field, m[i].Value)
 			updateResult(&result.Data, &m[i])

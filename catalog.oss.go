@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/google/uuid"
 )
 
@@ -76,7 +75,7 @@ func (m catalog) TrySnap(obj *OssDataResult, window time.Duration) error {
 		return fmt.Errorf("too short time")
 	}
 	// fmt.Println("snap")
-	data, err := json.Marshal(obj)
+	data, err := json.Marshal(obj.Data)
 	if err != nil {
 		return err
 	}
@@ -89,23 +88,23 @@ func (m catalog) TrySnap(obj *OssDataResult, window time.Duration) error {
 	return nil
 }
 
-func (m catalog) TagSnaped(obj *OssDataResult) {
-	// obj * ossDataResult
-	if obj.LastSnap == nil {
-		return
-	}
-	for i := 0; i < len(obj.Files); i++ {
-		if obj.Files[i].Ignore && obj.LastSnap.Fetched &&
-			obj.Files[i].Unix <= obj.LastSnap.Unix && obj.Files[i].property.Key != obj.LastSnap.property.Key {
-			// fmt.Println("tag", obj.Files[i].Property.Key)
-			m.newClient().PutObjectTagging(obj.Files[i].property.Key, oss.Tagging{
-				Tags: []oss.Tag{
-					{Key: "hkloudou.lake-deleting", Value: "true"},
-				},
-			})
-		}
-	}
-}
+// func (m catalog) TagSnaped(obj *OssDataResult) {
+// 	// obj * ossDataResult
+// 	if obj.LastSnap == nil {
+// 		return
+// 	}
+// 	for i := 0; i < len(obj.Files); i++ {
+// 		if obj.Files[i].Ignore && obj.LastSnap.Fetched &&
+// 			obj.Files[i].Unix <= obj.LastSnap.Unix && obj.Files[i].property.Key != obj.LastSnap.property.Key {
+// 			// fmt.Println("tag", obj.Files[i].Property.Key)
+// 			m.newClient().PutObjectTagging(obj.Files[i].property.Key, oss.Tagging{
+// 				Tags: []oss.Tag{
+// 					{Key: "hkloudou.lake-deleting", Value: "true"},
+// 				},
+// 			})
+// 		}
+// 	}
+// }
 
 func (m catalog) RemoveSnaped(obj *OssDataResult, windows time.Duration) error {
 	if obj.LastSnap == nil {

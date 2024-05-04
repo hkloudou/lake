@@ -25,3 +25,8 @@ go install github.com/hkloudou/lake
 # snap操作
 1. 取一个相对比较稳定的时间作为快照时间，样本时间至少比当前时间小1个小时
 2. 对样本时间之前的所有数据进行计算后快照保存
+
+
+# todo 
+[-] snap: 可以针对历史的时间段进行Snap，比如检测1分钟的数据，看是否可以Snap
+[-] cache: 文件结构的Meta能够缓存，ListFiles耗时太严重
