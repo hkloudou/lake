@@ -20,6 +20,7 @@ type lakeEngine struct {
 	meta     *Meta
 	internal bool
 	cache    *collection.Cache[map[string]any]
+	prefix   string
 }
 
 // func (m *lakeEngine) Write
@@ -94,5 +95,6 @@ func NewLake(metaUrl string,
 		barrier:  xsync.NewSingleFlight[Meta](),
 		cache:    cache,
 		internal: os.Getenv("FC_REGION") == "cn-hangzhou",
+		prefix:   "cl:",
 	}
 }

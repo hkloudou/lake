@@ -18,7 +18,13 @@ var accessKeySecret string
 //go:embed testData/bucketName.secret
 var bucketName string
 
+func Test_Catlogs(t *testing.T) {
+	c := lake.NewLake("redis://127.0.0.1:6379/2")
+	t.Log(c.Catlogs())
+}
+
 func Test_Write(t *testing.T) {
+
 	c := lake.NewLake("redis://127.0.0.1:6379/2")
 	d, err := c.WiseBuild("test/91110108717743469K", 5*time.Second)
 	if err != nil {

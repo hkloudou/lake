@@ -34,17 +34,33 @@ func (m *lakeEngine) Write(req WriteDataRequest, data []byte) error {
 	if err := m.newClient().PutObject(req.FullPath(), bytes.NewReader(data)); err != nil {
 		return err
 	}
-	return m.rdb.HSet(context.TODO(), req.Catlog, req.Path(), "").Err()
+	return m.rdb.HSet(context.TODO(), m.prefix+req.Catlog, req.Path(), "").Err()
 }
 
-func (m *lakeEngine) List(catlog string) (filePropertySlice, error) {
-	if strings.Trim(catlog, "/") != catlog {
-		return nil, fmt.Errorf("error catlog format with / prefix or suffix")
-	}
+func (m *lakeEngine) Catlogs() ([]string, error) {
 	if err := m.readMeta(); err != nil {
 		return nil, err
 	}
-	names, err := m.rdb.HKeys(context.TODO(), catlog).Result()
+	keys, err := m.rdb.Keys(context.TODO(), m.prefix+"*").Result()
+	if err != nil {
+		return nil, err
+	}
+	keysStart := len(m.prefix)
+	for i := 0; i < len(keys); i++ {
+		keys[i] = keys[i][keysStart:]
+	}
+	return keys, nil
+}
+
+func (m *lakeEngine) List(catlog string) (filePropertySlice, error) {
+	if err := m.readMeta(); err != nil {
+		return nil, err
+	}
+	if strings.Trim(catlog, "/") != catlog {
+		return nil, fmt.Errorf("error catlog format with / prefix or suffix")
+	}
+
+	names, err := m.rdb.HKeys(context.TODO(), m.prefix+catlog).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -133,6 +149,9 @@ func (m *lakeEngine) Fetch(items filePropertySlice) error {
 }
 
 func (m *lakeEngine) Build(catlog string) (*dataResult, error) {
+	if err := m.readMeta(); err != nil {
+		return nil, err
+	}
 	if strings.Trim(catlog, "/") != catlog {
 		return nil, fmt.Errorf("error catlog format with / prefix or suffix")
 	}
@@ -151,6 +170,9 @@ func (m *lakeEngine) Build(catlog string) (*dataResult, error) {
 }
 
 func (m *lakeEngine) WiseBuild(catlog string, windows time.Duration) (*dataResult, error) {
+	if err := m.readMeta(); err != nil {
+		return nil, err
+	}
 	if strings.Trim(catlog, "/") != catlog {
 		return nil, fmt.Errorf("error catlog format with / prefix or suffix")
 	}
@@ -170,6 +192,9 @@ func (m *lakeEngine) WiseBuild(catlog string, windows time.Duration) (*dataResul
 }
 
 func (m lakeEngine) TrySnap(obj *dataResult, window time.Duration) error {
+	if err := m.readMeta(); err != nil {
+		return err
+	}
 	if !obj.ShouldSnap(window) {
 		return nil
 	}
@@ -194,5 +219,5 @@ func (m lakeEngine) TrySnap(obj *dataResult, window time.Duration) error {
 		return err
 	}
 	// fmt.Println("fileName", fileName)
-	return m.rdb.HSet(context.TODO(), obj.Catlog, fileName, "").Err()
+	return m.rdb.HSet(context.TODO(), m.prefix+obj.Catlog, fileName, "").Err()
 }
