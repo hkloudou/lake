@@ -3,7 +3,7 @@ package lake
 import "time"
 
 type dataResult struct {
-	Catlog           string
+	Catlog           string            `json:"catlog"`
 	Data             map[string]any    `json:"data"`
 	Files            filePropertySlice `json:"-"` // [ignore, format, unix, seqid, merge, uuid, key
 	LastModifiedUnix int64             `json:"lastModifiedUnix"`

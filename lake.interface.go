@@ -137,6 +137,7 @@ func (m *lakeEngine) Build(catlog string) (*dataResult, error) {
 	}
 	tmp := items.Merga()
 	tmp.Catlog = catlog
+	tmp.Files = items
 	return tmp, nil
 }
 
@@ -180,5 +181,6 @@ func (m lakeEngine) TrySnap(obj *dataResult, window time.Duration) error {
 	); err != nil {
 		return err
 	}
-	return m.rdb.HSet(context.TODO(), fileName, "").Err()
+	fmt.Println("fileName", fileName)
+	return m.rdb.HSet(context.TODO(), obj.Catlog, fileName, "").Err()
 }
