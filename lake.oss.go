@@ -76,6 +76,7 @@ func (m *lakeEngine) readMeta() error {
 		m.meta = nil
 		return err
 	}
+	m.prefix = fmt.Sprintf("%s:%s:", meta.Storage, meta.Bucket)
 	m.meta = &meta
 	return nil
 }

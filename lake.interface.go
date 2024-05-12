@@ -120,7 +120,7 @@ func (m *lakeEngine) List(catlog string) (filePropertySlice, error) {
 	return result, nil
 }
 
-func (m *lakeEngine) Fetch(items filePropertySlice) error {
+func (m *lakeEngine) fetch(items filePropertySlice) error {
 	tasks := threading.NewTaskRunner(10)
 
 	var be = xerror.BatchError{}
@@ -167,7 +167,7 @@ func (m *lakeEngine) Build(catlog string) (*dataResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	err = m.Fetch(items)
+	err = m.fetch(items)
 	if err != nil {
 		return nil, err
 	}
