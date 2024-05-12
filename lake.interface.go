@@ -133,11 +133,12 @@ func (m *lakeEngine) fetch(items filePropertySlice) error {
 			continue
 		}
 
-		func(i2 int) {
-			fullPath := path.Join(items[i2].Prefix, items[i2].Path)
+		func(i int) {
+
 			tasks.Schedule(func() {
+				fullPath := path.Join(items[i].Prefix, items[i].Path)
 				tmp, err := m.cache.Take(fullPath, func() (any, error) {
-					fmt.Println(xcolor.Yellow("download"), fullPath)
+					fmt.Println(xcolor.Yellow("fetch"), fullPath)
 					buffer, err := m.newClient().GetObject(fullPath)
 					if err != nil {
 						return nil, err
@@ -157,10 +158,10 @@ func (m *lakeEngine) fetch(items filePropertySlice) error {
 					be.Add(err)
 					return
 				}
-				items[i2].Value = tmp
-				items[i2].Fetched = true
+				items[i].Value = tmp
+				items[i].Fetched = true
 			})
-		}(i)
+		}(int(i))
 	}
 	tasks.Wait()
 	return be.Err()
@@ -198,10 +199,7 @@ func (m *lakeEngine) WiseBuild(catlog string, windows time.Duration) (*dataResul
 	if err != nil {
 		return nil, err
 	}
-	// err = m.RemoveSnaped(data, windows)
-	// if err != nil {
-	// 	return nil, err
-	// }
+
 	err = m.trySnap(data, windows)
 	if err != nil {
 		return nil, err
@@ -222,20 +220,10 @@ func (m lakeEngine) trySnap(obj *dataResult, window time.Duration) error {
 	if obj.SampleUnix-obj.LastModifiedUnix < int64(window.Seconds()) {
 		return fmt.Errorf("too short time")
 	}
-	// fmt.Println("snap")
 	data, err := json.Marshal(obj.Data)
 	if err != nil {
 		return err
 	}
 
-	// fileName := fmt.Sprintf("%d_%d.snap", obj.LastModifiedUnix, obj.SampleUnix)
-	// fullPath := path.Join(obj.Catlog, fileName)
 	return m.write(obj.Catlog, fmt.Sprintf("%d_%d.snap", obj.LastModifiedUnix, obj.SampleUnix), data)
-	// if err := m.newClient().PutObject(
-	// 	fullPath, bytes.NewReader(data),
-	// ); err != nil {
-	// 	return err
-	// }
-	// // fmt.Println("fileName", fileName)
-	// return m.rdb.HSet(context.TODO(), m.prefix+obj.Catlog, fileName, "").Err()
 }
