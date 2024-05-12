@@ -1,5 +1,7 @@
 package lake
 
+import "encoding/json"
+
 type fileInfo struct {
 	// property oss.ObjectProperties
 	Prefix string
@@ -17,6 +19,11 @@ type fileInfo struct {
 	Ignore  bool
 	Fetched bool
 	Value   any
+}
+
+func (o fileInfo) MarshalJSON() ([]byte, error) {
+	// o.Property.
+	return json.Marshal([]any{!o.Ignore, o.Type, o.Unix, o.Seq, o.Merge, o.UUID, o.Prefix, o.Path})
 }
 
 type filePropertySlice []fileInfo

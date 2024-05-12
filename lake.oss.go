@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
+	"github.com/hkloudou/xlib/collection"
 	"github.com/hkloudou/xlib/xsync"
 	"github.com/redis/go-redis/v9"
 )
@@ -16,6 +18,7 @@ type lakeEngine struct {
 	barrier  xsync.SingleFlight[Meta]
 	meta     *Meta
 	internal bool
+	cache    *collection.Cache[map[string]any]
 }
 
 // func (m *lakeEngine) Write
@@ -81,8 +84,13 @@ func NewLake(metaUrl string,
 	if err != nil {
 		panic(err)
 	}
+	cache, err := collection.NewCache[map[string]any](1*time.Second, collection.WithLimit[map[string]any](1000))
+	if err != nil {
+		panic(err)
+	}
 	return &lakeEngine{
 		rdb:     redis.NewClient(opt),
 		barrier: xsync.NewSingleFlight[Meta](),
+		cache:   cache,
 	}
 }

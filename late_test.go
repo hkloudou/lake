@@ -2,6 +2,7 @@ package lake_test
 
 import (
 	_ "embed"
+	"encoding/json"
 	"testing"
 
 	"github.com/hkloudou/lake"
@@ -18,7 +19,17 @@ var bucketName string
 
 func Test_Write(t *testing.T) {
 	c := lake.NewLake("redis://127.0.0.1:6379/2")
-	t.Log(c.List("test/91110108717743469K"))
+	list, err := c.List("test/91110108717743469K")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.Fetch(list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// t.Log(list)
+	str, _ := json.Marshal(list)
+	t.Log(string(str))
 	// err := c.Write(lake.WriteDataRequest{
 	// 	Unix:      time.Now().Unix(),
 	// 	SeqID:     1,

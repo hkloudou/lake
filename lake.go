@@ -7,8 +7,8 @@ const (
 	SNAP fileType = 2
 )
 
-type LakeProvider interface {
-	WriteJson()
-	List() ([]filePropertySlice, error)
-	Fetch([]filePropertySlice) error
-}
+// type LakeProvider interface {
+// 	WriteJson()
+// 	List() ([]filePropertySlice, error)
+// 	Fetch([]filePropertySlice) error
+// }

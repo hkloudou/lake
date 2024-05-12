@@ -3,12 +3,17 @@ package lake
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"path"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/hkloudou/xlib/threading"
+	"github.com/hkloudou/xlib/xerror"
 )
 
 func (m *lakeEngine) Write(req WriteDataRequest, data []byte) error {
@@ -83,4 +88,40 @@ func (m *lakeEngine) List(prefix string) (filePropertySlice, error) {
 		}
 	}
 	return result, nil
+}
+
+func (m *lakeEngine) Fetch(items filePropertySlice) error {
+	tasks := threading.NewTaskRunner(10)
+
+	var be = xerror.BatchError{}
+	for i := 0; i < len(items); i++ {
+		if items[i].Ignore || items[i].Fetched {
+			continue
+		}
+		func(i2 int) {
+			fullPath := path.Join(items[i2].Prefix, items[i2].Path)
+			tasks.Schedule(func() {
+				buffer, err := m.newClient().GetObject(fullPath)
+				if err != nil {
+					be.Add(err)
+					return
+				}
+				data, err := io.ReadAll(buffer)
+				if err != nil {
+					be.Add(err)
+					return
+				}
+				var tmp any
+				err = json.Unmarshal(data, &tmp)
+				if err != nil {
+					be.Add(err)
+					return
+				}
+				items[i2].Value = tmp
+				items[i2].Fetched = true
+			})
+		}(i)
+	}
+	tasks.Wait()
+	return be.Err()
 }
