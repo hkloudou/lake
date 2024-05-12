@@ -155,21 +155,18 @@ func (m ossFilePropertySlice) Merga() *OssDataResult {
 		if m[i].Ignore {
 			continue
 		}
-		switch m[i].Value.(type) {
-		// case OssDataResult:
-		// 	result = (m[i].Value.(OssDataResult))
-		// 	// result.SampleUnix = time.Now().Unix()
-		// 	result.Files = m
-		// fmt.Println("SNAP", m[i].Field, m[i].Value)
-		default:
-			// fmt.Println("type", m[i].Value))
-			// fmt.Println("JSON", m[i].Field, m[i].Value)
-			// fmt.Println(!m[i].Ignore, m[i].Value)
-			updateResult(&result.Data, &m[i])
-			if m[i].Unix > result.LastModifiedUnix {
-				result.LastModifiedUnix = m[i].Unix
-			}
+		// switch m[i].Value.(type) {
+		// // case OssDataResult:
+		// // 	result = (m[i].Value.(OssDataResult))
+		// // 	// result.SampleUnix = time.Now().Unix()
+		// // 	result.Files = m
+		// // fmt.Println("SNAP", m[i].Field, m[i].Value)
+		// default:
+		updateResult(&result.Data, &m[i])
+		if m[i].Unix > result.LastModifiedUnix {
+			result.LastModifiedUnix = m[i].Unix
 		}
+		// }
 	}
 	// if result.SampleUnix == 0 {
 	result.SampleUnix = time.Now().Unix()
