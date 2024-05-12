@@ -192,14 +192,14 @@ func (m *lakeEngine) WiseBuild(catlog string, windows time.Duration) (*dataResul
 	// if err != nil {
 	// 	return nil, err
 	// }
-	err = m.TrySnap(data, windows)
+	err = m.trySnap(data, windows)
 	if err != nil {
 		return nil, err
 	}
 	return data, nil
 }
 
-func (m lakeEngine) TrySnap(obj *dataResult, window time.Duration) error {
+func (m lakeEngine) trySnap(obj *dataResult, window time.Duration) error {
 	if err := m.readMeta(); err != nil {
 		return err
 	}
