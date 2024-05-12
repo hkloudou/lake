@@ -14,7 +14,7 @@ type WriteDataRequest struct {
 	SeqID      int64
 	Merge      MergeType
 	RequestID  string
-	Prefix     string
+	Catlog     string
 	Field      string
 }
 
@@ -48,7 +48,7 @@ func (m WriteDataRequest) Path() string {
 }
 
 func (m WriteDataRequest) FullPath() string {
-	return fmt.Sprintf("%s/%s", m.Prefix, m.Path())
+	return fmt.Sprintf("%s/%s", m.Catlog, m.Path())
 }
 
 // func (m catalog) WriteJsonData(req WriteDataRequest, data []byte) error {

@@ -20,7 +20,7 @@ var bucketName string
 
 func Test_Write(t *testing.T) {
 	c := lake.NewLake("redis://127.0.0.1:6379/2")
-	d, err := c.WisebuildData("test/91110108717743469K", 5*time.Second)
+	d, err := c.WiseBuild("test/91110108717743469K", 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

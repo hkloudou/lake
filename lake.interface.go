@@ -21,6 +21,9 @@ func (m *lakeEngine) Write(req WriteDataRequest, data []byte) error {
 		return err
 	}
 	req.fix()
+	if strings.Trim(req.Catlog, "/") != req.Catlog {
+		return fmt.Errorf("error catlog format with / prefix or suffix")
+	}
 
 	if req.Merge != MergeTypeOver && req.Merge != MergeTypeUpsert {
 		return fmt.Errorf("unknown merge")
@@ -31,10 +34,13 @@ func (m *lakeEngine) Write(req WriteDataRequest, data []byte) error {
 	if err := m.newClient().PutObject(req.FullPath(), bytes.NewReader(data)); err != nil {
 		return err
 	}
-	return m.rdb.HSet(context.TODO(), req.Prefix, req.Path(), "").Err()
+	return m.rdb.HSet(context.TODO(), req.Catlog, req.Path(), "").Err()
 }
 
 func (m *lakeEngine) List(catlog string) (filePropertySlice, error) {
+	if strings.Trim(catlog, "/") != catlog {
+		return nil, fmt.Errorf("error catlog format with / prefix or suffix")
+	}
 	if err := m.readMeta(); err != nil {
 		return nil, err
 	}
@@ -127,6 +133,9 @@ func (m *lakeEngine) Fetch(items filePropertySlice) error {
 }
 
 func (m *lakeEngine) Build(catlog string) (*dataResult, error) {
+	if strings.Trim(catlog, "/") != catlog {
+		return nil, fmt.Errorf("error catlog format with / prefix or suffix")
+	}
 	items, err := m.List(catlog)
 	if err != nil {
 		return nil, err
@@ -141,7 +150,10 @@ func (m *lakeEngine) Build(catlog string) (*dataResult, error) {
 	return tmp, nil
 }
 
-func (m *lakeEngine) WisebuildData(catlog string, windows time.Duration) (*dataResult, error) {
+func (m *lakeEngine) WiseBuild(catlog string, windows time.Duration) (*dataResult, error) {
+	if strings.Trim(catlog, "/") != catlog {
+		return nil, fmt.Errorf("error catlog format with / prefix or suffix")
+	}
 	data, err := m.Build(catlog)
 	if err != nil {
 		return nil, err
