@@ -28,27 +28,26 @@ func (m *WriteDataRequest) fix() {
 	if m.Merge == 0 {
 		m.Merge = MergeTypeOver
 	}
+	if m.RequestID == "" {
+		m.RequestID = strings.Split(uuid.New().String(), "-")[0]
+	}
 	// if m.Field == "" {
 	// 	m.Field = "unknow"
 	// }
 }
 
-func (m WriteDataRequest) Path() string {
+func (m WriteDataRequest) path() string {
 	arr := strings.Trim(m.Field, ".")
 	fieldPath := ""
 	if arr != "" {
 		fieldPath = strings.ReplaceAll(arr, ".", "/") + "/"
 	}
-	requestID := m.RequestID
-	if requestID == "" {
-		requestID = strings.Split(uuid.New().String(), "-")[0]
-	}
 
-	return fmt.Sprintf("%s%d_%06d_%d_%s.json", fieldPath, m.Unix, m.SeqID, m.Merge, requestID)
+	return fmt.Sprintf("%s%d_%06d_%d_%s.json", fieldPath, m.Unix, m.SeqID, m.Merge, m.RequestID)
 }
 
 func (m WriteDataRequest) FullPath() string {
-	return fmt.Sprintf("%s/%s", m.Catlog, m.Path())
+	return fmt.Sprintf("%s/%s", m.Catlog, m.path())
 }
 
 // func (m catalog) WriteJsonData(req WriteDataRequest, data []byte) error {

@@ -34,7 +34,7 @@ func (m *lakeEngine) Write(req WriteDataRequest, data []byte) error {
 	if err := m.newClient().PutObject(req.FullPath(), bytes.NewReader(data)); err != nil {
 		return err
 	}
-	return m.rdb.HSet(context.TODO(), m.prefix+req.Catlog, req.Path(), "").Err()
+	return m.rdb.HSet(context.TODO(), m.prefix+req.Catlog, req.path(), "").Err()
 }
 
 func (m *lakeEngine) Catlogs() ([]string, error) {
