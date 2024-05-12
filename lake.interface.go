@@ -181,6 +181,6 @@ func (m lakeEngine) TrySnap(obj *dataResult, window time.Duration) error {
 	); err != nil {
 		return err
 	}
-	fmt.Println("fileName", fileName)
+	// fmt.Println("fileName", fileName)
 	return m.rdb.HSet(context.TODO(), obj.Catlog, fileName, "").Err()
 }
