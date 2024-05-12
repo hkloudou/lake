@@ -19,7 +19,7 @@ type lakeEngine struct {
 	barrier  xsync.SingleFlight[Meta]
 	meta     *Meta
 	internal bool
-	cache    *collection.Cache[map[string]any]
+	cache    *collection.Cache[any]
 	prefix   string
 }
 
@@ -87,7 +87,7 @@ func NewLake(metaUrl string,
 	if err != nil {
 		panic(err)
 	}
-	cache, err := collection.NewCache[map[string]any](1*time.Second, collection.WithLimit[map[string]any](1000))
+	cache, err := collection.NewCache[any](1*time.Second, collection.WithLimit[any](100000))
 	if err != nil {
 		panic(err)
 	}

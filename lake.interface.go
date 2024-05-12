@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/hkloudou/xlib/threading"
+	"github.com/hkloudou/xlib/xcolor"
 	"github.com/hkloudou/xlib/xerror"
 )
 
@@ -49,6 +50,7 @@ func (m *lakeEngine) Catlogs() ([]string, error) {
 	if err := m.readMeta(); err != nil {
 		return nil, err
 	}
+	// fmt.Println("pre", m.prefix+"*")
 	keys, err := m.rdb.Keys(context.TODO(), m.prefix+"*").Result()
 	if err != nil {
 		return nil, err
@@ -123,26 +125,34 @@ func (m *lakeEngine) List(catlog string) (filePropertySlice, error) {
 func (m *lakeEngine) fetch(items filePropertySlice) error {
 	tasks := threading.NewTaskRunner(10)
 
+	// m.cache.Take(items)
+
 	var be = xerror.BatchError{}
 	for i := 0; i < len(items); i++ {
 		if items[i].Ignore || items[i].Fetched {
 			continue
 		}
+
 		func(i2 int) {
 			fullPath := path.Join(items[i2].Prefix, items[i2].Path)
 			tasks.Schedule(func() {
-				buffer, err := m.newClient().GetObject(fullPath)
-				if err != nil {
-					be.Add(err)
-					return
-				}
-				data, err := io.ReadAll(buffer)
-				if err != nil {
-					be.Add(err)
-					return
-				}
-				var tmp any
-				err = json.Unmarshal(data, &tmp)
+				tmp, err := m.cache.Take(fullPath, func() (any, error) {
+					fmt.Println(xcolor.Yellow("download"), fullPath)
+					buffer, err := m.newClient().GetObject(fullPath)
+					if err != nil {
+						return nil, err
+					}
+					data, err := io.ReadAll(buffer)
+					if err != nil {
+						return nil, err
+					}
+					var tmp any
+					err = json.Unmarshal(data, &tmp)
+					if err != nil {
+						return nil, err
+					}
+					return tmp, nil
+				})
 				if err != nil {
 					be.Add(err)
 					return
