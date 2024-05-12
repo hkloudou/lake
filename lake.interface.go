@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/hkloudou/xlib/threading"
-	"github.com/hkloudou/xlib/xcolor"
 	"github.com/hkloudou/xlib/xerror"
 )
 
@@ -134,11 +133,16 @@ func (m *lakeEngine) fetch(items filePropertySlice) error {
 		}
 
 		func(i int) {
-
 			tasks.Schedule(func() {
 				fullPath := path.Join(items[i].Prefix, items[i].Path)
+				// m.cache.
+				// fmt.Println()
+				// _, found := m.cache.Get(fullPath)
+				// if !found {
+				// 	fmt.Println(xcolor.Red("not found"), fullPath)
+				// }
 				tmp, err := m.cache.Take(fullPath, func() (any, error) {
-					fmt.Println(xcolor.Yellow("fetch"), fullPath)
+					// fmt.Println(xcolor.Yellow("fetch"), fullPath)
 					buffer, err := m.newClient().GetObject(fullPath)
 					if err != nil {
 						return nil, err

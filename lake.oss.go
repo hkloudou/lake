@@ -87,7 +87,7 @@ func NewLake(metaUrl string,
 	if err != nil {
 		panic(err)
 	}
-	cache, err := collection.NewCache[any](1*time.Second, collection.WithLimit[any](100000))
+	cache, err := collection.NewCache[any](24*time.Hour, collection.WithLimit[any](100000))
 	if err != nil {
 		panic(err)
 	}
