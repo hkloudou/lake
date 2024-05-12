@@ -16,6 +16,13 @@ import (
 	"github.com/hkloudou/xlib/xerror"
 )
 
+func (m *lakeEngine) write(catlog string, filePath string, data []byte) error {
+	if err := m.newClient().PutObject(path.Join(catlog, filePath), bytes.NewReader(data)); err != nil {
+		return err
+	}
+	return m.rdb.HSet(context.TODO(), m.prefix+catlog, filePath, "").Err()
+}
+
 func (m *lakeEngine) Write(req WriteDataRequest, data []byte) error {
 	if err := m.readMeta(); err != nil {
 		return err
@@ -31,10 +38,11 @@ func (m *lakeEngine) Write(req WriteDataRequest, data []byte) error {
 	if math.Abs(float64(time.Now().Unix()-req.Unix)) > req.UnixWindow.Seconds() {
 		return fmt.Errorf("time is too far")
 	}
-	if err := m.newClient().PutObject(req.FullPath(), bytes.NewReader(data)); err != nil {
-		return err
-	}
-	return m.rdb.HSet(context.TODO(), m.prefix+req.Catlog, req.path(), "").Err()
+	return m.write(req.Catlog, req.path(), data)
+	// if err := m.newClient().PutObject(req.FullPath(), bytes.NewReader(data)); err != nil {
+	// 	return err
+	// }
+	// return m.rdb.HSet(context.TODO(), m.prefix+req.Catlog, req.path(), "").Err()
 }
 
 func (m *lakeEngine) Catlogs() ([]string, error) {
@@ -210,14 +218,14 @@ func (m lakeEngine) TrySnap(obj *dataResult, window time.Duration) error {
 		return err
 	}
 
-	fileName := fmt.Sprintf("%d_%d.snap", obj.LastModifiedUnix, obj.SampleUnix)
-	fullPath := path.Join(obj.Catlog, fileName)
-
-	if err := m.newClient().PutObject(
-		fullPath, bytes.NewReader(data),
-	); err != nil {
-		return err
-	}
-	// fmt.Println("fileName", fileName)
-	return m.rdb.HSet(context.TODO(), m.prefix+obj.Catlog, fileName, "").Err()
+	// fileName := fmt.Sprintf("%d_%d.snap", obj.LastModifiedUnix, obj.SampleUnix)
+	// fullPath := path.Join(obj.Catlog, fileName)
+	return m.write(obj.Catlog, fmt.Sprintf("%d_%d.snap", obj.LastModifiedUnix, obj.SampleUnix), data)
+	// if err := m.newClient().PutObject(
+	// 	fullPath, bytes.NewReader(data),
+	// ); err != nil {
+	// 	return err
+	// }
+	// // fmt.Println("fileName", fileName)
+	// return m.rdb.HSet(context.TODO(), m.prefix+obj.Catlog, fileName, "").Err()
 }
