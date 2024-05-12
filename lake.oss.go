@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
@@ -89,8 +90,9 @@ func NewLake(metaUrl string,
 		panic(err)
 	}
 	return &lakeEngine{
-		rdb:     redis.NewClient(opt),
-		barrier: xsync.NewSingleFlight[Meta](),
-		cache:   cache,
+		rdb:      redis.NewClient(opt),
+		barrier:  xsync.NewSingleFlight[Meta](),
+		cache:    cache,
+		internal: os.Getenv("FC_REGION") == "cn-hangzhou",
 	}
 }

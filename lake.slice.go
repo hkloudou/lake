@@ -1,6 +1,9 @@
 package lake
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 type fileInfo struct {
 	// property oss.ObjectProperties
@@ -58,4 +61,26 @@ func (m filePropertySlice) LastSnap() *fileInfo {
 		}
 	}
 	return nil
+}
+
+func (m filePropertySlice) Merga() *dataResult {
+	result := dataResult{
+		Data:             map[string]any{},
+		Files:            m,
+		LastModifiedUnix: 0,
+		// SampleUnix:       sampleUnix,
+	}
+	for i := 0; i < len(m); i++ {
+		// fmt.Println(!m[i].Ignore, m[i].Value)
+		if m[i].Ignore {
+			continue
+		}
+		updateResult(&result.Data, &m[i])
+		if m[i].Unix > result.LastModifiedUnix {
+			result.LastModifiedUnix = m[i].Unix
+		}
+	}
+	result.SampleUnix = time.Now().Unix()
+	result.LastSnap = m.LastSnap()
+	return &result
 }

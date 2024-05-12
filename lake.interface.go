@@ -34,11 +34,11 @@ func (m *lakeEngine) Write(req WriteDataRequest, data []byte) error {
 	return m.rdb.HSet(context.TODO(), req.Prefix, req.Path(), "").Err()
 }
 
-func (m *lakeEngine) List(prefix string) (filePropertySlice, error) {
+func (m *lakeEngine) List(catlog string) (filePropertySlice, error) {
 	if err := m.readMeta(); err != nil {
 		return nil, err
 	}
-	names, err := m.rdb.HKeys(context.TODO(), prefix).Result()
+	names, err := m.rdb.HKeys(context.TODO(), catlog).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -47,11 +47,11 @@ func (m *lakeEngine) List(prefix string) (filePropertySlice, error) {
 		fullName := names[i]
 		fileName := path.Base(fullName)
 		parts := strings.Split(strings.ReplaceAll(fileName, ".", "_"), "_")
-		pathSplit := strings.Split(strings.Trim(strings.Replace(fullName, prefix, "", 1), "/"), "/")
+		pathSplit := strings.Split(strings.Trim(strings.Replace(fullName, catlog, "", 1), "/"), "/")
 
 		if strings.HasSuffix(fullName, ".snap") {
 			result = append(result, fileInfo{
-				Prefix: prefix,
+				Prefix: catlog,
 				Path:   fullName,
 				Type:   SNAP,
 
@@ -63,7 +63,7 @@ func (m *lakeEngine) List(prefix string) (filePropertySlice, error) {
 			})
 		} else if strings.HasSuffix(fullName, ".json") {
 			result = append(result, fileInfo{
-				Prefix: prefix,
+				Prefix: catlog,
 				Path:   fullName,
 				Type:   DATA,
 
@@ -124,4 +124,61 @@ func (m *lakeEngine) Fetch(items filePropertySlice) error {
 	}
 	tasks.Wait()
 	return be.Err()
+}
+
+func (m *lakeEngine) Build(catlog string) (*dataResult, error) {
+	items, err := m.List(catlog)
+	if err != nil {
+		return nil, err
+	}
+	err = m.Fetch(items)
+	if err != nil {
+		return nil, err
+	}
+	tmp := items.Merga()
+	tmp.Catlog = catlog
+	return tmp, nil
+}
+
+func (m *lakeEngine) WisebuildData(catlog string, windows time.Duration) (*dataResult, error) {
+	data, err := m.Build(catlog)
+	if err != nil {
+		return nil, err
+	}
+	// err = m.RemoveSnaped(data, windows)
+	// if err != nil {
+	// 	return nil, err
+	// }
+	err = m.TrySnap(data, windows)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func (m lakeEngine) TrySnap(obj *dataResult, window time.Duration) error {
+	if !obj.ShouldSnap(window) {
+		return nil
+	}
+	if obj.LastModifiedUnix == 0 || obj.SampleUnix == 0 {
+		return nil
+	}
+	if obj.SampleUnix-obj.LastModifiedUnix < int64(window.Seconds()) {
+		return fmt.Errorf("too short time")
+	}
+	// fmt.Println("snap")
+	data, err := json.Marshal(obj.Data)
+	if err != nil {
+		return err
+	}
+
+	fileName := fmt.Sprintf("%d_%d.snap", obj.LastModifiedUnix, obj.SampleUnix)
+	fullPath := path.Join(obj.Catlog, fileName)
+
+	if err := m.newClient().PutObject(
+		fullPath, bytes.NewReader(data),
+	); err != nil {
+		return err
+	}
+	return m.rdb.HSet(context.TODO(), fileName, "").Err()
 }

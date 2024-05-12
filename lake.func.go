@@ -1,6 +1,6 @@
 package lake
 
-func updateResult(result *map[string]any, file *ossFileProperty) {
+func updateResult(result *map[string]any, file *fileInfo) {
 
 	current := *result
 
