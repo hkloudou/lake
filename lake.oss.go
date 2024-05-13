@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"time"
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/hkloudou/xlib/collection"
@@ -19,8 +17,9 @@ type lakeEngine struct {
 	barrier  xsync.SingleFlight[Meta]
 	meta     *Meta
 	internal bool
-	cache    *collection.Cache[any]
-	prefix   string
+
+	cache  *collection.Cache[any]
+	prefix string
 }
 
 // func (m *lakeEngine) Write
@@ -79,23 +78,4 @@ func (m *lakeEngine) readMeta() error {
 	m.prefix = fmt.Sprintf("%s:%s:", meta.Storage, meta.Bucket)
 	m.meta = &meta
 	return nil
-}
-
-func NewLake(metaUrl string,
-) *lakeEngine {
-	opt, err := redis.ParseURL(metaUrl)
-	if err != nil {
-		panic(err)
-	}
-	cache, err := collection.NewCache[any](24*time.Hour, collection.WithLimit[any](100000))
-	if err != nil {
-		panic(err)
-	}
-	return &lakeEngine{
-		rdb:      redis.NewClient(opt),
-		barrier:  xsync.NewSingleFlight[Meta](),
-		cache:    cache,
-		internal: os.Getenv("FC_REGION") == "cn-hangzhou",
-		prefix:   "cl:",
-	}
 }
