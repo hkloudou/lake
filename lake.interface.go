@@ -262,6 +262,7 @@ func (m *lakeEngine) WiseBuild(list *listResult, windows time.Duration) (*DataRe
 		return nil, err
 	}
 	var snaped bool
+	var hasIgnore bool
 	snaped, err = m.trySnap(data, windows)
 	if err != nil {
 		return nil, err
@@ -271,7 +272,21 @@ func (m *lakeEngine) WiseBuild(list *listResult, windows time.Duration) (*DataRe
 		list.Files = listNew.Files
 	}
 
-	if list.Files.HasIgnored() {
+	if snaped {
+		listNew := m.List(list.Catlog)
+		if listNew.Err == nil && listNew.Files.HasIgnored() {
+			hasIgnore = true
+		}
+	}
+	// if list.Files.HasIgnored() {
+	// 	hasIgnore = true
+	// } else if snaped {
+	// 	listNew := m.List(list.Catlog)
+	// 	if listNew.Err == nil && listNew.Files.HasIgnored() {
+	// 		hasIgnore = true
+	// 	}
+	// }
+	if hasIgnore {
 		m.rdb.SAdd(context.TODO(), m.keyTaskCleanIgnore, list.Catlog)
 	}
 
