@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sync"
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/hkloudou/xlib/collection"
@@ -24,7 +23,7 @@ type lakeEngine struct {
 	keyTaskProd        string
 	keyTaskCleanIgnore string
 
-	snapMetaTasker sync.Once
+	// snapMetaTasker sync.Once
 }
 
 // func (m *lakeEngine) Write
@@ -88,5 +87,6 @@ func (m *lakeEngine) readMeta() error {
 	m.keyTaskProd = fmt.Sprintf("%s:%s:task_prod", meta.Storage, meta.Bucket)
 	m.keyTaskCleanIgnore = fmt.Sprintf("%s:%s:task_clean_ignore", meta.Storage, meta.Bucket)
 	m.meta = &meta
+
 	return nil
 }

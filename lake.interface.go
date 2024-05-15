@@ -323,6 +323,7 @@ func (m *lakeEngine) ProdTask(num int64, fn func(uuidString string, data *DataRe
 		fmt.Println(xcolor.Red("ProdTask.SRandMember"), err)
 		return
 	}
+
 	for i := 0; i < len(catlogAnduuids); i++ {
 		catlogAnduuid := catlogAnduuids[i]
 		catlog := strings.Split(catlogAnduuid, ",")[0]
@@ -349,24 +350,13 @@ func (m *lakeEngine) ProdTask(num int64, fn func(uuidString string, data *DataRe
 	}
 }
 
-func (m *lakeEngine) SnapMetaLoop(duration time.Duration) {
-	if err := m.readMeta(); err != nil {
-		return
-	}
-	m.snapMetaTasker.Do(func() {
-		go func() {
-			for {
-				err := m.SnapMeta()
-				if err != nil {
-					fmt.Println(xcolor.Red("SnapMeta"), err.Error())
-				}
-				time.Sleep(duration)
-			}
-		}()
-	})
-}
+// func (m *lakeEngine) SnapMetaLoop(duration time.Duration) {
+// 	if err := m.readMeta(); err != nil {
+// 		return
+// 	}
+// }
 
-func (m *lakeEngine) SnapMeta() error {
+func (m *lakeEngine) snapMeta() error {
 	if err := m.readMeta(); err != nil {
 		return err
 	}
@@ -405,14 +395,14 @@ func (m *lakeEngine) SnapMeta() error {
 	return nil
 }
 
-func (m *lakeEngine) TaskCleanignore(num int64, duration time.Duration) {
+func (m *lakeEngine) taskCleanignore(duration time.Duration) error {
 	if err := m.readMeta(); err != nil {
-		return
+		return err
 	}
-	catlogs, err := m.rdb.SRandMemberN(context.TODO(), m.keyTaskCleanIgnore, num).Result()
+	catlogs, err := m.rdb.SMembers(context.TODO(), m.keyTaskCleanIgnore).Result()
 	if err != nil {
 		fmt.Println(xcolor.Red("TaskCleanignore.SRandMember"), err)
-		return
+		return err
 	}
 	for i := 0; i < len(catlogs); i++ {
 		list := m.List(catlogs[i])
@@ -450,6 +440,7 @@ func (m *lakeEngine) TaskCleanignore(num int64, duration time.Duration) {
 			fmt.Println(xcolor.Red("TaskCleanignore.Eval"), err.Error())
 		}
 	}
+	return nil
 }
 
 func convertToInterface(strings []string) []interface{} {

@@ -60,9 +60,9 @@ func Test_Prod(t *testing.T) {
 }
 
 func Test_Clean(t *testing.T) {
-	c := lake.NewLake(metaurl)
+	// c := lake.NewLake(metaurl)
 
-	c.TaskCleanignore(10, 1*time.Second)
+	// c.(10, 1*time.Second)
 }
 
 func TestRead1(t *testing.T) {
@@ -75,8 +75,9 @@ func TestRead1(t *testing.T) {
 }
 
 func TestSnapMeta(t *testing.T) {
-	c := lake.NewLake(metaurl)
-	c.SnapMetaLoop(1 * time.Hour)
+	// c := lake.NewLake(metaurl)
+	// c.ProdTask()
+	// c(1 * time.Hour)
 }
 func TestLastUnix(t *testing.T) {
 

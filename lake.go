@@ -1,11 +1,12 @@
 package lake
 
 import (
+	"fmt"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/hkloudou/xlib/collection"
+	"github.com/hkloudou/xlib/xcolor"
 	"github.com/hkloudou/xlib/xsync"
 	"github.com/redis/go-redis/v9"
 )
@@ -18,8 +19,10 @@ const (
 )
 
 type Option struct {
-	cacheLimit int
-	cacheTTL   time.Duration
+	cacheLimit      int
+	cacheTTL        time.Duration
+	metaSnapTTL     time.Duration
+	taskCleanWindow time.Duration
 }
 
 func WithCacheLimit(limit int) func(l *Option) {
@@ -31,6 +34,18 @@ func WithCacheLimit(limit int) func(l *Option) {
 func WithCacheTTL(duration time.Duration) func(l *Option) {
 	return func(l *Option) {
 		l.cacheTTL = duration
+	}
+}
+
+func WithMetaSnapTTL(duration time.Duration) func(l *Option) {
+	return func(l *Option) {
+		l.metaSnapTTL = duration
+	}
+}
+
+func WithTaskClenTTL(duration time.Duration) func(l *Option) {
+	return func(l *Option) {
+		l.taskCleanWindow = duration
 	}
 }
 
@@ -51,13 +66,37 @@ func NewLake(metaUrl string, opts ...func(*Option)) *lakeEngine {
 	if err != nil {
 		panic(err)
 	}
-
-	return &lakeEngine{
-		rdb:            redis.NewClient(redisopt),
-		barrier:        xsync.NewSingleFlight[Meta](),
-		cache:          cache,
-		internal:       os.Getenv("FC_REGION") == "cn-hangzhou",
-		prefix:         "cl:",
-		snapMetaTasker: sync.Once{},
+	tmp := &lakeEngine{
+		rdb:      redis.NewClient(redisopt),
+		barrier:  xsync.NewSingleFlight[Meta](),
+		cache:    cache,
+		internal: os.Getenv("FC_REGION") == "cn-hangzhou",
+		prefix:   "cl:",
 	}
+	if options.metaSnapTTL != 0 {
+		go func() {
+			for {
+				if tmp.meta == nil {
+					time.Sleep(1 * time.Second)
+					continue
+				}
+				err := tmp.snapMeta()
+				if err != nil {
+					fmt.Println(xcolor.Red("SnapMeta"), err.Error())
+				}
+				time.Sleep(options.metaSnapTTL)
+			}
+		}()
+	}
+
+	if options.taskCleanWindow != 0 {
+		go func() {
+			for {
+				tmp.taskCleanignore(options.taskCleanWindow)
+				time.Sleep(1 * time.Second)
+			}
+		}()
+	}
+
+	return tmp
 }
