@@ -40,7 +40,7 @@ func (m *lakeEngine) writeJSON(catlog string, filePath string, data []byte) erro
 	-- 添加到集合
 	return redis.call("SADD", keyTask, catlog .. "," .. uuidString)
 	`
-	_, err := m.rdb.Eval(context.TODO(), luaScript, []string{catlog}, filePath, uuidString, m.prefix, m.keyTask).Result()
+	_, err := m.rdb.Eval(context.TODO(), luaScript, []string{catlog}, filePath, uuidString, m.prefix, m.keyTaskProd).Result()
 	return err
 	// m.rdb.
 	// err := m.rdb.HSet(context.TODO(), m.prefix+catlog, []string{
@@ -294,7 +294,7 @@ func (m *lakeEngine) ProdTask(num int64, fn func(uuidString string, data *DataRe
 	if err := m.readMeta(); err != nil {
 		return
 	}
-	catlogAnduuids, err := m.rdb.SRandMemberN(context.TODO(), m.keyTask, num).Result()
+	catlogAnduuids, err := m.rdb.SRandMemberN(context.TODO(), m.keyTaskProd, num).Result()
 	if err != nil {
 		fmt.Println(xcolor.Red("ProdTask.SRandMember"), err)
 		return
@@ -311,7 +311,7 @@ func (m *lakeEngine) ProdTask(num int64, fn func(uuidString string, data *DataRe
 		//如果不是最新的任务，则可以跳过
 
 		if xmap.GetMapValue(list.Meta, "meta-last-uuid").String() != uuidString {
-			m.rdb.SRem(context.TODO(), m.keyTask, catlogAnduuid)
+			m.rdb.SRem(context.TODO(), m.keyTaskProd, catlogAnduuid)
 			continue
 		}
 		res, err := m.Build(list)
@@ -320,7 +320,7 @@ func (m *lakeEngine) ProdTask(num int64, fn func(uuidString string, data *DataRe
 			continue
 		}
 		if fn(uuidString, res) == nil {
-			m.rdb.SRem(context.TODO(), m.keyTask, catlogAnduuid)
+			m.rdb.SRem(context.TODO(), m.keyTaskProd, catlogAnduuid)
 		}
 	}
 }

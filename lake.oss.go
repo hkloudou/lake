@@ -19,15 +19,16 @@ type lakeEngine struct {
 	meta     *Meta
 	internal bool
 
-	cache   *collection.Cache[any]
-	prefix  string
-	keyTask string
+	cache              *collection.Cache[any]
+	prefix             string
+	keyTaskProd        string
+	keyTaskCleanIgnore string
 
 	snapMetaTasker sync.Once
 }
 
 // func (m *lakeEngine) Write
-func (m lakeEngine) newClient() *oss.Bucket {
+func (m *lakeEngine) newClient() *oss.Bucket {
 	internalStr := ""
 	if m.internal {
 		internalStr = "-internal"
@@ -84,7 +85,8 @@ func (m *lakeEngine) readMeta() error {
 		return err
 	}
 	m.prefix = fmt.Sprintf("%s:%s:d:", meta.Storage, meta.Bucket)
-	m.keyTask = fmt.Sprintf("%s:%s:task_prod", meta.Storage, meta.Bucket)
+	m.keyTaskProd = fmt.Sprintf("%s:%s:task_prod", meta.Storage, meta.Bucket)
+	m.keyTaskCleanIgnore = fmt.Sprintf("%s:%s:task_clean_ignore", meta.Storage, meta.Bucket)
 	m.meta = &meta
 	return nil
 }
