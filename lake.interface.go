@@ -20,12 +20,37 @@ import (
 	"github.com/hkloudou/xlib/xmap"
 )
 
-func (m *lakeEngine) writeJSON(catlog string, filePath string, data []byte) error {
+func (m *lakeEngine) writeCryptOss(fullpath string, data []byte) error {
 	encoded, err := encrypt(data, []byte(m.meta.AESPwd))
 	if err != nil {
 		return err
 	}
-	if err := m.newClient().PutObject(path.Join(catlog, filePath), bytes.NewReader(encoded)); err != nil {
+	return m.newClient().PutObject(fullpath, bytes.NewReader(encoded))
+}
+
+func (m *lakeEngine) readCryptOSS(obj any, fullPath string) error {
+	buffer, err := m.newClient().GetObject(fullPath)
+	if err != nil {
+		return err
+	}
+	data, err := io.ReadAll(buffer)
+	if err != nil {
+		return err
+	}
+	decoded, err := decrypt(data, []byte(m.meta.AESPwd))
+	if err != nil {
+		return err
+	}
+	// var tmp any
+	err = json.Unmarshal(decoded, obj)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *lakeEngine) writeJSON(catlog string, filePath string, data []byte) error {
+	if err := m.writeCryptOss(path.Join(catlog, filePath), data); err != nil {
 		return err
 	}
 	uuidString := uuid.NewString()
@@ -44,41 +69,17 @@ func (m *lakeEngine) writeJSON(catlog string, filePath string, data []byte) erro
 	-- 添加到集合
 	return redis.call("SADD", keyTask, catlog .. "," .. uuidString)
 	`
-	_, err = m.rdb.Eval(context.TODO(), luaScript, []string{catlog}, filePath, uuidString, m.prefix, m.keyTaskProd).Result()
+	_, err := m.rdb.Eval(context.TODO(), luaScript, []string{catlog}, filePath, uuidString, m.prefix, m.keyTaskProd).Result()
 	return err
 }
 
 func (m *lakeEngine) writeSNAP(catlog string, filePath string, data []byte) error {
-	encoded, err := encrypt(data, []byte(m.meta.AESPwd))
-	if err != nil {
-		return err
-	}
-	if err := m.newClient().PutObject(path.Join(catlog, filePath), bytes.NewReader(encoded)); err != nil {
+	if err := m.writeCryptOss(path.Join(catlog, filePath), data); err != nil {
 		return err
 	}
 	return m.rdb.HSet(context.TODO(), m.prefix+catlog, []string{
 		filePath, "",
 	}).Err()
-}
-func (m *lakeEngine) readEncodedOSS(fullPath string) (any, error) {
-	buffer, err := m.newClient().GetObject(fullPath)
-	if err != nil {
-		return nil, err
-	}
-	data, err := io.ReadAll(buffer)
-	if err != nil {
-		return nil, err
-	}
-	decoded, err := decrypt(data, []byte(m.meta.AESPwd))
-	if err != nil {
-		return nil, err
-	}
-	var tmp any
-	err = json.Unmarshal(decoded, &tmp)
-	if err != nil {
-		return nil, err
-	}
-	return tmp, nil
 }
 
 func (m *lakeEngine) Write(req WriteDataRequest, data []byte) error {
@@ -215,7 +216,12 @@ func (m *lakeEngine) fetch(items filePropertySlice) error {
 				// 	fmt.Println(xcolor.Red("not found"), fullPath)
 				// }
 				tmp, err := m.cache.Take(fullPath, func() (any, error) {
-					return m.readEncodedOSS(fullPath)
+					var obj any
+					err := m.readCryptOSS(&obj, fullPath)
+					if err != nil {
+						return nil, err
+					}
+					return obj, nil
 				})
 				if err != nil {
 					be.Add(err)
@@ -250,6 +256,26 @@ func (m *lakeEngine) Build(list *listResult) (*DataResult, error) {
 	tmp.Files = list.Files
 	return tmp, nil
 }
+
+// func (m *lakeEngine) Recove(filepath string) error {
+// 	if err := m.readMeta(); err != nil {
+// 		return err
+// 	}
+// 	defer m.lock.Unlock()
+// 	m.lock.Lock()
+// 	if strings.Trim(filepath, "/") != filepath {
+// 		return fmt.Errorf("error filepath format with / prefix or suffix")
+// 	}
+// 	// return m.rdb.HDel(context.TODO(), m.prefix+path).Err()
+// 	var data metaSnap
+// 	err := m.readCryptOSS(&data, path.Join("meta", filepath))
+// 	if err != nil {
+// 		return err
+// 	}
+// 	fmt.Println(data)
+// 	// m.rdb.FlushAll(context.TODO())
+// 	return nil
+// }
 
 func (m *lakeEngine) WiseBuild(list *listResult, windows time.Duration) (*DataResult, error) {
 	if list.Err != nil {
@@ -402,15 +428,15 @@ func (m *lakeEngine) snapMeta() error {
 	if err != nil {
 		return err
 	}
-	bt, err := json.Marshal(map[string]any{
-		"Datas":         results,
-		"TaskCleanList": taskCleanList,
-		"TaskProdList":  taskProdList,
+	bt, err := json.Marshal(metaSnap{
+		Datas:         results,
+		TaskCleanList: taskCleanList,
+		TaskProdList:  taskProdList,
 	})
 	if err != nil {
 		return err
 	}
-	if err := m.newClient().PutObject(fmt.Sprintf("meta/meta-%d.json", time.Now().UnixNano()), bytes.NewReader(bt)); err != nil {
+	if err := m.writeCryptOss(fmt.Sprintf("meta/meta-%d.json", time.Now().UnixNano()), bt); err != nil {
 		return err
 	}
 	return nil

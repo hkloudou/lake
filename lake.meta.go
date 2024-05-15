@@ -16,3 +16,9 @@ type Meta struct {
 func (m *Meta) UnmarshalBinary(data []byte) error {
 	return json.Unmarshal(data, m)
 }
+
+type metaSnap struct {
+	TaskCleanList []string
+	TaskProdList  []string
+	Datas         []listResult
+}

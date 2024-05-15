@@ -76,22 +76,20 @@ func TestRead1(t *testing.T) {
 	t.Log(d)
 }
 
+func TestRecover(t *testing.T) {
+	// c := lake.NewLake(metaurl, lake.WithMetaSnapTTL(10*time.Minute))
+	// err := c.Recove("meta-1715753906274156000.json")
+	// if err != nil {
+	// 	t.Error(err)
+	// }
+}
+
 func TestSnapMeta(t *testing.T) {
 	c := lake.NewLake(metaurl)
 	c.ProdTask(1, func(uuidString string, data *lake.DataResult) error {
 		return nil
 	})
 	// c(1 * time.Hour)
-}
-func TestLastUnix(t *testing.T) {
-
-	// client := lake.NewOssCatalog(false, "cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "test/91110108717743469K")
-	// result, err := client.ListOssFiles()
-	// if err != nil {
-	// 	t.Fatal(err)
-	// }
-	// fmt.Println(result)
-	// t.Log(result.LastUnix())
 }
 
 // func TestRead(t *testing.T) {
