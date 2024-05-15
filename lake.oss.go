@@ -60,7 +60,11 @@ func (m *lakeEngine) readMeta() error {
 		if err != nil {
 			return obj, err
 		}
-		client, err := oss.New("https://oss-cn-hangzhou.aliyuncs.com", obj.AccessKey, obj.SecretKey)
+		internalStr := ""
+		if m.internal {
+			internalStr = "-internal"
+		}
+		client, err := oss.New("https://oss-cn-hangzhou"+internalStr+".aliyuncs.com", obj.AccessKey, obj.SecretKey)
 		if err != nil {
 			return obj, err
 		}

@@ -53,7 +53,6 @@ func Test_Prod(t *testing.T) {
 	c := lake.NewLake(metaurl)
 	c.ProdTask(10, func(uuidString string, data *lake.DataResult) error {
 		// t.Log(data)
-
 		fmt.Println(uuidString, "data", data)
 		return nil
 		return fmt.Errorf("xxx")
