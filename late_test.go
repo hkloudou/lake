@@ -20,10 +20,12 @@ func Test_Catlogs(t *testing.T) {
 
 func Test_WiseBuild(t *testing.T) {
 	c := lake.NewLake(metaurl)
+
 	d, err := c.WiseBuild(c.List("test/91110108717743469K"), 1*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Log(d.Files)
 	str, _ := json.Marshal(d)
 	t.Log(string(str))
 }
