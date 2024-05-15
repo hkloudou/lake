@@ -47,6 +47,15 @@ func (m filePropertySlice) Less(i, j int) bool {
 	return m[i].Unix < m[j].Unix
 }
 
+func (m filePropertySlice) HasIgnored() bool {
+	for i := 0; i < len(m); i++ {
+		if m[i].Ignore {
+			return true
+		}
+	}
+	return false
+}
+
 func (m filePropertySlice) _lastUnix() int64 {
 	for i := len(m) - 1; i >= 0; i-- {
 		if !m[i].Ignore {

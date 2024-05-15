@@ -261,33 +261,47 @@ func (m *lakeEngine) WiseBuild(list *listResult, windows time.Duration) (*DataRe
 	if err != nil {
 		return nil, err
 	}
-
-	err = m.trySnap(data, windows)
+	var snaped bool
+	var hasIgnore bool
+	snaped, err = m.trySnap(data, windows)
 	if err != nil {
 		return nil, err
 	}
+
+	if list.Files.HasIgnored() {
+		hasIgnore = true
+	} else if snaped {
+		listNew := m.List(list.Catlog)
+		if listNew.Err == nil && listNew.Files.HasIgnored() {
+			hasIgnore = true
+		}
+	}
+	if hasIgnore {
+		m.rdb.SAdd(context.TODO(), m.keyTaskCleanIgnore, list.Catlog)
+	}
+
 	return data, nil
 }
 
-func (m *lakeEngine) trySnap(obj *DataResult, window time.Duration) error {
+func (m *lakeEngine) trySnap(obj *DataResult, window time.Duration) (bool, error) {
 	if err := m.readMeta(); err != nil {
-		return err
+		return false, err
 	}
 	if !obj.ShouldSnap(window) {
-		return nil
+		return false, nil
 	}
 	if obj.LastModifiedUnix == 0 || obj.SampleUnix == 0 {
-		return nil
+		return false, nil
 	}
 	if obj.SampleUnix-obj.LastModifiedUnix < int64(window.Seconds()) {
-		return fmt.Errorf("too short time")
+		return false, fmt.Errorf("too short time")
 	}
 	data, err := json.Marshal(obj.Data)
 	if err != nil {
-		return err
+		return false, err
 	}
 
-	return m.writeSNAP(obj.Catlog, fmt.Sprintf("%d_%d.snap", obj.LastModifiedUnix, obj.SampleUnix), data)
+	return true, m.writeSNAP(obj.Catlog, fmt.Sprintf("%d_%d.snap", obj.LastModifiedUnix, obj.SampleUnix), data)
 }
 
 func (m *lakeEngine) ProdTask(num int64, fn func(uuidString string, data *DataResult) error) {
