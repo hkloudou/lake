@@ -34,7 +34,7 @@ func Test_Write(t *testing.T) {
 	err := c.Write(lake.WriteDataRequest{
 		Catlog: "test/91110108717743469K",
 		Field:  "xx.xx",
-	}, []byte("{\"name\":\"who are you3\"}"))
+	}, []byte("{\"name\":\"who are you4\"}"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,10 +51,10 @@ func Test_List(t *testing.T) {
 
 func Test_Prod(t *testing.T) {
 	c := lake.NewLake(metaurl)
-	c.ProdTask(10, func(data *lake.DataResult) error {
+	c.ProdTask(10, func(uuidString string, data *lake.DataResult) error {
 		// t.Log(data)
 
-		fmt.Println("data", data)
+		fmt.Println(uuidString, "data", data)
 		return nil
 		return fmt.Errorf("xxx")
 	})

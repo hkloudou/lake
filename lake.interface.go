@@ -288,7 +288,7 @@ func (m lakeEngine) trySnap(obj *DataResult, window time.Duration) error {
 	return m.writeSNAP(obj.Catlog, fmt.Sprintf("%d_%d.snap", obj.LastModifiedUnix, obj.SampleUnix), data)
 }
 
-func (m lakeEngine) ProdTask(num int64, fn func(data *DataResult) error) {
+func (m lakeEngine) ProdTask(num int64, fn func(uuidString string, data *DataResult) error) {
 	if err := m.readMeta(); err != nil {
 		return
 	}
@@ -311,14 +311,13 @@ func (m lakeEngine) ProdTask(num int64, fn func(data *DataResult) error) {
 			m.rdb.SRem(context.TODO(), m.keyTask, catlogAnduuid)
 			continue
 		}
-		res, err := m.Build(list)
+		res, err := m.WiseBuild(list, 5*time.Minute)
 		if err != nil {
 			fmt.Println(xcolor.Red("ProdTask.Build"), err.Error())
 			continue
 		}
-		if fn(res) == nil {
+		if fn(uuidString, res) == nil {
 			m.rdb.SRem(context.TODO(), m.keyTask, catlogAnduuid)
 		}
 	}
-
 }
