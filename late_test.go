@@ -84,7 +84,7 @@ func TestRecover(t *testing.T) {
 	// }
 }
 
-func TestSnapMeta(t *testing.T) {
+func Test_ProdTask(t *testing.T) {
 	c := lake.NewLake(metaurl)
 	c.ProdTask(1, func(uuidString string, data *lake.DataResult) error {
 		return nil

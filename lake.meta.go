@@ -7,7 +7,7 @@ type Meta struct {
 	// UUID      string
 	Storage   string
 	Bucket    string
-	location  string
+	location  string `json:"-"`
 	AccessKey string
 	SecretKey string //encoded
 	AESPwd    string
