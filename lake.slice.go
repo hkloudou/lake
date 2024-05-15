@@ -3,6 +3,8 @@ package lake
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/hkloudou/xlib/xmap"
 )
 
 type fileInfo struct {
@@ -75,7 +77,7 @@ func (m filePropertySlice) Merga() *DataResult {
 		if m[i].Ignore {
 			continue
 		}
-		updateResult(&result.Data, &m[i])
+		xmap.MergaMap(&result.Data, m[i].Field, m[i].Value.(map[string]any), m[i].Merge == MergeTypeUpsert)
 		if m[i].Unix > result.LastModifiedUnix {
 			result.LastModifiedUnix = m[i].Unix
 		}

@@ -16,6 +16,7 @@ import (
 	"github.com/hkloudou/xlib/threading"
 	"github.com/hkloudou/xlib/xcolor"
 	"github.com/hkloudou/xlib/xerror"
+	"github.com/hkloudou/xlib/xmap"
 )
 
 func (m *lakeEngine) writeJSON(catlog string, filePath string, data []byte) error {
@@ -101,7 +102,7 @@ func (m *lakeEngine) Catlogs() ([]string, error) {
 func (m *lakeEngine) List(catlog string) *listResult {
 	var result = listResult{
 		Catlog: catlog,
-		Meta:   make(listMeta),
+		Meta:   make(map[string]any),
 		Files:  make(filePropertySlice, 0),
 	}
 	if err := m.readMeta(); err != nil {
@@ -307,7 +308,8 @@ func (m lakeEngine) ProdTask(num int64, fn func(uuidString string, data *DataRes
 			continue
 		}
 		//如果不是最新的任务，则可以跳过
-		if list.Meta.GetString("meta-last-uuid") != uuidString {
+
+		if xmap.GetMapValue(list.Meta, "meta-last-uuid").String() != uuidString {
 			m.rdb.SRem(context.TODO(), m.keyTask, catlogAnduuid)
 			continue
 		}

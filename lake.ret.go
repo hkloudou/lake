@@ -1,26 +1,27 @@
 package lake
 
-type listMeta map[string]any
+// type listMeta map[string]any
 
-func (m listMeta) GetInt(key string) int {
-	return m.GetIntDefault(key, 0)
-}
-func (m listMeta) GetIntDefault(key string, value int) int {
-	return GetMapInt(m, key, value)
-}
+//	func (m listMeta) GetInt(key string) int {
+//		return m.GetIntDefault(key, 0)
+//	}
+// func (m listMeta) GetIntDefault(key string, value int64) int64 {
+// 	return xmap.GetMapValue(m, key).Int(value)
+// 	// return GetMapInt(m, key, value)
+// }
 
-func (m listMeta) GetString(key string) string {
-	return m.GetStringDefault(key, "")
-}
+// func (m listMeta) GetString(key string) string {
+// 	return m.GetStringDefault(key, "")
+// }
 
-func (m listMeta) GetStringDefault(key string, value string) string {
-	return GetMapString(m, key, value)
-}
+// func (m listMeta) GetStringDefault(key string, value string) string {
+// 	return xmap.GetMapValue(m, key).String(value)
+// }
 
 type listResult struct {
 	Err      error
 	Catlog   string
-	Meta     listMeta
+	Meta     map[string]any
 	Files    filePropertySlice
 	LastUnix int64
 	LastSnap *fileInfo
