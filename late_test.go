@@ -20,7 +20,7 @@ func Test_Catlogs(t *testing.T) {
 
 func Test_WiseBuild(t *testing.T) {
 	c := lake.NewLake(metaurl)
-	d, err := c.WiseBuild(c.List("test/91110108717743469K"), 5*time.Second)
+	d, err := c.WiseBuild(c.List("test/91110108717743469K"), 1*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func Test_Prod(t *testing.T) {
 func Test_Clean(t *testing.T) {
 	c := lake.NewLake(metaurl)
 
-	c.TaskCleanignore(10)
+	c.TaskCleanignore(10, 1*time.Second)
 }
 
 func TestRead1(t *testing.T) {

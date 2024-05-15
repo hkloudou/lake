@@ -395,7 +395,7 @@ func (m *lakeEngine) SnapMeta() error {
 	return nil
 }
 
-func (m *lakeEngine) TaskCleanignore(num int64) {
+func (m *lakeEngine) TaskCleanignore(num int64, duration time.Duration) {
 	if err := m.readMeta(); err != nil {
 		return
 	}
@@ -409,13 +409,43 @@ func (m *lakeEngine) TaskCleanignore(num int64) {
 		if list.Err != nil {
 			continue
 		}
+		ossDeletingkeys := make([]string, 0)
+		redisDeletKeys := make([]string, 0)
 		for _, file := range list.Files {
-			if file.Ignore {
-				fmt.Println(path.Join(file.Prefix, file.Path))
-				fmt.Println("delete", file.Prefix, file.Path)
-				// m.newClient().DeleteObject(path.Join(file.Prefix, file.Path))
-				// m.rdb.HDel(context.TODO(), m.prefix+file.Prefix, file.Path)
+			if file.Ignore && (time.Now().Unix()-file.Unix > int64(duration.Seconds())) {
+				ossDeletingkeys = append(ossDeletingkeys, path.Join(file.Prefix, file.Path))
+				redisDeletKeys = append(redisDeletKeys, file.Path)
 			}
 		}
+		m.newClient().DeleteObjects(ossDeletingkeys)
+		luaScript := `
+    local prefix = ARGV[1]
+    local catlog = ARGV[2]
+    local keyTaskCleanIgnore = ARGV[3]
+    local redisDeletKeys = {}
+
+    for i = 4, #ARGV do
+        table.insert(redisDeletKeys, ARGV[i])
+    end
+
+    if #redisDeletKeys > 0 then
+        redis.call("HDEL", prefix .. catlog, unpack(redisDeletKeys))
+    end
+
+    redis.call("SREM", keyTaskCleanIgnore, catlog)
+    `
+		args := append([]interface{}{m.prefix, catlogs[i], m.keyTaskCleanIgnore}, convertToInterface(redisDeletKeys)...)
+		_, err := m.rdb.Eval(context.TODO(), luaScript, nil, args...).Result()
+		if err != nil {
+			fmt.Println(xcolor.Red("TaskCleanignore.Eval"), err.Error())
+		}
 	}
+}
+
+func convertToInterface(strings []string) []interface{} {
+	result := make([]interface{}, len(strings))
+	for i, s := range strings {
+		result[i] = s
+	}
+	return result
 }
