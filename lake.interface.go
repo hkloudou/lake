@@ -382,7 +382,20 @@ func (m *lakeEngine) snapMeta() error {
 	if be.Err() != nil {
 		return be.Err()
 	}
-	bt, err := json.Marshal(results)
+
+	taskCleanList, err := m.rdb.SMembers(context.TODO(), m.keyTaskCleanIgnore).Result()
+	if err != nil {
+		return err
+	}
+	taskProdList, err := m.rdb.SMembers(context.TODO(), m.keyTaskProd).Result()
+	if err != nil {
+		return err
+	}
+	bt, err := json.Marshal(map[string]any{
+		"Datas":         results,
+		"TaskCleanList": taskCleanList,
+		"TaskProdList":  taskProdList,
+	})
 	if err != nil {
 		return err
 	}
