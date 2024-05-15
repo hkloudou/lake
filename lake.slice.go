@@ -86,7 +86,7 @@ func (m filePropertySlice) Merga() *DataResult {
 		if m[i].Ignore {
 			continue
 		}
-		xmap.MergaMap(&result.Data, m[i].Field, m[i].Value.(map[string]any), m[i].Merge == MergeTypeUpsert)
+		xmap.MergaMap(&result.Data, m[i].Field, m[i].Value, m[i].Merge == MergeTypeUpsert)
 		if m[i].Unix > result.LastModifiedUnix {
 			result.LastModifiedUnix = m[i].Unix
 		}

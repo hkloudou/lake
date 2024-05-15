@@ -32,11 +32,10 @@ func Test_WiseBuild(t *testing.T) {
 
 func Test_Write(t *testing.T) {
 	c := lake.NewLake(metaurl)
-
 	err := c.Write(lake.WriteDataRequest{
 		Catlog: "test/91110108717743469K",
-		Field:  "xx.xx",
-	}, []byte("{\"name\":\"who are you5\"}"))
+		Field:  "cfg.area",
+	}, []byte("4100"))
 	if err != nil {
 		t.Fatal(err)
 	}
