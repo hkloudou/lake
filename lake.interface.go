@@ -244,15 +244,18 @@ func (m *lakeEngine) Build(list *listResult) (*DataResult, error) {
 	return tmp, nil
 }
 
-func (m *lakeEngine) WiseBuild(catlog string, windows time.Duration) (*DataResult, error) {
+func (m *lakeEngine) WiseBuild(list *listResult, windows time.Duration) (*DataResult, error) {
+	if list.Err != nil {
+		return nil, list.Err
+	}
 	if err := m.readMeta(); err != nil {
 		return nil, err
 	}
-	if strings.Trim(catlog, "/") != catlog {
+	if strings.Trim(list.Catlog, "/") != list.Catlog {
 		return nil, fmt.Errorf("error catlog format with / prefix or suffix")
 	}
 
-	data, err := m.Build(m.List(catlog))
+	data, err := m.Build(list)
 	if err != nil {
 		return nil, err
 	}

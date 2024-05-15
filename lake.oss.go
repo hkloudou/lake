@@ -77,7 +77,7 @@ func (m *lakeEngine) readMeta() error {
 		return err
 	}
 	m.prefix = fmt.Sprintf("%s:%s:d:", meta.Storage, meta.Bucket)
-	m.keyTask = fmt.Sprintf("%s:%s:task", meta.Storage, meta.Bucket)
+	m.keyTask = fmt.Sprintf("%s:%s:task_prod", meta.Storage, meta.Bucket)
 	m.meta = &meta
 	return nil
 }
