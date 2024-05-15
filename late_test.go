@@ -34,7 +34,7 @@ func Test_Write(t *testing.T) {
 	err := c.Write(lake.WriteDataRequest{
 		Catlog: "test/91110108717743469K",
 		Field:  "xx.xx",
-	}, []byte("test"))
+	}, []byte("{\"name\":\"who are you2\"}"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,19 +46,25 @@ func Test_List(t *testing.T) {
 	if list.Err != nil {
 		t.Errorf("list error: %v", list.Err)
 	}
-	t.Log(list.Meta)
+	t.Log(list)
 }
 
 func Test_Prod(t *testing.T) {
 	c := lake.NewLake(metaurl)
-	c.ProdTask(func(data *lake.DataResult) error {
+	c.ProdTask(10, func(data *lake.DataResult) error {
 		// t.Log(data)
-		fmt.Println(data)
+		fmt.Println("data", data)
 		return fmt.Errorf("xxx")
 	})
 }
 
 func TestRead1(t *testing.T) {
+	c := lake.NewLake(metaurl)
+	d, err := c.Build(c.List("test/91110108717743469K"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Log(d)
 	// client := lake.NewOssCatalog(false, "cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "test/91110108717743469K")
 	// result, err := client.BuildData()
 	// if err != nil {

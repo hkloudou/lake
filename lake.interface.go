@@ -224,12 +224,16 @@ func (m *lakeEngine) fetch(items filePropertySlice) error {
 }
 
 func (m *lakeEngine) Build(list *listResult) (*DataResult, error) {
+	if list.Err != nil {
+		return nil, list.Err
+	}
 	if err := m.readMeta(); err != nil {
 		return nil, err
 	}
 	if strings.Trim(list.Catlog, "/") != list.Catlog {
 		return nil, fmt.Errorf("error catlog format with / prefix or suffix")
 	}
+
 	err := m.fetch(list.Files)
 	if err != nil {
 		return nil, err
@@ -281,33 +285,37 @@ func (m lakeEngine) trySnap(obj *DataResult, window time.Duration) error {
 	return m.writeSNAP(obj.Catlog, fmt.Sprintf("%d_%d.snap", obj.LastModifiedUnix, obj.SampleUnix), data)
 }
 
-func (m lakeEngine) ProdTask(fn func(data *DataResult) error) {
+func (m lakeEngine) ProdTask(num int64, fn func(data *DataResult) error) {
 	if err := m.readMeta(); err != nil {
 		return
 	}
-	catlogAnduuid, err := m.rdb.SRandMember(context.TODO(), m.keyTask).Result()
+	catlogAnduuids, err := m.rdb.SRandMemberN(context.TODO(), m.keyTask, num).Result()
 	if err != nil {
 		fmt.Println(xcolor.Red("ProdTask.SRandMember"), err)
 		return
 	}
-	catlog := strings.Split(catlogAnduuid, ",")[0]
-	uuidString := strings.Split(catlogAnduuid, ",")[1]
-	list := m.List(catlog)
-	if list.Err != nil {
-		fmt.Println(xcolor.Red("ProdTask.List"), list.Err.Error())
-		return
+	for i := 0; i < len(catlogAnduuids); i++ {
+		catlogAnduuid := catlogAnduuids[i]
+		catlog := strings.Split(catlogAnduuid, ",")[0]
+		uuidString := strings.Split(catlogAnduuid, ",")[1]
+		list := m.List(catlog)
+		if list.Err != nil {
+			fmt.Println(xcolor.Red("ProdTask.List"), list.Err.Error())
+			continue
+		}
+		//如果不是最新的任务，则可以跳过
+		if list.Meta.GetString("meta-last-uuid") != uuidString {
+			m.rdb.SRem(context.TODO(), m.keyTask, catlogAnduuid)
+			continue
+		}
+		res, err := m.Build(list)
+		if err != nil {
+			fmt.Println(xcolor.Red("ProdTask.Build"), err.Error())
+			continue
+		}
+		if fn(res) == nil {
+			m.rdb.SRem(context.TODO(), m.keyTask, catlogAnduuid)
+		}
 	}
-	//如果不是最新的任务，则可以跳过
-	if list.Meta.GetString("meta-last-uuid") != uuidString {
-		m.rdb.SRem(context.TODO(), m.keyTask, catlogAnduuid)
-		return
-	}
-	res, err := m.Build(list)
-	if err != nil {
-		fmt.Println(xcolor.Red("ProdTask.Build"), err.Error())
-		return
-	}
-	if fn(res) == nil {
-		m.rdb.SRem(context.TODO(), m.keyTask, catlogAnduuid)
-	}
+
 }
