@@ -325,21 +325,21 @@ func (m lakeEngine) ProdTask(num int64, fn func(uuidString string, data *DataRes
 	}
 }
 
-func (m *lakeEngine) SnapMeta(duration time.Duration) {
+func (m *lakeEngine) SnapMetaLoop(duration time.Duration) {
 	m.snapMetaTasker.Do(func() {
-		// go func() {
-		for {
-			err := m.snapMeta()
-			if err != nil {
-				fmt.Println(xcolor.Red("SnapMeta"), err.Error())
+		go func() {
+			for {
+				err := m.SnapMeta()
+				if err != nil {
+					fmt.Println(xcolor.Red("SnapMeta"), err.Error())
+				}
+				time.Sleep(duration)
 			}
-			time.Sleep(duration)
-		}
-		// }()
+		}()
 	})
 }
 
-func (m *lakeEngine) snapMeta() error {
+func (m *lakeEngine) SnapMeta() error {
 	if err := m.readMeta(); err != nil {
 		return err
 	}
