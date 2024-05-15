@@ -3,6 +3,7 @@ package lake_test
 import (
 	_ "embed"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -41,22 +42,18 @@ func Test_Write(t *testing.T) {
 
 func Test_List(t *testing.T) {
 	c := lake.NewLake(metaurl)
-	list, err := c.List("test/91110108717743469K")
-	if err != nil {
-		t.Errorf("list error: %v", err)
+	list := c.List("test/91110108717743469K")
+	if list.Err != nil {
+		t.Errorf("list error: %v", list.Err)
 	}
 	t.Log(list.Meta)
-	// client := lake.NewOssCatalog(false, "cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "test/91110108717743469K")
-	// result, err := client.WisebuildData(1 * time.Second)
-	// if err != nil {
-	// 	t.Fatal(err)
-	// }
+}
 
-	// data, err := json.Marshal(result)
-	// if err != nil {
-	// 	t.Fatal(err)
-	// }
-	// t.Log(string(data))
+func Test_Prod(t *testing.T) {
+	c := lake.NewLake(metaurl)
+	c.ProdTask(func(data *lake.DataResult) error {
+		return fmt.Errorf("xxx")
+	})
 }
 
 func TestRead1(t *testing.T) {

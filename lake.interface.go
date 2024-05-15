@@ -97,21 +97,25 @@ func (m *lakeEngine) Catlogs() ([]string, error) {
 	return keys, nil
 }
 
-func (m *lakeEngine) List(catlog string) (listResult, error) {
+func (m *lakeEngine) List(catlog string) *listResult {
 	var result = listResult{
-		Meta:  make(listMeta),
-		Files: make(filePropertySlice, 0),
+		Catlog: catlog,
+		Meta:   make(listMeta),
+		Files:  make(filePropertySlice, 0),
 	}
 	if err := m.readMeta(); err != nil {
-		return result, err
+		result.Err = err
+		return &result
 	}
 	if strings.Trim(catlog, "/") != catlog {
-		return result, fmt.Errorf("error catlog format with / prefix or suffix")
+		result.Err = fmt.Errorf("error catlog format with / prefix or suffix")
+		return &result
 	}
 
 	names, err := m.rdb.HGetAll(context.TODO(), m.prefix+catlog).Result()
 	if err != nil {
-		return result, err
+		result.Err = err
+		return &result
 	}
 	// var result = make(filePropertySlice, 0)
 	for k, v := range names {
@@ -165,7 +169,7 @@ func (m *lakeEngine) List(catlog string) (listResult, error) {
 			}
 		}
 	}
-	return result, nil
+	return &result
 }
 
 func (m *lakeEngine) fetch(items filePropertySlice) error {
@@ -218,35 +222,32 @@ func (m *lakeEngine) fetch(items filePropertySlice) error {
 	return be.Err()
 }
 
-func (m *lakeEngine) Build(catlog string) (*dataResult, error) {
+func (m *lakeEngine) Build(list *listResult) (*DataResult, error) {
 	if err := m.readMeta(); err != nil {
 		return nil, err
 	}
-	if strings.Trim(catlog, "/") != catlog {
+	if strings.Trim(list.Catlog, "/") != list.Catlog {
 		return nil, fmt.Errorf("error catlog format with / prefix or suffix")
 	}
-	items, err := m.List(catlog)
+	err := m.fetch(list.Files)
 	if err != nil {
 		return nil, err
 	}
-	err = m.fetch(items.Files)
-	if err != nil {
-		return nil, err
-	}
-	tmp := items.Files.Merga()
-	tmp.Catlog = catlog
-	tmp.Files = items.Files
+	tmp := list.Files.Merga()
+	tmp.Catlog = list.Catlog
+	tmp.Files = list.Files
 	return tmp, nil
 }
 
-func (m *lakeEngine) WiseBuild(catlog string, windows time.Duration) (*dataResult, error) {
+func (m *lakeEngine) WiseBuild(catlog string, windows time.Duration) (*DataResult, error) {
 	if err := m.readMeta(); err != nil {
 		return nil, err
 	}
 	if strings.Trim(catlog, "/") != catlog {
 		return nil, fmt.Errorf("error catlog format with / prefix or suffix")
 	}
-	data, err := m.Build(catlog)
+
+	data, err := m.Build(m.List(catlog))
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +259,7 @@ func (m *lakeEngine) WiseBuild(catlog string, windows time.Duration) (*dataResul
 	return data, nil
 }
 
-func (m lakeEngine) trySnap(obj *dataResult, window time.Duration) error {
+func (m lakeEngine) trySnap(obj *DataResult, window time.Duration) error {
 	if err := m.readMeta(); err != nil {
 		return err
 	}
@@ -277,4 +278,29 @@ func (m lakeEngine) trySnap(obj *dataResult, window time.Duration) error {
 	}
 
 	return m.writeSNAP(obj.Catlog, fmt.Sprintf("%d_%d.snap", obj.LastModifiedUnix, obj.SampleUnix), data)
+}
+
+func (m lakeEngine) ProdTask(fn func(data *DataResult) error) {
+	catlogAnduuid, err := m.rdb.SRandMember(context.TODO(), m.keyTask).Result()
+	if err != nil {
+		return
+	}
+	catlog := strings.Split(catlogAnduuid, ",")[0]
+	uuidString := strings.Split(catlogAnduuid, ",")[1]
+	list := m.List(catlog)
+	if list.Err != nil {
+		return
+	}
+	//如果不是最新的任务，则可以跳过
+	if list.Meta.GetString("meta-last-uuid") != uuidString {
+		m.rdb.SRem(context.TODO(), m.keyTask, catlogAnduuid)
+		return
+	}
+	res, err := m.Build(list)
+	if err != nil {
+		return
+	}
+	if fn(res) == nil {
+		m.rdb.SRem(context.TODO(), m.keyTask, catlogAnduuid)
+	}
 }

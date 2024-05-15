@@ -18,6 +18,8 @@ func (m listMeta) GetStringDefault(key string, value string) string {
 }
 
 type listResult struct {
+	Err      error
+	Catlog   string
 	Meta     listMeta
 	Files    filePropertySlice
 	LastUnix int64

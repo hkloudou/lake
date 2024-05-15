@@ -63,8 +63,8 @@ func (m filePropertySlice) _lastSnap() *fileInfo {
 	return nil
 }
 
-func (m filePropertySlice) Merga() *dataResult {
-	result := dataResult{
+func (m filePropertySlice) Merga() *DataResult {
+	result := DataResult{
 		Data:             map[string]any{},
 		Files:            m,
 		LastModifiedUnix: 0,
