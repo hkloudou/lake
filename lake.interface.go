@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hkloudou/xlib/threading"
+	"github.com/hkloudou/xlib/xcolor"
 	"github.com/hkloudou/xlib/xerror"
 )
 
@@ -281,14 +282,19 @@ func (m lakeEngine) trySnap(obj *DataResult, window time.Duration) error {
 }
 
 func (m lakeEngine) ProdTask(fn func(data *DataResult) error) {
+	if err := m.readMeta(); err != nil {
+		return
+	}
 	catlogAnduuid, err := m.rdb.SRandMember(context.TODO(), m.keyTask).Result()
 	if err != nil {
+		fmt.Println(xcolor.Red("ProdTask.SRandMember"), err)
 		return
 	}
 	catlog := strings.Split(catlogAnduuid, ",")[0]
 	uuidString := strings.Split(catlogAnduuid, ",")[1]
 	list := m.List(catlog)
 	if list.Err != nil {
+		fmt.Println(xcolor.Red("ProdTask.List"), list.Err.Error())
 		return
 	}
 	//如果不是最新的任务，则可以跳过
@@ -298,6 +304,7 @@ func (m lakeEngine) ProdTask(fn func(data *DataResult) error) {
 	}
 	res, err := m.Build(list)
 	if err != nil {
+		fmt.Println(xcolor.Red("ProdTask.Build"), err.Error())
 		return
 	}
 	if fn(res) == nil {

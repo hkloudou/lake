@@ -52,6 +52,8 @@ func Test_List(t *testing.T) {
 func Test_Prod(t *testing.T) {
 	c := lake.NewLake(metaurl)
 	c.ProdTask(func(data *lake.DataResult) error {
+		// t.Log(data)
+		fmt.Println(data)
 		return fmt.Errorf("xxx")
 	})
 }
