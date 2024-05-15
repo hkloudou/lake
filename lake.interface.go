@@ -21,7 +21,11 @@ import (
 )
 
 func (m *lakeEngine) writeJSON(catlog string, filePath string, data []byte) error {
-	if err := m.newClient().PutObject(path.Join(catlog, filePath), bytes.NewReader(data)); err != nil {
+	encoded, err := encrypt(data, []byte(m.meta.AESPwd))
+	if err != nil {
+		return err
+	}
+	if err := m.newClient().PutObject(path.Join(catlog, filePath), bytes.NewReader(encoded)); err != nil {
 		return err
 	}
 	uuidString := uuid.NewString()
@@ -40,26 +44,41 @@ func (m *lakeEngine) writeJSON(catlog string, filePath string, data []byte) erro
 	-- 添加到集合
 	return redis.call("SADD", keyTask, catlog .. "," .. uuidString)
 	`
-	_, err := m.rdb.Eval(context.TODO(), luaScript, []string{catlog}, filePath, uuidString, m.prefix, m.keyTaskProd).Result()
+	_, err = m.rdb.Eval(context.TODO(), luaScript, []string{catlog}, filePath, uuidString, m.prefix, m.keyTaskProd).Result()
 	return err
-	// m.rdb.
-	// err := m.rdb.HSet(context.TODO(), m.prefix+catlog, []string{
-	// 	filePath, "",
-	// 	"meta-last-uuid", fmt.Sprintf(`"%s"`, uuidString),
-	// }).Err()
-	// if err != nil {
-	// 	return err
-	// }
-	// return m.rdb.SAdd(context.TODO(), m.keyTask, fmt.Errorf(`%s,%s`, catlog, uuidString)).Err()
 }
 
 func (m *lakeEngine) writeSNAP(catlog string, filePath string, data []byte) error {
-	if err := m.newClient().PutObject(path.Join(catlog, filePath), bytes.NewReader(data)); err != nil {
+	encoded, err := encrypt(data, []byte(m.meta.AESPwd))
+	if err != nil {
+		return err
+	}
+	if err := m.newClient().PutObject(path.Join(catlog, filePath), bytes.NewReader(encoded)); err != nil {
 		return err
 	}
 	return m.rdb.HSet(context.TODO(), m.prefix+catlog, []string{
 		filePath, "",
 	}).Err()
+}
+func (m *lakeEngine) readEncodedOSS(fullPath string) (any, error) {
+	buffer, err := m.newClient().GetObject(fullPath)
+	if err != nil {
+		return nil, err
+	}
+	data, err := io.ReadAll(buffer)
+	if err != nil {
+		return nil, err
+	}
+	decoded, err := decrypt(data, []byte(m.meta.AESPwd))
+	if err != nil {
+		return nil, err
+	}
+	var tmp any
+	err = json.Unmarshal(decoded, &tmp)
+	if err != nil {
+		return nil, err
+	}
+	return tmp, nil
 }
 
 func (m *lakeEngine) Write(req WriteDataRequest, data []byte) error {
@@ -196,21 +215,7 @@ func (m *lakeEngine) fetch(items filePropertySlice) error {
 				// 	fmt.Println(xcolor.Red("not found"), fullPath)
 				// }
 				tmp, err := m.cache.Take(fullPath, func() (any, error) {
-					// fmt.Println(xcolor.Yellow("fetch"), fullPath)
-					buffer, err := m.newClient().GetObject(fullPath)
-					if err != nil {
-						return nil, err
-					}
-					data, err := io.ReadAll(buffer)
-					if err != nil {
-						return nil, err
-					}
-					var tmp any
-					err = json.Unmarshal(data, &tmp)
-					if err != nil {
-						return nil, err
-					}
-					return tmp, nil
+					return m.readEncodedOSS(fullPath)
 				})
 				if err != nil {
 					be.Add(err)

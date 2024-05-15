@@ -10,6 +10,7 @@ type Meta struct {
 	location  string
 	AccessKey string
 	SecretKey string //encoded
+	AESPwd    string
 }
 
 func (m *Meta) UnmarshalBinary(data []byte) error {
