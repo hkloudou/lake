@@ -18,8 +18,9 @@ type lakeEngine struct {
 	meta     *Meta
 	internal bool
 
-	cache  *collection.Cache[any]
-	prefix string
+	cache   *collection.Cache[any]
+	prefix  string
+	keyTask string
 }
 
 // func (m *lakeEngine) Write
@@ -75,7 +76,8 @@ func (m *lakeEngine) readMeta() error {
 		m.meta = nil
 		return err
 	}
-	m.prefix = fmt.Sprintf("%s:%s:", meta.Storage, meta.Bucket)
+	m.prefix = fmt.Sprintf("%s:%s:d:", meta.Storage, meta.Bucket)
+	m.keyTask = fmt.Sprintf("%s:%s:task", meta.Storage, meta.Bucket)
 	m.meta = &meta
 	return nil
 }

@@ -29,6 +29,7 @@ func Test_WiseBuild(t *testing.T) {
 
 func Test_Write(t *testing.T) {
 	c := lake.NewLake(metaurl)
+
 	err := c.Write(lake.WriteDataRequest{
 		Catlog: "test/91110108717743469K",
 		Field:  "xx.xx",
@@ -36,8 +37,6 @@ func Test_Write(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// str, _ := json.Marshal(d)
-	// t.Log(string(str))
 }
 
 func Test_List(t *testing.T) {

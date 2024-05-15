@@ -17,13 +17,45 @@ import (
 	"github.com/hkloudou/xlib/xerror"
 )
 
-func (m *lakeEngine) write(catlog string, filePath string, data []byte) error {
+func (m *lakeEngine) writeJSON(catlog string, filePath string, data []byte) error {
+	if err := m.newClient().PutObject(path.Join(catlog, filePath), bytes.NewReader(data)); err != nil {
+		return err
+	}
+	uuidString := uuid.NewString()
+	// m.rdb
+	luaScript := `
+	local catlog = KEYS[1]
+	local filePath = ARGV[1]
+	local uuidString = ARGV[2]
+	local prefix = ARGV[3]
+	local keyTask = ARGV[4]
+
+	-- 设置哈希表
+	redis.call("HSET", prefix .. catlog, filePath, "")
+	redis.call("HSET", prefix .. catlog, "meta-last-uuid", '"' .. uuidString .. '"')
+
+	-- 添加到集合
+	return redis.call("SADD", keyTask, catlog .. "," .. uuidString)
+	`
+	_, err := m.rdb.Eval(context.TODO(), luaScript, []string{catlog}, filePath, uuidString, m.prefix, m.keyTask).Result()
+	return err
+	// m.rdb.
+	// err := m.rdb.HSet(context.TODO(), m.prefix+catlog, []string{
+	// 	filePath, "",
+	// 	"meta-last-uuid", fmt.Sprintf(`"%s"`, uuidString),
+	// }).Err()
+	// if err != nil {
+	// 	return err
+	// }
+	// return m.rdb.SAdd(context.TODO(), m.keyTask, fmt.Errorf(`%s,%s`, catlog, uuidString)).Err()
+}
+
+func (m *lakeEngine) writeSNAP(catlog string, filePath string, data []byte) error {
 	if err := m.newClient().PutObject(path.Join(catlog, filePath), bytes.NewReader(data)); err != nil {
 		return err
 	}
 	return m.rdb.HSet(context.TODO(), m.prefix+catlog, []string{
 		filePath, "",
-		"meta-last-uuid", fmt.Sprintf(`"%s"`, uuid.NewString()),
 	}).Err()
 }
 
@@ -42,7 +74,7 @@ func (m *lakeEngine) Write(req WriteDataRequest, data []byte) error {
 	if math.Abs(float64(time.Now().Unix()-req.Unix)) > req.UnixWindow.Seconds() {
 		return fmt.Errorf("time is too far")
 	}
-	return m.write(req.Catlog, req.path(), data)
+	return m.writeJSON(req.Catlog, req.path(), data)
 	// if err := m.newClient().PutObject(req.FullPath(), bytes.NewReader(data)); err != nil {
 	// 	return err
 	// }
@@ -244,5 +276,5 @@ func (m lakeEngine) trySnap(obj *dataResult, window time.Duration) error {
 		return err
 	}
 
-	return m.write(obj.Catlog, fmt.Sprintf("%d_%d.snap", obj.LastModifiedUnix, obj.SampleUnix), data)
+	return m.writeSNAP(obj.Catlog, fmt.Sprintf("%d_%d.snap", obj.LastModifiedUnix, obj.SampleUnix), data)
 }
