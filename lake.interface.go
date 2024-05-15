@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/hkloudou/xlib/threading"
 	"github.com/hkloudou/xlib/xerror"
 )
@@ -20,7 +21,10 @@ func (m *lakeEngine) write(catlog string, filePath string, data []byte) error {
 	if err := m.newClient().PutObject(path.Join(catlog, filePath), bytes.NewReader(data)); err != nil {
 		return err
 	}
-	return m.rdb.HSet(context.TODO(), m.prefix+catlog, filePath, "").Err()
+	return m.rdb.HSet(context.TODO(), m.prefix+catlog, []string{
+		filePath, "",
+		"meta-last-uuid", uuid.NewString(),
+	}).Err()
 }
 
 func (m *lakeEngine) Write(req WriteDataRequest, data []byte) error {
@@ -61,27 +65,35 @@ func (m *lakeEngine) Catlogs() ([]string, error) {
 	return keys, nil
 }
 
-func (m *lakeEngine) List(catlog string) (filePropertySlice, error) {
+func (m *lakeEngine) List(catlog string) (listResult, error) {
+	var result = listResult{
+		Meta:  make(listMeta),
+		Files: make(filePropertySlice, 0),
+	}
 	if err := m.readMeta(); err != nil {
-		return nil, err
+		return result, err
 	}
 	if strings.Trim(catlog, "/") != catlog {
-		return nil, fmt.Errorf("error catlog format with / prefix or suffix")
+		return result, fmt.Errorf("error catlog format with / prefix or suffix")
 	}
 
-	names, err := m.rdb.HKeys(context.TODO(), m.prefix+catlog).Result()
+	names, err := m.rdb.HGetAll(context.TODO(), m.prefix+catlog).Result()
 	if err != nil {
-		return nil, err
+		return result, err
 	}
-	var result = make(filePropertySlice, 0)
-	for i := 0; i < len(names); i++ {
-		fullName := names[i]
+	// var result = make(filePropertySlice, 0)
+	for k, v := range names {
+		if strings.HasPrefix(k, "meta-") {
+			result.Meta[k] = v
+			continue
+		}
+		fullName := k
 		fileName := path.Base(fullName)
 		parts := strings.Split(strings.ReplaceAll(fileName, ".", "_"), "_")
 		pathSplit := strings.Split(strings.Trim(strings.Replace(fullName, catlog, "", 1), "/"), "/")
 
 		if strings.HasSuffix(fullName, ".snap") {
-			result = append(result, fileInfo{
+			result.Files = append(result.Files, fileInfo{
 				Prefix: catlog,
 				Path:   fullName,
 				Type:   SNAP,
@@ -93,7 +105,7 @@ func (m *lakeEngine) List(catlog string) (filePropertySlice, error) {
 				Field: nil,
 			})
 		} else if strings.HasSuffix(fullName, ".json") {
-			result = append(result, fileInfo{
+			result.Files = append(result.Files, fileInfo{
 				Prefix: catlog,
 				Path:   fullName,
 				Type:   DATA,
@@ -108,13 +120,14 @@ func (m *lakeEngine) List(catlog string) (filePropertySlice, error) {
 			})
 		}
 	}
-	sort.Sort(result)
-	lastSnap := result.LastSnap()
-	if lastSnap != nil {
-		for i := 0; i < len(result); i++ {
+	sort.Sort(result.Files)
+	result.LastSnap = result.Files._lastSnap()
+	result.LastUnix = result.Files._lastUnix()
+	if result.LastSnap != nil {
+		for i := 0; i < len(result.Files); i++ {
 			//ignore data lte snaptime
-			if result[i].Unix <= lastSnap.Unix && result[i].Path != lastSnap.Path {
-				result[i].Ignore = true
+			if result.Files[i].Unix <= result.LastSnap.Unix && result.Files[i].Path != result.LastSnap.Path {
+				result.Files[i].Ignore = true
 			}
 		}
 	}
@@ -182,13 +195,13 @@ func (m *lakeEngine) Build(catlog string) (*dataResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	err = m.fetch(items)
+	err = m.fetch(items.Files)
 	if err != nil {
 		return nil, err
 	}
-	tmp := items.Merga()
+	tmp := items.Files.Merga()
 	tmp.Catlog = catlog
-	tmp.Files = items
+	tmp.Files = items.Files
 	return tmp, nil
 }
 

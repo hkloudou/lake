@@ -9,67 +9,35 @@ import (
 	"github.com/hkloudou/lake"
 )
 
-//go:embed testData/accessKeyID.secret
-var accessKeyId string
-
-//go:embed testData/accessKeySecret.secret
-var accessKeySecret string
-
-//go:embed testData/bucketName.secret
-var bucketName string
+//go:embed testData/metaurl.txt
+var metaurl string
 
 func Test_Catlogs(t *testing.T) {
-	c := lake.NewLake("redis://127.0.0.1:6379/2")
+	c := lake.NewLake(metaurl)
 	t.Log(c.Catlogs())
 }
 
-func Test_Write(t *testing.T) {
-
-	c := lake.NewLake("redis://127.0.0.1:6379/2")
+func Test_WiseBuild(t *testing.T) {
+	c := lake.NewLake(metaurl)
 	d, err := c.WiseBuild("test/91110108717743469K", 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	str, _ := json.Marshal(d)
 	t.Log(string(str))
-	// list, err := c.List("test/91110108717743469K")
-	// if err != nil {
-	// 	t.Fatal(err)
-	// }
-	// err = c.Fetch(list)
-	// if err != nil {
-	// 	t.Fatal(err)
-	// }
-	// // t.Log(list)
-	// str, _ := json.Marshal(list)
+}
+
+func Test_Write(t *testing.T) {
+	c := lake.NewLake(metaurl)
+	err := c.Write(lake.WriteDataRequest{
+		Catlog: "test/91110108717743469K",
+		Field:  "xx.xx",
+	}, []byte("test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// str, _ := json.Marshal(d)
 	// t.Log(string(str))
-	// err := c.Write(lake.WriteDataRequest{
-	// 	Unix:      time.Now().Unix(),
-	// 	SeqID:     1,
-	// 	RequestID: uuid.NewString(),
-	// 	Prefix:    "test/91110108717743469K",
-	// 	Field:     "xx.xx",
-	// }, []byte(`{"qs": "value"}`))
-	// if err != nil {
-	// 	t.Fatal(err)
-	// }
-	// client := lake.NewOssCatalog(false, "cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "test/91110108717743469K")
-
-	// // err = c.WriteJsonData(time.Now().Unix(), 1, lake.MergeTypeOver, "s", []byte(`{"qs": "value"}`))
-	// // if err != nil {
-	// // 	t.Fatal(err)
-	// // }
-	// ti := time.Now()
-	// err := client.WriteJsonData(lake.WriteDataRequest{Field: "x", Unix: ti.Unix(), SeqID: 1}, []byte(`1`))
-	// if err != nil {
-	// 	t.Fatal(err)
-	// }
-	// err = client.WriteJsonData(lake.WriteDataRequest{Unix: ti.Unix(), SeqID: 2}, []byte(`null`))
-	// if err != nil {
-	// 	t.Fatal(err)
-	// }
-
 }
 
 func TestWiseRead(t *testing.T) {

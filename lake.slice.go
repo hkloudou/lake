@@ -35,17 +35,17 @@ func (m filePropertySlice) Len() int      { return len(m) }
 func (m filePropertySlice) Swap(i, j int) { m[i], m[j] = m[j], m[i] }
 func (m filePropertySlice) Less(i, j int) bool {
 	if m[i].Unix == m[j].Unix {
-		// if m[i].Type == SNAP && m[j].Type != SNAP {
-		// 	return false
-		// } else if m[j].Type == SNAP && m[i].Type != SNAP {
-		// 	return true
-		// }
+		if m[i].Type == SNAP && m[j].Type != SNAP {
+			return false
+		} else if m[j].Type == SNAP && m[i].Type != SNAP {
+			return true
+		}
 		return m[i].Seq < m[j].Seq
 	}
 	return m[i].Unix < m[j].Unix
 }
 
-func (m filePropertySlice) LastUnix() int64 {
+func (m filePropertySlice) _lastUnix() int64 {
 	for i := len(m) - 1; i >= 0; i-- {
 		if !m[i].Ignore {
 			return m[i].Unix
@@ -54,7 +54,7 @@ func (m filePropertySlice) LastUnix() int64 {
 	return 0
 }
 
-func (m filePropertySlice) LastSnap() *fileInfo {
+func (m filePropertySlice) _lastSnap() *fileInfo {
 	for i := len(m) - 1; i >= 0; i-- {
 		if m[i].Type == SNAP {
 			return &m[i]
@@ -81,6 +81,6 @@ func (m filePropertySlice) Merga() *dataResult {
 		}
 	}
 	result.SampleUnix = time.Now().Unix()
-	result.LastSnap = m.LastSnap()
+	result.LastSnap = m._lastSnap()
 	return &result
 }
