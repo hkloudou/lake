@@ -269,7 +269,7 @@ func (m *lakeEngine) WiseBuild(list *listResult, windows time.Duration) (*DataRe
 	return data, nil
 }
 
-func (m lakeEngine) trySnap(obj *DataResult, window time.Duration) error {
+func (m *lakeEngine) trySnap(obj *DataResult, window time.Duration) error {
 	if err := m.readMeta(); err != nil {
 		return err
 	}
@@ -290,7 +290,7 @@ func (m lakeEngine) trySnap(obj *DataResult, window time.Duration) error {
 	return m.writeSNAP(obj.Catlog, fmt.Sprintf("%d_%d.snap", obj.LastModifiedUnix, obj.SampleUnix), data)
 }
 
-func (m lakeEngine) ProdTask(num int64, fn func(uuidString string, data *DataResult) error) {
+func (m *lakeEngine) ProdTask(num int64, fn func(uuidString string, data *DataResult) error) {
 	if err := m.readMeta(); err != nil {
 		return
 	}
