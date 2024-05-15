@@ -3,6 +3,7 @@ package lake
 import (
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/hkloudou/xlib/collection"
@@ -72,6 +73,7 @@ func NewLake(metaUrl string, opts ...func(*Option)) *lakeEngine {
 		cache:    cache,
 		internal: os.Getenv("FC_REGION") == "cn-hangzhou",
 		prefix:   "cl:",
+		lock:     sync.Mutex{},
 	}
 	if options.metaSnapTTL != 0 {
 		go func() {

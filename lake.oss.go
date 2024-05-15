@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/hkloudou/xlib/collection"
@@ -23,6 +24,7 @@ type lakeEngine struct {
 	keyTaskProd        string
 	keyTaskCleanIgnore string
 
+	lock sync.Mutex
 	// snapMetaTasker sync.Once
 }
 
