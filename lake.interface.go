@@ -314,47 +314,44 @@ func (m *lakeEngine) trySnap(obj *DataResult, window time.Duration) (bool, error
 	return true, m.writeSNAP(obj.Catlog, fmt.Sprintf("%d_%d.snap", obj.LastModifiedUnix, obj.SampleUnix), data)
 }
 
-func (m *lakeEngine) ProdTask(num int64, fn func(uuidString string, data *DataResult) error) {
+func (m *lakeEngine) ProdTask(therdNumer int, fn func(uuidString string, data *DataResult) error) {
 	if err := m.readMeta(); err != nil {
 		return
 	}
-	catlogAnduuids, err := m.rdb.SRandMemberN(context.TODO(), m.keyTaskProd, num).Result()
+	catlogAnduuids, err := m.rdb.SMembers(context.TODO(), m.keyTaskProd).Result()
 	if err != nil {
 		fmt.Println(xcolor.Red("ProdTask.SRandMember"), err)
 		return
 	}
-
+	con := threading.NewTaskRunner(therdNumer)
 	for i := 0; i < len(catlogAnduuids); i++ {
-		catlogAnduuid := catlogAnduuids[i]
-		catlog := strings.Split(catlogAnduuid, ",")[0]
-		uuidString := strings.Split(catlogAnduuid, ",")[1]
-		list := m.List(catlog)
-		if list.Err != nil {
-			fmt.Println(xcolor.Red("ProdTask.List"), list.Err.Error())
-			continue
-		}
-		//如果不是最新的任务，则可以跳过
+		func(i int) {
+			catlogAnduuid := catlogAnduuids[i]
+			catlog := strings.Split(catlogAnduuid, ",")[0]
+			uuidString := strings.Split(catlogAnduuid, ",")[1]
+			list := m.List(catlog)
+			if list.Err != nil {
+				fmt.Println(xcolor.Red("ProdTask.List"), list.Err.Error())
+				return
+			}
+			//如果不是最新的任务，则可以跳过
 
-		if xmap.GetMapValue(list.Meta, "meta-last-uuid").String() != uuidString {
-			m.rdb.SRem(context.TODO(), m.keyTaskProd, catlogAnduuid)
-			continue
-		}
-		res, err := m.Build(list)
-		if err != nil {
-			fmt.Println(xcolor.Red("ProdTask.Build"), err.Error())
-			continue
-		}
-		if fn(uuidString, res) == nil {
-			m.rdb.SRem(context.TODO(), m.keyTaskProd, catlogAnduuid)
-		}
+			if xmap.GetMapValue(list.Meta, "meta-last-uuid").String() != uuidString {
+				m.rdb.SRem(context.TODO(), m.keyTaskProd, catlogAnduuid)
+				return
+			}
+			res, err := m.Build(list)
+			if err != nil {
+				fmt.Println(xcolor.Red("ProdTask.Build"), err.Error())
+				return
+			}
+			if fn(uuidString, res) == nil {
+				m.rdb.SRem(context.TODO(), m.keyTaskProd, catlogAnduuid)
+			}
+		}(int(i) + 0)
 	}
+	con.Wait()
 }
-
-// func (m *lakeEngine) SnapMetaLoop(duration time.Duration) {
-// 	if err := m.readMeta(); err != nil {
-// 		return
-// 	}
-// }
 
 func (m *lakeEngine) snapMeta() error {
 	if err := m.readMeta(); err != nil {

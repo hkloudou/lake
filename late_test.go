@@ -75,8 +75,10 @@ func TestRead1(t *testing.T) {
 }
 
 func TestSnapMeta(t *testing.T) {
-	// c := lake.NewLake(metaurl)
-	// c.ProdTask()
+	c := lake.NewLake(metaurl)
+	c.ProdTask(1, func(uuidString string, data *lake.DataResult) error {
+		return nil
+	})
 	// c(1 * time.Hour)
 }
 func TestLastUnix(t *testing.T) {
