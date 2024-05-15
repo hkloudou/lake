@@ -2,6 +2,7 @@ package lake
 
 import (
 	"os"
+	"sync"
 	"time"
 
 	"github.com/hkloudou/xlib/collection"
@@ -52,10 +53,11 @@ func NewLake(metaUrl string, opts ...func(*Option)) *lakeEngine {
 	}
 
 	return &lakeEngine{
-		rdb:      redis.NewClient(redisopt),
-		barrier:  xsync.NewSingleFlight[Meta](),
-		cache:    cache,
-		internal: os.Getenv("FC_REGION") == "cn-hangzhou",
-		prefix:   "cl:",
+		rdb:            redis.NewClient(redisopt),
+		barrier:        xsync.NewSingleFlight[Meta](),
+		cache:          cache,
+		internal:       os.Getenv("FC_REGION") == "cn-hangzhou",
+		prefix:         "cl:",
+		snapMetaTasker: sync.Once{},
 	}
 }

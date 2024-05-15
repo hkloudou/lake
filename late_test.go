@@ -70,10 +70,8 @@ func TestRead1(t *testing.T) {
 
 func TestSnapMeta(t *testing.T) {
 	c := lake.NewLake(metaurl)
-	err := c.SnapMeta()
-	if err != nil {
-		t.Fatal(err)
-	}
+	c.SnapMeta(1 * time.Hour)
+
 }
 func TestLastUnix(t *testing.T) {
 
