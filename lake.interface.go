@@ -318,7 +318,7 @@ func (m *lakeEngine) ProdTask(therdNumer int, fn func(uuidString string, data *D
 	if err := m.readMeta(); err != nil {
 		return
 	}
-	catlogAnduuids, err := m.rdb.SMembers(context.TODO(), m.keyTaskProd).Result()
+	catlogAnduuids, err := m.rdb.SRandMemberN(context.TODO(), m.keyTaskProd, 100).Result()
 	if err != nil {
 		fmt.Println(xcolor.Red("ProdTask.SRandMember"), err)
 		return
@@ -396,7 +396,7 @@ func (m *lakeEngine) taskCleanignore(duration time.Duration) error {
 	if err := m.readMeta(); err != nil {
 		return err
 	}
-	catlogs, err := m.rdb.SMembers(context.TODO(), m.keyTaskCleanIgnore).Result()
+	catlogs, err := m.rdb.SRandMemberN(context.TODO(), m.keyTaskCleanIgnore, 100).Result()
 	if err != nil {
 		fmt.Println(xcolor.Red("TaskCleanignore.SRandMember"), err)
 		return err
