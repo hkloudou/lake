@@ -66,18 +66,15 @@ func TestRead1(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Log(d)
-	// client := lake.NewOssCatalog(false, "cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "test/91110108717743469K")
-	// result, err := client.BuildData()
-	// if err != nil {
-	// 	t.Fatal(err)
-	// }
-	// data, err := json.Marshal(result)
-	// if err != nil {
-	// 	t.Fatal(err)
-	// }
-	// t.Log(string(data))
 }
 
+func TestSnapMeta(t *testing.T) {
+	c := lake.NewLake(metaurl)
+	err := c.SnapMeta()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
 func TestLastUnix(t *testing.T) {
 
 	// client := lake.NewOssCatalog(false, "cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "test/91110108717743469K")

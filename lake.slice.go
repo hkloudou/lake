@@ -23,7 +23,7 @@ type fileInfo struct {
 	UUID    string
 	Ignore  bool
 	Fetched bool
-	Value   any
+	Value   any `json:"-"`
 }
 
 func (o fileInfo) MarshalJSON() ([]byte, error) {

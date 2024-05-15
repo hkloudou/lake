@@ -10,6 +10,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -322,4 +323,43 @@ func (m lakeEngine) ProdTask(num int64, fn func(uuidString string, data *DataRes
 			m.rdb.SRem(context.TODO(), m.keyTask, catlogAnduuid)
 		}
 	}
+}
+
+func (m lakeEngine) SnapMeta() error {
+	if err := m.readMeta(); err != nil {
+		return err
+	}
+	// m.List("").Files.Merga()
+	catlogs, err := m.Catlogs()
+	if err != nil {
+		return err
+	}
+	be := xerror.BatchError{}
+	var results = make([]listResult, 0)
+	lock := sync.Mutex{}
+	cond := threading.NewTaskRunner(50)
+	for i := 0; i < len(catlogs); i++ {
+		func(catlog string) {
+			res := m.List(catlog)
+			if res.Err != nil {
+				be.Add(res.Err)
+				return
+			}
+			lock.Lock()
+			results = append(results, *res)
+			lock.Unlock()
+		}(catlogs[i])
+	}
+	cond.Wait()
+	if be.Err() != nil {
+		return be.Err()
+	}
+	bt, err := json.Marshal(results)
+	if err != nil {
+		return err
+	}
+	if err := m.newClient().PutObject(fmt.Sprintf("meta/meta-%d.json", time.Now().UnixNano()), bytes.NewReader(bt)); err != nil {
+		return err
+	}
+	return nil
 }
