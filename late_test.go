@@ -34,7 +34,7 @@ func Test_Write(t *testing.T) {
 	err := c.Write(lake.WriteDataRequest{
 		Catlog: "test/91110108717743469K",
 		Field:  "xx.xx",
-	}, []byte("{\"name\":\"who are you4\"}"))
+	}, []byte("{\"name\":\"who are you5\"}"))
 	if err != nil {
 		t.Fatal(err)
 	}
