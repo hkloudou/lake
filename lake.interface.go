@@ -340,6 +340,9 @@ func (m *lakeEngine) ProdTask(num int64, fn func(uuidString string, data *DataRe
 }
 
 func (m *lakeEngine) SnapMetaLoop(duration time.Duration) {
+	if err := m.readMeta(); err != nil {
+		return
+	}
 	m.snapMetaTasker.Do(func() {
 		go func() {
 			for {
@@ -390,4 +393,29 @@ func (m *lakeEngine) SnapMeta() error {
 		return err
 	}
 	return nil
+}
+
+func (m *lakeEngine) TaskCleanignore(num int64) {
+	if err := m.readMeta(); err != nil {
+		return
+	}
+	catlogs, err := m.rdb.SRandMemberN(context.TODO(), m.keyTaskCleanIgnore, num).Result()
+	if err != nil {
+		fmt.Println(xcolor.Red("TaskCleanignore.SRandMember"), err)
+		return
+	}
+	for i := 0; i < len(catlogs); i++ {
+		list := m.List(catlogs[i])
+		if list.Err != nil {
+			continue
+		}
+		for _, file := range list.Files {
+			if file.Ignore {
+				fmt.Println(path.Join(file.Prefix, file.Path))
+				fmt.Println("delete", file.Prefix, file.Path)
+				// m.newClient().DeleteObject(path.Join(file.Prefix, file.Path))
+				// m.rdb.HDel(context.TODO(), m.prefix+file.Prefix, file.Path)
+			}
+		}
+	}
 }

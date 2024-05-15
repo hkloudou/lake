@@ -59,6 +59,12 @@ func Test_Prod(t *testing.T) {
 	})
 }
 
+func Test_Clean(t *testing.T) {
+	c := lake.NewLake(metaurl)
+
+	c.TaskCleanignore(10)
+}
+
 func TestRead1(t *testing.T) {
 	c := lake.NewLake(metaurl)
 	d, err := c.Build(c.List("test/91110108717743469K"))
