@@ -311,7 +311,7 @@ func (m lakeEngine) ProdTask(num int64, fn func(uuidString string, data *DataRes
 			m.rdb.SRem(context.TODO(), m.keyTask, catlogAnduuid)
 			continue
 		}
-		res, err := m.WiseBuild(list, 5*time.Minute)
+		res, err := m.Build(list)
 		if err != nil {
 			fmt.Println(xcolor.Red("ProdTask.Build"), err.Error())
 			continue
