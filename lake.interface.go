@@ -23,7 +23,7 @@ func (m *lakeEngine) write(catlog string, filePath string, data []byte) error {
 	}
 	return m.rdb.HSet(context.TODO(), m.prefix+catlog, []string{
 		filePath, "",
-		"meta-last-uuid", uuid.NewString(),
+		"meta-last-uuid", fmt.Sprintf(`"%s"`, uuid.NewString()),
 	}).Err()
 }
 
@@ -84,7 +84,9 @@ func (m *lakeEngine) List(catlog string) (listResult, error) {
 	// var result = make(filePropertySlice, 0)
 	for k, v := range names {
 		if strings.HasPrefix(k, "meta-") {
-			result.Meta[k] = v
+			var tmp any
+			json.Unmarshal([]byte(v), &tmp)
+			result.Meta[k] = tmp
 			continue
 		}
 		fullName := k

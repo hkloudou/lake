@@ -40,7 +40,13 @@ func Test_Write(t *testing.T) {
 	// t.Log(string(str))
 }
 
-func TestWiseRead(t *testing.T) {
+func Test_List(t *testing.T) {
+	c := lake.NewLake(metaurl)
+	list, err := c.List("test/91110108717743469K")
+	if err != nil {
+		t.Errorf("list error: %v", err)
+	}
+	t.Log(list.Meta)
 	// client := lake.NewOssCatalog(false, "cn-hangzhou", bucketName, accessKeyId, accessKeySecret, "test/91110108717743469K")
 	// result, err := client.WisebuildData(1 * time.Second)
 	// if err != nil {
