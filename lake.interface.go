@@ -429,6 +429,7 @@ func (m *lakeEngine) snapMeta() error {
 		return err
 	}
 	bt, err := json.Marshal(metaSnap{
+		Meta:          *m.meta,
 		Datas:         results,
 		TaskCleanList: taskCleanList,
 		TaskProdList:  taskProdList,

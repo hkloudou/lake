@@ -18,6 +18,7 @@ func (m *Meta) UnmarshalBinary(data []byte) error {
 }
 
 type metaSnap struct {
+	Meta          Meta
 	TaskCleanList []string
 	TaskProdList  []string
 	Datas         []listResult
