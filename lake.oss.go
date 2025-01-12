@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
-	"github.com/hkloudou/xlib/collection"
 	"github.com/hkloudou/xlib/xsync"
 	"github.com/redis/go-redis/v9"
 )
@@ -19,7 +18,7 @@ type lakeEngine struct {
 	meta     *Meta
 	internal bool
 
-	cache              *collection.Cache[any]
+	cache              Cache //*collection.Cache[any]
 	prefix             string
 	keyTaskProd        string
 	keyTaskCleanIgnore string

@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hkloudou/xlib/collection"
 	"github.com/hkloudou/xlib/xcolor"
 	"github.com/hkloudou/xlib/xsync"
 	"github.com/redis/go-redis/v9"
@@ -63,18 +62,20 @@ func NewLake(metaUrl string, opts ...func(*Option)) *lakeEngine {
 		opt(&options)
 	}
 
-	cache, err := collection.NewCache[any](options.cacheTTL, collection.WithLimit[any](options.cacheLimit))
-	if err != nil {
-		panic(err)
-	}
+	// cache, err := collection.NewCache[any](options.cacheTTL, collection.WithLimit[any](options.cacheLimit))
+	// if err != nil {
+	// 	panic(err)
+	// }
+
 	tmp := &lakeEngine{
-		rdb:      redis.NewClient(redisopt),
-		barrier:  xsync.NewSingleFlight[Meta](),
-		cache:    cache,
+		rdb:     redis.NewClient(redisopt),
+		barrier: xsync.NewSingleFlight[Meta](),
+		// cache:    cache,
 		internal: os.Getenv("FC_REGION") == "cn-hangzhou",
 		prefix:   "cl:",
 		lock:     sync.Mutex{},
 	}
+	tmp.cache = NewRedisCache(tmp.rdb, options.cacheTTL)
 	if options.metaSnapTTL != 0 {
 		go func() {
 			for {

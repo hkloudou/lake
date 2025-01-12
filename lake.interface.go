@@ -49,6 +49,28 @@ func (m *lakeEngine) readCryptOSS(obj any, fullPath string) error {
 	return nil
 }
 
+// func (m *lakeEngine) readCryptOSSBytes(fullPath string) ([]byte, error) {
+// 	buffer, err := m.newClient().GetObject(fullPath)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	data, err := io.ReadAll(buffer)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	return decrypt(data, []byte(m.meta.AESPwd))
+// 	// decoded, err := decrypt(data, []byte(m.meta.AESPwd))
+// 	// if err != nil {
+// 	// 	return nil, err
+// 	// }
+// 	// // var tmp any
+// 	// // err = json.Unmarshal(decoded, obj)
+// 	// // if err != nil {
+// 	// // 	return nil, err
+// 	// // }
+// 	// return nil
+// }
+
 func (m *lakeEngine) writeJSON(catlog string, filePath string, data []byte) error {
 	if err := m.writeCryptOss(path.Join(catlog, filePath), data); err != nil {
 		return err
@@ -148,6 +170,12 @@ func (m *lakeEngine) List(catlog string) *listResult {
 			result.Meta[k] = tmp
 			continue
 		}
+		// var tmp any
+		// var fetched = false
+		// if len(v) > 0 {
+		// 	json.Unmarshal([]byte(v), &tmp)
+		// }
+
 		fullName := k
 		fileName := path.Base(fullName)
 		parts := strings.Split(strings.ReplaceAll(fileName, ".", "_"), "_")
@@ -162,8 +190,9 @@ func (m *lakeEngine) List(catlog string) *listResult {
 				Unix:  getSliceNumericPart(parts, 0),
 				Seq:   getSliceNumericPart(parts, 1),
 				Merge: MergeTypeOver,
-
 				Field: nil,
+				// Value:   tmp,
+				// Fetched: fetched,
 			})
 		} else if strings.HasSuffix(fullName, ".json") {
 			result.Files = append(result.Files, fileInfo{
@@ -178,6 +207,8 @@ func (m *lakeEngine) List(catlog string) *listResult {
 				Field: pathSplit[:len(pathSplit)-1],
 
 				UUID: parts[3],
+				// Value:   tmp,
+				// Fetched: fetched,
 			})
 		}
 	}
