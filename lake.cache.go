@@ -37,7 +37,7 @@ func (c *RedisCache) Take(key string, loader func() (any, error)) (any, error) {
 	key = "lake_cache:" + key
 
 	// 尝试从 Redis 获取数据
-	data, err := c.client.Get(ctx, key).Result()
+	data, err := c.client.GetEx(ctx, key, c.ttl).Result()
 	if err == redis.Nil {
 		// 缓存未命中，调用 loader 函数加载数据
 		obj, err := loader()
