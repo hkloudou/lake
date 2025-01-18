@@ -3,6 +3,7 @@ package lake
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -57,6 +58,9 @@ func NewRedisCache(client *redis.Client, ttl time.Duration) *RedisCache {
 
 // Take 实现 Cache 接口的 Take 方法
 func (c *RedisCache) Take(key string, loader func() (any, error)) (any, error) {
+	if !strings.HasSuffix(key, ".snap") {
+		return loader()
+	}
 	ctx := context.Background()
 
 	key = "lake_cache:" + key
