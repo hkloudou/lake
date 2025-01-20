@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hkloudou/xlib/collection"
 	"github.com/hkloudou/xlib/xcolor"
 	"github.com/hkloudou/xlib/xsync"
 	"github.com/redis/go-redis/v9"
@@ -19,23 +20,24 @@ const (
 )
 
 type Option struct {
-	cacheLimit      int
-	cacheTTL        time.Duration
+	// cacheLimit      int
+	// cacheTTL        time.Duration
 	metaSnapTTL     time.Duration
 	taskCleanWindow time.Duration
+	cacheProvider   Cache
 }
 
-func WithCacheLimit(limit int) func(l *Option) {
-	return func(l *Option) {
-		l.cacheLimit = limit
-	}
-}
+// func WithCacheLimit(limit int) func(l *Option) {
+// 	return func(l *Option) {
+// 		l.cacheLimit = limit
+// 	}
+// }
 
-func WithCacheTTL(duration time.Duration) func(l *Option) {
-	return func(l *Option) {
-		l.cacheTTL = duration
-	}
-}
+// func WithCacheTTL(duration time.Duration) func(l *Option) {
+// 	return func(l *Option) {
+// 		l.cacheTTL = duration
+// 	}
+// }
 
 func WithMetaSnapTTL(duration time.Duration) func(l *Option) {
 	return func(l *Option) {
@@ -49,14 +51,20 @@ func WithTaskClenTTL(duration time.Duration) func(l *Option) {
 	}
 }
 
+func WithCache(cacheProvider Cache) func(l *Option) {
+	return func(l *Option) {
+		l.cacheProvider = cacheProvider
+	}
+}
+
 func NewLake(metaUrl string, opts ...func(*Option)) *lakeEngine {
 	redisopt, err := redis.ParseURL(metaUrl)
 	if err != nil {
 		panic(err)
 	}
 	var options = Option{
-		cacheTTL:   24 * time.Hour,
-		cacheLimit: 1000,
+		// cacheTTL:   24 * time.Hour,
+		// cacheLimit: 1000,
 	}
 	for _, opt := range opts {
 		opt(&options)
@@ -75,7 +83,12 @@ func NewLake(metaUrl string, opts ...func(*Option)) *lakeEngine {
 		prefix:   "cl:",
 		lock:     sync.Mutex{},
 	}
-	tmp.cache = NewRedisCache(tmp.rdb, options.cacheTTL)
+	// tmp.cache =
+	if options.cacheProvider != nil {
+		tmp.cache = options.cacheProvider
+	} else {
+		tmp.cache, _ = collection.NewCache[any](1 * time.Hour)
+	}
 	if options.metaSnapTTL != 0 {
 		go func() {
 			for {

@@ -56,6 +56,15 @@ func NewRedisCache(client *redis.Client, ttl time.Duration) *RedisCache {
 	}
 }
 
+func NewRedisCacheWithMetaUrl(metaUrl string, ttl time.Duration) *RedisCache {
+	redisopt, err := redis.ParseURL(metaUrl)
+	if err != nil {
+		panic(err)
+	}
+	// client :=
+	return NewRedisCache(redis.NewClient(redisopt), ttl)
+}
+
 // Take 实现 Cache 接口的 Take 方法
 func (c *RedisCache) Take(key string, loader func() (any, error)) (any, error) {
 	if !strings.HasSuffix(key, ".snap") {
