@@ -25,11 +25,19 @@ func (m *lakeEngine) writeCryptOss(fullpath string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	return m.newClient().PutObject(fullpath, bytes.NewReader(encoded))
+	bucket, err := m.getBucket()
+	if err != nil {
+		return err
+	}
+	return bucket.PutObject(fullpath, bytes.NewReader(encoded))
 }
 
 func (m *lakeEngine) readCryptOSS(obj any, fullPath string) error {
-	buffer, err := m.newClient().GetObject(fullPath)
+	bucket, err := m.getBucket()
+	if err != nil {
+		return err
+	}
+	buffer, err := bucket.GetObject(fullPath)
 	if err != nil {
 		return err
 	}
@@ -497,7 +505,14 @@ func (m *lakeEngine) taskCleanignore(duration time.Duration) error {
 				redisDeletKeys = append(redisDeletKeys, file.Path)
 			}
 		}
-		m.newClient().DeleteObjects(ossDeletingkeys)
+		if len(ossDeletingkeys) > 0 {
+			bucket, err := m.getBucket()
+			if err != nil {
+				fmt.Println(xcolor.Red("TaskCleanignore.getBucket"), err.Error())
+				continue
+			}
+			bucket.DeleteObjects(ossDeletingkeys)
+		}
 		luaScript := `
     local prefix = ARGV[1]
     local catlog = ARGV[2]
