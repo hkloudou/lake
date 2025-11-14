@@ -41,6 +41,7 @@ func (m *lakeEngine) readCryptOSS(obj any, fullPath string) error {
 	if err != nil {
 		return err
 	}
+	defer buffer.Close()
 	data, err := io.ReadAll(buffer)
 	if err != nil {
 		return err
