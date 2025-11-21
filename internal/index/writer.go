@@ -9,20 +9,29 @@ import (
 
 // Writer handles writing to Redis ZADD index
 type Writer struct {
-	rdb *redis.Client
+	rdb    *redis.Client
+	prefix string
 }
 
 // NewWriter creates a new index writer
 func NewWriter(rdb *redis.Client) *Writer {
-	return &Writer{rdb: rdb}
+	return &Writer{
+		rdb:    rdb,
+		prefix: "", // Will be set later via SetPrefix
+	}
+}
+
+// SetPrefix sets the key prefix (e.g., "oss:my-lake")
+func (w *Writer) SetPrefix(prefix string) {
+	w.prefix = prefix
 }
 
 // Add adds an entry to the catalog index
 // Uses ZADD with timestamp as score and "field:uuid" as member
 func (w *Writer) Add(ctx context.Context, catalog, field, uuid string, timestamp int64) error {
-	key := makeCatalogKey(catalog)
+	key := w.makeCatalogKey(catalog)
 	member := EncodeMember(field, uuid)
-
+	
 	return w.rdb.ZAdd(ctx, key, redis.Z{
 		Score:  float64(timestamp),
 		Member: member,
@@ -31,9 +40,9 @@ func (w *Writer) Add(ctx context.Context, catalog, field, uuid string, timestamp
 
 // AddSnap adds a snapshot entry to the catalog snapshot index
 func (w *Writer) AddSnap(ctx context.Context, catalog, snapUUID string, timestamp int64) error {
-	key := makeSnapKey(catalog)
+	key := w.makeSnapKey(catalog)
 	member := EncodeSnapMember(snapUUID)
-
+	
 	return w.rdb.ZAdd(ctx, key, redis.Z{
 		Score:  float64(timestamp),
 		Member: member,
@@ -45,10 +54,10 @@ func (w *Writer) BatchAdd(ctx context.Context, catalog string, entries []Entry) 
 	if len(entries) == 0 {
 		return nil
 	}
-
+	
 	pipe := w.rdb.Pipeline()
-	key := makeCatalogKey(catalog)
-
+	key := w.makeCatalogKey(catalog)
+	
 	for _, e := range entries {
 		member := EncodeMember(e.Field, e.UUID)
 		pipe.ZAdd(ctx, key, redis.Z{
@@ -56,7 +65,7 @@ func (w *Writer) BatchAdd(ctx context.Context, catalog string, entries []Entry) 
 			Member: member,
 		})
 	}
-
+	
 	_, err := pipe.Exec(ctx)
 	return err
 }
@@ -68,10 +77,16 @@ type Entry struct {
 	Timestamp int64
 }
 
-func makeCatalogKey(catalog string) string {
-	return fmt.Sprintf("catalog:%s", catalog)
+func (w *Writer) makeCatalogKey(catalog string) string {
+	if w.prefix == "" {
+		return fmt.Sprintf("catalog:%s", catalog)
+	}
+	return fmt.Sprintf("%s:data:%s", w.prefix, catalog)
 }
 
-func makeSnapKey(catalog string) string {
-	return fmt.Sprintf("catalog:%s:snap", catalog)
+func (w *Writer) makeSnapKey(catalog string) string {
+	if w.prefix == "" {
+		return fmt.Sprintf("catalog:%s:snap", catalog)
+	}
+	return fmt.Sprintf("%s:snap:%s", w.prefix, catalog)
 }

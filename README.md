@@ -1,6 +1,12 @@
 # Lake V2
 
+[![Development Status](https://img.shields.io/badge/status-in%20development-yellow)](https://github.com/hkloudou/lake)
+[![Go Version](https://img.shields.io/badge/go-%3E%3D1.21-blue)](https://golang.org/)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 > A high-performance JSON document system based on Redis ZADD + OSS storage.
+
+> ⚠️ **This project is under active development. APIs may change.**
 
 ## Features
 

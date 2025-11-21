@@ -85,8 +85,14 @@ func (cfg *Config) CreateStorage() (storage.Storage, error) {
 		return storage.NewMemoryStorage(), nil
 
 	case "oss":
-		// TODO: Implement OSS storage
-		return nil, fmt.Errorf("OSS storage not implemented yet")
+		// Create OSS storage
+		return storage.NewOSSStorage(storage.OSSConfig{
+			Endpoint:  cfg.Endpoint,
+			Bucket:    cfg.Bucket,
+			AccessKey: cfg.AccessKey,
+			SecretKey: cfg.SecretKey,
+			Internal:  false, // TODO: make this configurable
+		})
 
 	case "s3":
 		// TODO: Implement S3 storage

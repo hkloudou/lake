@@ -1,8 +1,11 @@
 module github.com/hkloudou/lake/v2
 
-go 1.21
+go 1.24.0
+
+toolchain go1.24.4
 
 require (
+	github.com/aliyun/aliyun-oss-go-sdk v3.0.2+incompatible
 	github.com/dop251/goja v0.0.0-20231027120936-b396bb4c349d
 	github.com/google/uuid v1.6.0
 	github.com/redis/go-redis/v9 v9.5.1
@@ -15,4 +18,5 @@ require (
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/google/pprof v0.0.0-20231101202521-4ca4178f5c7a // indirect
 	golang.org/x/text v0.14.0 // indirect
+	golang.org/x/time v0.14.0 // indirect
 )

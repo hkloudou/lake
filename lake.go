@@ -108,6 +108,11 @@ func (c *Client) ensureInitialized(ctx context.Context) error {
 				} else {
 					c.storage = stor
 				}
+
+				// Set index prefix based on config: Storage:Name
+				prefix := fmt.Sprintf("%s:%s", cfg.Storage, cfg.Name)
+				c.writer.SetPrefix(prefix)
+				c.reader.SetPrefix(prefix)
 			}
 		}
 	}
@@ -171,9 +176,9 @@ type ReadRequest struct {
 
 // ReadResult represents the read result
 type ReadResult struct {
-	Data     map[string]any      // Merged JSON data
-	Snapshot *snapshot.Snapshot  // Snapshot info (if generated or used)
-	Entries  []index.ReadResult  // Raw entries (for debugging)
+	Data     map[string]any     // Merged JSON data
+	Snapshot *snapshot.Snapshot // Snapshot info (if generated or used)
+	Entries  []index.ReadResult // Raw entries (for debugging)
 }
 
 // Read reads and merges data from the catalog
