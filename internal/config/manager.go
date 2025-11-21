@@ -95,13 +95,13 @@ func (cfg *Config) CreateStorage() (storage.Storage, error) {
 			Internal:  false, // TODO: make this configurable
 		})
 
-	case "s3":
-		// TODO: Implement S3 storage
-		return nil, fmt.Errorf("S3 storage not implemented yet")
+	// case "s3":
+	// 	// TODO: Implement S3 storage
+	// 	return nil, fmt.Errorf("S3 storage not implemented yet")
 
-	case "local":
-		// TODO: Implement local file storage
-		return nil, fmt.Errorf("local storage not implemented yet")
+	// case "local":
+	// 	// TODO: Implement local file storage
+	// 	return nil, fmt.Errorf("local storage not implemented yet")
 
 	default:
 		return nil, fmt.Errorf("unknown storage type: %s", cfg.Storage)

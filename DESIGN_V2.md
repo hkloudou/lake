@@ -10,52 +10,146 @@ Lake V2 是一个基于 Redis ZADD + OSS 的高性能 JSON 文档写入系统。
 
 #### Redis 索引层
 ```
-ZADD catalog:{catalog_name} {timestamp} "{field}:{uuid}"
+ZADD {prefix}:data:{catalog_name} {score} "data|{base64_field}|{ts}_{seqid}|{mergetype}"
 ```
 
-- **Key**: `catalog:{catalog_name}`
-- **Score**: Unix timestamp (写入时间)
-- **Member**: `{field}:{uuid}` 编码的字符串
-  - `field`: JSON path (如 `user.profile.name`)
-  - `uuid`: 唯一标识符
+- **Key**: `{prefix}:data:{catalog_name}` (e.g., `oss:mylake:data:users`)
+- **Score**: Float64 = timestamp + (seqid / 1000000)
+  - Timestamp: Unix timestamp (seconds) from Redis TIME
+  - SeqID: Auto-incremented sequence per second (1-999999)
+  - Example: ts=1700000000, seqid=123 → score=1700000000.000123
+- **Member**: `data|{base64_field}|{ts}_{seqid}|{mergetype}`
+  - Format uses `|` delimiter (safe for parsing)
+  - `base64_field`: Base64 URL-encoded JSON path (supports any characters including `:`)
+  - `ts_seqid`: Unique identifier from Redis (e.g., `1700000000_123`)
+  - `mergetype`: 0=Replace, 1=Merge
+  
+**Example:**
+```
+Field: "user.profile.name"
+Base64: "dXNlci5wcm9maWxlLm5hbWU="
+Member: "data|dXNlci5wcm9maWxlLm5hbWU=|1700000000_123|0"
+```
 
 #### OSS 存储层
 ```
-/{catalog_name}/{uuid}.json
+/{catalog_name}/{ts}_{seqid}_{mergetype}.json
 ```
+
+Example: `/users/1700000000_123_0.json`
 
 ### 2. 快照机制
 
-快照在读取时按需生成：
+快照在读取时按需生成，使用时间范围标记：
 
 ```
-ZADD catalog:{catalog_name}:snap {last_timestamp} "snap:{snap_uuid}"
+ZADD {prefix}:snap:{catalog_name} {stop_score} "snap|{startTsSeq}|{stopTsSeq}"
 ```
 
-- 快照的 score = 最后一个 JSON 文档的 timestamp
-- 快照后只需读取 score > snap_timestamp 的增量数据
+- **Member**: `snap|{startTsSeq}|{stopTsSeq}` 
+  - `startTsSeq`: 快照起始时间序列（首个快照为 `0_0`）
+  - `stopTsSeq`: 快照结束时间序列（最后一个数据的 TsSeqID）
+- **Score**: 快照结束点的 score（从 stopTsSeq 计算）
+- 快照后只需读取 score > snap_score 的增量数据
+
+**示例：**
+```
+第一个快照: snap|0_0|1700000100_500 (score: 1700000100.0005)
+第二个快照: snap|1700000100_500|1700000200_999 (score: 1700000200.000999)
+```
+
+**优势：**
+- 明确的时间范围，便于数据追踪和审计
+- 快照之间无缝衔接，startTsSeq = 前一个快照的 stopTsSeq
+- 第一个快照从 0_0 开始，表示从头开始
 
 ### 3. 写入流程
 
 ```
-1. 生成 UUID
-2. 写入 JSON 到 OSS: /{catalog}/{uuid}.json
-3. ZADD catalog:{catalog} {timestamp} "{field}:{uuid}"
-4. 返回成功
+1. 原子生成 timestamp + seqid (via Redis Lua script)
+2. ZADD to Redis index with score and member
+3. 写入 JSON 到 OSS: /{catalog}/{ts}_{seqid}_{mergetype}.json
+4. 返回 WriteResult{TsSeqID, Timestamp, SeqID}
 ```
 
-### 4. 读取流程
+**Redis Lua Script for TimeSeq Generation (with Catalog Isolation):**
+```lua
+-- KEYS[1]: base64 encoded catalog name
+local catalog = KEYS[1]
+local timeResult = redis.call("TIME")
+local timestamp = timeResult[1]
+
+-- Sequence key includes catalog for isolation
+local seqKey = "lake:seqid:" .. catalog .. ":" .. timestamp
+
+-- Initialize sequence counter if not exists (expires in 5 seconds)
+local setResult = redis.call("SETNX", seqKey, "0")
+if setResult == 1 then
+    redis.call("EXPIRE", seqKey, 5)
+end
+
+-- Increment and return
+local seqid = redis.call("INCR", seqKey)
+
+return {timestamp, seqid}
+```
+
+**Key Features:**
+- ⏱️ **Server-side timestamp**: No client clock skew
+- 🔢 **Unique seqid**: Supports up to 999,999 writes/second per catalog
+- 🏷️ **Catalog isolation**: Each catalog has independent seqid sequence
+- 🔐 **AES-GCM encryption**: Optional encryption at OSS layer (no performance impact)
+- 🎯 **Merge strategies**: Replace (overwrite) or Merge (deep merge)
+
+**Catalog Isolation:**
+- Different catalogs (e.g., "users", "products") have independent seqid sequences
+- Redis key format: `lake:seqid:{base64_catalog}:{timestamp}`
+- Example: `lake:seqid:dXNlcnM=:1700000000` for "users" catalog
+- Prevents seqid conflicts between different data types
+
+### 4. 读取流程（两段式）
 
 ```
-1. 检查最新快照: ZREVRANGEBYSCORE catalog:{catalog}:snap +inf -inf LIMIT 0 1
-2. 如果有快照:
-   - 读取快照 JSON
-   - ZRANGEBYSCORE catalog:{catalog} (snap_ts +inf
-   - 合并增量数据
-3. 如果无快照:
-   - ZRANGEBYSCORE catalog:{catalog} -inf +inf
-   - 从头合并所有数据
-4. (可选) 生成新快照
+第一阶段：获取快照和增量索引信息
+1. 检查最新快照: ZREVRANGEBYSCORE {prefix}:snap:{catalog} +inf -inf LIMIT 0 1
+   返回: snap|{startTsSeq}|{stopTsSeq} score={stop_score}
+
+2. 获取增量数据索引:
+   如果有快照: ZRANGEBYSCORE {prefix}:data:{catalog} ({stop_score} +inf
+   如果无快照: ZRANGEBYSCORE {prefix}:data:{catalog} 1 +inf  (score>0，排除已清理数据)
+
+第二阶段：加载实际数据
+3. 从 OSS 加载快照 JSON: catalog/{stopTsSeq}.json
+4. 从 OSS 加载增量数据: catalog/{ts}_{seqid}_{mergetype}.json (for each entry)
+
+第三阶段：合并数据
+5. 合并: snapshot.data + incremental.data
+
+第四阶段：生成新快照（可选）
+6. 保存合并后的数据
+7. 创建新快照: snap|{old_stopTsSeq}|{new_stopTsSeq}
+```
+
+**时间范围示例：**
+```
+初始状态:
+  - data: 1, 2, 3, ..., 100 (TsSeqID: 1700000000_1 到 1700000100_100)
+  
+第一次读取并生成快照:
+  - 快照: snap|0_0|1700000100_100
+  - 包含所有数据 (1-100)
+  
+新数据写入:
+  - data: 101, 102, 103 (TsSeqID: 1700000100_101 到 1700000100_103)
+  
+第二次读取:
+  - 读取快照: snap|0_0|1700000100_100 (获取 1-100)
+  - 读取增量: score > 1700000100.0001 (获取 101-103)
+  - 合并得到完整数据 (1-103)
+  
+生成新快照:
+  - 快照: snap|1700000100_100|1700000100_103
+  - 包含所有数据 (1-103)
 ```
 
 ### 5. JSON 合并策略
@@ -154,12 +248,15 @@ lake/
 
 ### 写入示例
 ```go
-client.Write(ctx, WriteRequest{
+result, err := client.Write(ctx, WriteRequest{
     Catalog:   "users",
     Field:     "profile.name",
     Value:     map[string]any{"first": "John", "last": "Doe"},
-    Timestamp: time.Now(),
+    MergeType: index.MergeTypeReplace, // 0=Replace, 1=Merge
 })
+// result.TsSeqID:   "1700000000_123"
+// result.Timestamp: 1700000000
+// result.SeqID:     123
 ```
 
 ### 读取示例

@@ -4,38 +4,49 @@ import "testing"
 
 func TestEncodeMember(t *testing.T) {
 	tests := []struct {
-		field    string
-		uuid     string
-		expected string
+		field     string
+		tsSeqID   string
+		mergeType MergeType
+		expected  string
 	}{
-		{"user.name", "abc123", "user.name:abc123"},
-		{"profile", "def456", "profile:def456"},
-		{"", "empty", ":empty"},
+		// "user.name" in base64 URL encoding = "dXNlci5uYW1l"
+		{"user.name", "1700000000_123", MergeTypeReplace, "data|dXNlci5uYW1l|1700000000_123|0"},
+		// "profile" in base64 URL encoding = "cHJvZmlsZQ=="
+		{"profile", "1700000001_456", MergeTypeMerge, "data|cHJvZmlsZQ==|1700000001_456|1"},
+		// "" in base64 URL encoding = ""
+		{"", "1700000002_789", MergeTypeReplace, "data||1700000002_789|0"},
+		// Test field with special chars: "user:profile" = "dXNlcjpwcm9maWxl"
+		{"user:profile", "1700000003_100", MergeTypeReplace, "data|dXNlcjpwcm9maWxl|1700000003_100|0"},
 	}
 
 	for _, tt := range tests {
-		result := EncodeMember(tt.field, tt.uuid)
+		result := EncodeMember(tt.field, tt.tsSeqID, tt.mergeType)
 		if result != tt.expected {
-			t.Errorf("EncodeMember(%q, %q) = %q, want %q", tt.field, tt.uuid, result, tt.expected)
+			t.Errorf("EncodeMember(%q, %q, %d) = %q, want %q",
+				tt.field, tt.tsSeqID, tt.mergeType, result, tt.expected)
 		}
 	}
 }
 
 func TestDecodeMember(t *testing.T) {
 	tests := []struct {
-		member      string
-		expectField string
-		expectUUID  string
-		expectError bool
+		member          string
+		expectField     string
+		expectTsSeqID   string
+		expectMergeType MergeType
+		expectError     bool
 	}{
-		{"user.name:abc123", "user.name", "abc123", false},
-		{"profile:def456", "profile", "def456", false},
-		{"invalid", "", "", true},
-		{":empty", "", "empty", false},
+		{"data|dXNlci5uYW1l|1700000000_123|0", "user.name", "1700000000_123", MergeTypeReplace, false},
+		{"data|cHJvZmlsZQ==|1700000001_456|1", "profile", "1700000001_456", MergeTypeMerge, false},
+		{"data||1700000002_789|0", "", "1700000002_789", MergeTypeReplace, false},
+		{"data|dXNlcjpwcm9maWxl|1700000003_100|0", "user:profile", "1700000003_100", MergeTypeReplace, false},
+		{"invalid", "", "", MergeTypeReplace, true},
+		{"data:user.name:1700000000_123_0", "", "", MergeTypeReplace, true},      // Old format, should fail
+		{"data|invalid-base64|1700000000_123|0", "", "", MergeTypeReplace, true}, // Invalid base64
 	}
 
 	for _, tt := range tests {
-		field, uuid, err := DecodeMember(tt.member)
+		field, tsSeqID, mergeType, err := DecodeMember(tt.member)
 		if tt.expectError {
 			if err == nil {
 				t.Errorf("DecodeMember(%q) expected error, got nil", tt.member)
@@ -44,35 +55,74 @@ func TestDecodeMember(t *testing.T) {
 			if err != nil {
 				t.Errorf("DecodeMember(%q) unexpected error: %v", tt.member, err)
 			}
-			if field != tt.expectField || uuid != tt.expectUUID {
-				t.Errorf("DecodeMember(%q) = (%q, %q), want (%q, %q)",
-					tt.member, field, uuid, tt.expectField, tt.expectUUID)
+			if field != tt.expectField || tsSeqID != tt.expectTsSeqID || mergeType != tt.expectMergeType {
+				t.Errorf("DecodeMember(%q) = (%q, %q, %d), want (%q, %q, %d)",
+					tt.member, field, tsSeqID, mergeType,
+					tt.expectField, tt.expectTsSeqID, tt.expectMergeType)
 			}
 		}
 	}
 }
 
 func TestSnapMember(t *testing.T) {
-	uuid := "snap-uuid-123"
-	encoded := EncodeSnapMember(uuid)
-	if encoded != "snap:snap-uuid-123" {
-		t.Errorf("EncodeSnapMember(%q) = %q, want %q", uuid, encoded, "snap:snap-uuid-123")
+	tests := []struct {
+		name        string
+		startTsSeq  string
+		stopTsSeq   string
+		expected    string
+		expectError bool
+	}{
+		{"normal", "1700000000_1", "1700000100_500", "snap|1700000000_1|1700000100_500", false},
+		{"first snap", "0_0", "1700000100_500", "snap|0_0|1700000100_500", false},
+		{"consecutive", "1700000100_500", "1700000200_999", "snap|1700000100_500|1700000200_999", false},
 	}
 
-	if !IsSnapMember(encoded) {
-		t.Errorf("IsSnapMember(%q) = false, want true", encoded)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Encode
+			encoded := EncodeSnapMember(tt.startTsSeq, tt.stopTsSeq)
+			if encoded != tt.expected {
+				t.Errorf("EncodeSnapMember(%q, %q) = %q, want %q",
+					tt.startTsSeq, tt.stopTsSeq, encoded, tt.expected)
+			}
 
-	decoded, err := DecodeSnapMember(encoded)
-	if err != nil {
-		t.Errorf("DecodeSnapMember(%q) unexpected error: %v", encoded, err)
-	}
-	if decoded != uuid {
-		t.Errorf("DecodeSnapMember(%q) = %q, want %q", encoded, decoded, uuid)
+			// Check IsSnapMember
+			if !IsSnapMember(encoded) {
+				t.Errorf("IsSnapMember(%q) = false, want true", encoded)
+			}
+
+			// Decode
+			decodedStart, decodedStop, err := DecodeSnapMember(encoded)
+			if err != nil {
+				t.Errorf("DecodeSnapMember(%q) unexpected error: %v", encoded, err)
+			}
+			if decodedStart != tt.startTsSeq {
+				t.Errorf("DecodeSnapMember(%q) start = %q, want %q",
+					encoded, decodedStart, tt.startTsSeq)
+			}
+			if decodedStop != tt.stopTsSeq {
+				t.Errorf("DecodeSnapMember(%q) stop = %q, want %q",
+					encoded, decodedStop, tt.stopTsSeq)
+			}
+		})
 	}
 
 	// Test non-snap member
-	if IsSnapMember("user.name:abc123") {
-		t.Error("IsSnapMember(\"user.name:abc123\") = true, want false")
+	if IsSnapMember("data|dXNlci5uYW1l|1700000000_123|0") {
+		t.Error("IsSnapMember(\"data|dXNlci5uYW1l|1700000000_123|0\") = true, want false")
+	}
+
+	// Test IsDataMember
+	if !IsDataMember("data|dXNlci5uYW1l|1700000000_123|0") {
+		t.Error("IsDataMember(\"data|dXNlci5uYW1l|1700000000_123|0\") = false, want true")
+	}
+	if IsDataMember("snap|1700000000_1|1700000100_500") {
+		t.Error("IsDataMember(\"snap|1700000000_1|1700000100_500\") = true, want false")
+	}
+
+	// Test invalid format
+	_, _, err := DecodeSnapMember("snap:old-format")
+	if err == nil {
+		t.Error("DecodeSnapMember(\"snap:old-format\") expected error, got nil")
 	}
 }

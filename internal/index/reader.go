@@ -29,8 +29,9 @@ func (r *Reader) SetPrefix(prefix string) {
 // ReadResult represents a read result from the index
 type ReadResult struct {
 	Field     string
-	UUID      string
-	Timestamp int64
+	TsSeqID   string // Format: "ts_seqid"
+	MergeType MergeType
+	Timestamp int64 // Unix timestamp (from score)
 }
 
 // ReadAll reads all entries from the catalog
@@ -73,21 +74,23 @@ func (r *Reader) GetLatestSnap(ctx context.Context, catalog string) (*SnapInfo, 
 		return nil, nil // No snapshot found
 	}
 
-	uuid, err := DecodeSnapMember(results[0].Member.(string))
+	startTsSeq, stopTsSeq, err := DecodeSnapMember(results[0].Member.(string))
 	if err != nil {
 		return nil, err
 	}
 
 	return &SnapInfo{
-		UUID:      uuid,
-		Timestamp: int64(results[0].Score),
+		StartTsSeq: startTsSeq,
+		StopTsSeq:  stopTsSeq,
+		Timestamp:  int64(results[0].Score),
 	}, nil
 }
 
 // SnapInfo represents snapshot information
 type SnapInfo struct {
-	UUID      string
-	Timestamp int64
+	StartTsSeq string // Start time sequence (e.g., "1700000000_1" or "0_0" for first snap)
+	StopTsSeq  string // Stop time sequence (e.g., "1700000100_500")
+	Timestamp  int64  // Score in Redis (stopTsSeq's timestamp)
 }
 
 func (r *Reader) readRange(ctx context.Context, key, min, max string) ([]ReadResult, error) {
@@ -109,14 +112,20 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) ([]ReadRes
 			continue
 		}
 
-		field, uuid, err := DecodeMember(member)
+		// Skip non-data members
+		if !IsDataMember(member) {
+			continue
+		}
+
+		field, tsSeqID, mergeType, err := DecodeMember(member)
 		if err != nil {
 			continue // Skip invalid members
 		}
 
 		entries = append(entries, ReadResult{
 			Field:     field,
-			UUID:      uuid,
+			TsSeqID:   tsSeqID,
+			MergeType: mergeType,
 			Timestamp: int64(z.Score),
 		})
 	}

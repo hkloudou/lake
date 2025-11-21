@@ -1,38 +1,110 @@
 package index
 
 import (
+	"encoding/base64"
 	"fmt"
 	"strings"
 )
 
-// EncodeMember encodes field and uuid into Redis ZADD member format: "field:uuid"
-func EncodeMember(field, uuid string) string {
-	return fmt.Sprintf("%s:%s", field, uuid)
-}
+// MergeType defines how to merge values
+type MergeType int
 
-// DecodeMember decodes Redis ZADD member into field and uuid
-func DecodeMember(member string) (field, uuid string, err error) {
-	parts := strings.SplitN(member, ":", 2)
-	if len(parts) != 2 {
-		return "", "", fmt.Errorf("invalid member format: %s", member)
+const (
+	MergeTypeReplace MergeType = 0 // Replace existing value
+	MergeTypeMerge   MergeType = 1 // Merge with existing value
+)
+
+// String returns the string representation
+func (m MergeType) String() string {
+	switch m {
+	case MergeTypeReplace:
+		return "replace"
+	case MergeTypeMerge:
+		return "merge"
+	default:
+		return "unknown"
 	}
-	return parts[0], parts[1], nil
 }
 
-// EncodeSnapMember encodes snapshot uuid into Redis ZADD member format: "snap:uuid"
-func EncodeSnapMember(uuid string) string {
-	return fmt.Sprintf("snap:%s", uuid)
-}
-
-// DecodeSnapMember decodes snapshot member and returns uuid
-func DecodeSnapMember(member string) (uuid string, err error) {
-	if !strings.HasPrefix(member, "snap:") {
-		return "", fmt.Errorf("invalid snap member format: %s", member)
+// MergeTypeFromInt converts int to MergeType
+func MergeTypeFromInt(i int) MergeType {
+	if i == 1 {
+		return MergeTypeMerge
 	}
-	return strings.TrimPrefix(member, "snap:"), nil
+	return MergeTypeReplace
+}
+
+// EncodeMember encodes field, tsSeqID, and mergeType into Redis ZADD member format
+// Format: "data|{base64_field}|{tsSeqID}|{mergeTypeInt}"
+// Example: "data|dXNlci5uYW1l|1700000000_123|0"
+func EncodeMember(field, tsSeqID string, mergeType MergeType) string {
+	// Encode field using base64 URL encoding (safe for Redis keys)
+	encodedField := base64.URLEncoding.EncodeToString([]byte(field))
+	return fmt.Sprintf("data|%s|%s|%d", encodedField, tsSeqID, mergeType)
+}
+
+// DecodeMember decodes Redis ZADD member into field, tsSeqID, and mergeType
+// Returns tsSeqID in format "ts_seqid"
+func DecodeMember(member string) (field, tsSeqID string, mergeType MergeType, err error) {
+	// Split by "|" delimiter
+	parts := strings.Split(member, "|")
+	if len(parts) != 4 {
+		return "", "", 0, fmt.Errorf("invalid member format (expected 4 parts): %s", member)
+	}
+
+	if parts[0] != "data" {
+		return "", "", 0, fmt.Errorf("invalid member prefix (expected 'data'): %s", parts[0])
+	}
+
+	// Decode base64 field
+	fieldBytes, err := base64.URLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", "", 0, fmt.Errorf("failed to decode field: %w", err)
+	}
+	field = string(fieldBytes)
+
+	// Parse tsSeqID (already in correct format)
+	tsSeqID = parts[2]
+
+	// Parse merge type
+	var mergeTypeInt int
+	_, err = fmt.Sscanf(parts[3], "%d", &mergeTypeInt)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("invalid merge type: %s", parts[3])
+	}
+
+	return field, tsSeqID, MergeTypeFromInt(mergeTypeInt), nil
+}
+
+// EncodeSnapMember encodes snapshot time range into Redis ZADD member format
+// Format: "snap|{startTsSeq}|{stopTsSeq}"
+// Example: "snap|1700000000_1|1700000100_500"
+// If no previous snap (first snap): "snap|0_0|1700000100_500"
+func EncodeSnapMember(startTsSeq, stopTsSeq string) string {
+	return fmt.Sprintf("snap|%s|%s", startTsSeq, stopTsSeq)
+}
+
+// DecodeSnapMember decodes snapshot member and returns start and stop tsSeqID
+func DecodeSnapMember(member string) (startTsSeq, stopTsSeq string, err error) {
+	// Split by "|" delimiter
+	parts := strings.Split(member, "|")
+	if len(parts) != 3 {
+		return "", "", fmt.Errorf("invalid snap member format (expected 3 parts): %s", member)
+	}
+
+	if parts[0] != "snap" {
+		return "", "", fmt.Errorf("invalid snap member prefix (expected 'snap'): %s", parts[0])
+	}
+
+	return parts[1], parts[2], nil
 }
 
 // IsSnapMember checks if member is a snapshot member
 func IsSnapMember(member string) bool {
-	return strings.HasPrefix(member, "snap:")
+	return strings.HasPrefix(member, "snap|")
+}
+
+// IsDataMember checks if member is a data member
+func IsDataMember(member string) bool {
+	return strings.HasPrefix(member, "data|")
 }

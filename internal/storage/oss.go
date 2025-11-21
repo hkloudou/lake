@@ -165,19 +165,19 @@ func (s *OSSStorage) List(ctx context.Context, prefix string) ([]string, error) 
 }
 
 // PutStream stores data from a reader
-func (s *OSSStorage) PutStream(ctx context.Context, key string, reader io.Reader, size int64) error {
-	s.mu.RLock()
-	bucket := s.bucket
-	s.mu.RUnlock()
+// func (s *OSSStorage) PutStream(ctx context.Context, key string, reader io.Reader, size int64) error {
+// 	s.mu.RLock()
+// 	bucket := s.bucket
+// 	s.mu.RUnlock()
 
-	return bucket.PutObject(key, reader)
-}
+// 	return bucket.PutObject(key, reader)
+// }
 
-// GetStream retrieves data as a reader
-func (s *OSSStorage) GetStream(ctx context.Context, key string) (io.ReadCloser, error) {
-	s.mu.RLock()
-	bucket := s.bucket
-	s.mu.RUnlock()
+// // GetStream retrieves data as a reader
+// func (s *OSSStorage) GetStream(ctx context.Context, key string) (io.ReadCloser, error) {
+// 	s.mu.RLock()
+// 	bucket := s.bucket
+// 	s.mu.RUnlock()
 
-	return bucket.GetObject(key)
-}
+// 	return bucket.GetObject(key)
+// }
