@@ -80,21 +80,75 @@ func TestReadStorage(t *testing.T) {
 	if err != nil {
 		t.Logf("Config load error (will use defaults): %v", err)
 	} else {
-		t.Logf("Loaded config: %+v", cfg)
+		t.Logf("Loaded config: Name=%s, Storage=%s, Bucket=%s", cfg.Name, cfg.Storage, cfg.Bucket)
 	}
 
-	// Try to read
+	catalog := "test-read"
+
+	// Write some test data first
+	t.Log("Writing test data...")
+	err = client.Write(ctx, lake.WriteRequest{
+		Catalog: catalog,
+		Field:   "user.name",
+		Value:   "Alice",
+	})
+	if err != nil {
+		t.Fatalf("Write 1 failed: %v", err)
+	}
+
+	err = client.Write(ctx, lake.WriteRequest{
+		Catalog: catalog,
+		Field:   "user.age",
+		Value:   25,
+	})
+	if err != nil {
+		t.Fatalf("Write 2 failed: %v", err)
+	}
+
+	err = client.Write(ctx, lake.WriteRequest{
+		Catalog: catalog,
+		Field:   "user.email",
+		Value:   "alice@example.com",
+	})
+	if err != nil {
+		t.Fatalf("Write 3 failed: %v", err)
+	}
+
+	// Now read the data
+	t.Log("Reading data...")
 	result, err := client.Read(ctx, lake.ReadRequest{
-		Catalog:      "test",
+		Catalog:      catalog,
 		GenerateSnap: false,
 	})
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
 
-	t.Logf("Read result: Data=%+v, Entries count=%d", result.Data, len(result.Entries))
+	t.Logf("Read result:")
+	t.Logf("  Entries count: %d", len(result.Entries))
+	t.Logf("  Data: %+v", result.Data)
+	t.Logf("  Snapshot: %v", result.Snapshot != nil)
+
+	if len(result.Entries) != 3 {
+		t.Errorf("Expected 3 entries, got %d", len(result.Entries))
+	}
 
 	if len(result.Data) == 0 {
-		t.Log("No data found - this is expected if catalog is empty")
+		t.Error("Expected data but got empty map")
+	}
+
+	// Verify merged data structure
+	if user, ok := result.Data["user"].(map[string]any); ok {
+		if name, ok := user["name"].(string); !ok || name != "Alice" {
+			t.Errorf("Expected user.name=Alice, got %v", user["name"])
+		}
+		if age, ok := user["age"].(float64); !ok || age != 25 {
+			t.Errorf("Expected user.age=25, got %v", user["age"])
+		}
+		if email, ok := user["email"].(string); !ok || email != "alice@example.com" {
+			t.Errorf("Expected user.email=alice@example.com, got %v", user["email"])
+		}
+	} else {
+		t.Error("Expected user object in data")
 	}
 }
