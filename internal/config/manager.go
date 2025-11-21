@@ -33,7 +33,7 @@ type Config struct {
 	AccessKey string `json:"AccessKey"` // Access key
 	SecretKey string `json:"SecretKey"` // Secret key
 	AESPwd    string `json:"AESPwd"`    // AES encryption password
-	Region    string `json:"Region"`    // AWS region (for S3)
+	// Region    string `json:"Region"`    // AWS region (for S3)
 }
 
 // Load loads configuration from Redis using SingleFlight

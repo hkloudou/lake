@@ -77,15 +77,8 @@ func TestWriteData(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Get config to verify it's loaded
-	cfg, err := client.GetConfig(ctx)
-	if err != nil {
-		t.Skipf("Skipping test: config not found in Redis: %v", err)
-		return
-	}
-	t.Logf("Using config: Name=%s, Storage=%s, Bucket=%s", cfg.Name, cfg.Storage, cfg.Bucket)
-
-	catalog := "test-catalog"
+	catalog := "test"
+	var err error
 
 	// Write test data
 	t.Log("Writing test data...")
@@ -129,21 +122,13 @@ func TestReadStorage(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Get config to verify it's loaded
-	cfg, err := client.GetConfig(ctx)
-	if err != nil {
-		t.Skipf("Skipping test: config not found in Redis: %v", err)
-		return
-	}
-	t.Logf("Using config: Name=%s, Storage=%s, Bucket=%s", cfg.Name, cfg.Storage, cfg.Bucket)
-
-	catalog := "test-catalog"
+	catalog := "test"
 
 	// Read the data
 	t.Log("Reading data...")
 	result, err := client.Read(ctx, lake.ReadRequest{
 		Catalog:      catalog,
-		GenerateSnap: false,
+		GenerateSnap: true,
 	})
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
@@ -152,7 +137,14 @@ func TestReadStorage(t *testing.T) {
 	t.Logf("Read result:")
 	t.Logf("  Entries count: %d", len(result.Entries))
 	t.Logf("  Data: %+v", result.Data)
-	t.Logf("  Snapshot: %v", result.Snapshot != nil)
+	// t.Logf("  Snapshot: %v", result.Snapshot != nil)
+	if result.Snapshot != nil {
+		t.Logf("  Snapshot UUID: %s", result.Snapshot.UUID)
+		t.Logf("  Snapshot Timestamp: %d", result.Snapshot.Timestamp)
+		t.Logf("  Snapshot Data: %+v", result.Snapshot.Data)
+	} else {
+		t.Log("No snapshot found")
+	}
 
 	if len(result.Entries) == 0 {
 		t.Log("No entries found - catalog may be empty")

@@ -208,6 +208,10 @@ func (c *Client) mergeEntries(ctx context.Context, catalog string, baseData map[
 	return merged, nil
 }
 
+func (c *Client) Info(ctx context.Context) {
+
+}
+
 // Read reads and merges data from the catalog
 func (c *Client) Read(ctx context.Context, req ReadRequest) (*ReadResult, error) {
 	// Ensure initialized before operation
