@@ -9,11 +9,11 @@ func ExampleEncodeSnapMember() {
 	// First snapshot (no previous snap)
 	member1 := EncodeSnapMember(TimeSeqID{0, 0}, TimeSeqID{1700000100, 500})
 	fmt.Println(member1)
-	
+
 	// Second snapshot (continues from first)
 	member2 := EncodeSnapMember(TimeSeqID{1700000100, 500}, TimeSeqID{1700000200, 999})
 	fmt.Println(member2)
-	
+
 	// Output:
 	// snap|0_0|1700000100_500
 	// snap|1700000100_500|1700000200_999
@@ -43,22 +43,22 @@ func Example_snapWorkflow() {
 	// data|field2|1700000000_2|0
 	// ...
 	// data|fieldN|1700000100_500|0
-	
+
 	// Step 2: Create first snapshot
 	// Range: 0_0 to 1700000100_500 (all entries so far)
 	snap1 := EncodeSnapMember(TimeSeqID{0, 0}, TimeSeqID{1700000100, 500})
 	fmt.Println("First snapshot:", snap1)
-	
+
 	// Step 3: More writes
 	// data|field1|1700000100_501|0
 	// ...
 	// data|fieldM|1700000200_999|0
-	
+
 	// Step 4: Create second snapshot
 	// Range: 1700000100_500 to 1700000200_999 (continues from first)
 	snap2 := EncodeSnapMember(TimeSeqID{1700000100, 500}, TimeSeqID{1700000200, 999})
 	fmt.Println("Second snapshot:", snap2)
-	
+
 	// Output:
 	// First snapshot: snap|0_0|1700000100_500
 	// Second snapshot: snap|1700000100_500|1700000200_999

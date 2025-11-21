@@ -3,6 +3,7 @@ package index
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -27,29 +28,29 @@ func (r *Reader) SetPrefix(prefix string) {
 }
 
 // ReadResult represents a read result from the index
-type ReadResult struct {
+type DataInfo struct {
 	Field     string
 	TsSeq     TimeSeqID // Format: "ts_seqid"
 	MergeType MergeType
-	Timestamp int64 // Unix timestamp (from score)
+	Score     float64 // Unix timestamp (from score)
 }
 
 // ReadAll reads all entries from the catalog
-func (r *Reader) ReadAll(ctx context.Context, catalog string) ([]ReadResult, error) {
+func (r *Reader) ReadAll(ctx context.Context, catalog string) ([]DataInfo, error) {
 	key := r.makeCatalogKey(catalog)
 	return r.readRange(ctx, key, "-inf", "+inf")
 }
 
 // ReadSince reads entries since the given timestamp (exclusive)
-func (r *Reader) ReadSince(ctx context.Context, catalog string, sinceTimestamp int64) ([]ReadResult, error) {
+func (r *Reader) ReadSince(ctx context.Context, catalog string, sinceTimestamp float64) ([]DataInfo, error) {
 	key := r.makeCatalogKey(catalog)
 	// Use '(' to exclude the timestamp itself
-	minScore := fmt.Sprintf("(%d", sinceTimestamp)
-	return r.readRange(ctx, key, minScore, "+inf")
+	// minScore := fmt.Sprintf("(%d", sinceTimestamp)
+	return r.readRange(ctx, key, fmt.Sprintf("(%f", sinceTimestamp), "+inf")
 }
 
 // ReadRange reads entries between timestamps
-func (r *Reader) ReadRange(ctx context.Context, catalog string, minTimestamp, maxTimestamp int64) ([]ReadResult, error) {
+func (r *Reader) ReadRange(ctx context.Context, catalog string, minTimestamp, maxTimestamp int64) ([]DataInfo, error) {
 	key := r.makeCatalogKey(catalog)
 	return r.readRange(ctx, key, fmt.Sprintf("%d", minTimestamp), fmt.Sprintf("%d", maxTimestamp))
 }
@@ -93,7 +94,15 @@ type SnapInfo struct {
 	Score      float64   // Score in Redis (stopTsSeq's timestamp)
 }
 
-func (r *Reader) readRange(ctx context.Context, key, min, max string) ([]ReadResult, error) {
+func (m SnapInfo) Dump() string {
+	// fmt.Println(fmt.Sprintf("Snapshot:\n"))
+	var output strings.Builder
+	output.WriteString(fmt.Sprintf("  Time Range: %s ~ %s\n", m.StartTsSeq, m.StopTsSeq))
+	output.WriteString(fmt.Sprintf("  Score: %.6f\n", m.Score))
+	return output.String()
+}
+
+func (r *Reader) readRange(ctx context.Context, key, min, max string) ([]DataInfo, error) {
 	results, err := r.rdb.ZRangeByScoreWithScores(ctx, key, &redis.ZRangeBy{
 		Min: min,
 		Max: max,
@@ -103,7 +112,7 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) ([]ReadRes
 		return nil, err
 	}
 
-	var entries []ReadResult
+	var entries []DataInfo
 	for _, z := range results {
 		member := z.Member.(string)
 
@@ -127,12 +136,15 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) ([]ReadRes
 			return nil, fmt.Errorf("failed to parse tsSeqID: %w", err)
 			// continue // Skip invalid members
 		}
+		if tsSeq.Score() != z.Score {
+			return nil, fmt.Errorf("score mismatch: got %f, expected %f", tsSeq.Score(), z.Score)
+		}
 
-		entries = append(entries, ReadResult{
+		entries = append(entries, DataInfo{
 			Field:     field,
 			TsSeq:     tsSeq,
 			MergeType: mergeType,
-			Timestamp: int64(z.Score),
+			Score:     z.Score,
 		})
 	}
 
