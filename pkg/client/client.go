@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,46 +18,106 @@ import (
 
 // Client is the main interface for Lake v2
 type Client struct {
-	storage   storage.Storage
+	rdb       *redis.Client
 	writer    *index.Writer
 	reader    *index.Reader
 	merger    *merge.Engine
-	snapMgr   *snapshot.Manager
-	rdb       *redis.Client   // For config management
-	configMgr *config.Manager // Config manager (optional)
+	configMgr *config.Manager
+
+	// Lazy-loaded components
+	mu      sync.RWMutex
+	storage storage.Storage
+	snapMgr *snapshot.Manager
+	config  *config.Config
 }
 
-// Config holds client configuration
-type Config struct {
-	RedisAddr string
-	Storage   storage.Storage // If nil, uses MemoryStorage
+// Option is a function that configures the client
+type Option struct {
+	Storage storage.Storage
 }
 
-// New creates a new Lake client
-func New(cfg Config) *Client {
-	rdb := redis.NewClient(&redis.Options{
-		Addr: cfg.RedisAddr,
-	})
+// NewLake creates a new Lake client with the given Redis URL
+// Config is loaded lazily on first operation
+func NewLake(metaUrl string, opts ...func(*Option)) *Client {
+	// Parse Redis URL
+	redisOpt, err := redis.ParseURL(metaUrl)
+	if err != nil {
+		// Fallback to treating it as an address
+		redisOpt = &redis.Options{
+			Addr: metaUrl,
+		}
+	}
 
-	stor := cfg.Storage
-	if stor == nil {
-		stor = storage.NewMemoryStorage()
+	rdb := redis.NewClient(redisOpt)
+
+	// Apply options
+	option := &Option{}
+	for _, opt := range opts {
+		opt(option)
 	}
 
 	writer := index.NewWriter(rdb)
 	reader := index.NewReader(rdb)
 	merger := merge.NewEngine()
-	snapMgr := snapshot.NewManager(stor, reader, writer, merger)
+	configMgr := config.NewManager(rdb)
 
-	return &Client{
-		storage:   stor,
+	client := &Client{
+		rdb:       rdb,
 		writer:    writer,
 		reader:    reader,
 		merger:    merger,
-		snapMgr:   snapMgr,
-		rdb:       rdb,
-		configMgr: config.NewManager(rdb),
+		configMgr: configMgr,
+		storage:   option.Storage, // May be nil, will be loaded lazily
 	}
+
+	return client
+}
+
+// ensureInitialized ensures storage and snapMgr are initialized
+// Loads config from Redis if not already loaded
+func (c *Client) ensureInitialized(ctx context.Context) error {
+	c.mu.RLock()
+	if c.storage != nil && c.snapMgr != nil {
+		c.mu.RUnlock()
+		return nil
+	}
+	c.mu.RUnlock()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Double-check after acquiring write lock
+	if c.storage != nil && c.snapMgr != nil {
+		return nil
+	}
+
+	// Load config from Redis if not provided
+	if c.storage == nil {
+		if c.config == nil {
+			cfg, err := c.configMgr.Load(ctx)
+			if err != nil {
+				// Fallback to memory storage if config not found
+				c.storage = storage.NewMemoryStorage()
+				c.config = config.DefaultConfig()
+			} else {
+				c.config = cfg
+				stor, err := cfg.CreateStorage()
+				if err != nil {
+					// Fallback to memory storage
+					c.storage = storage.NewMemoryStorage()
+				} else {
+					c.storage = stor
+				}
+			}
+		}
+	}
+
+	// Initialize snapshot manager
+	if c.snapMgr == nil {
+		c.snapMgr = snapshot.NewManager(c.storage, c.reader, c.writer, c.merger)
+	}
+
+	return nil
 }
 
 // WriteRequest represents a write request
@@ -69,6 +130,11 @@ type WriteRequest struct {
 
 // Write writes data to the catalog
 func (c *Client) Write(ctx context.Context, req WriteRequest) error {
+	// Ensure initialized before operation
+	if err := c.ensureInitialized(ctx); err != nil {
+		return err
+	}
+
 	// Generate UUID
 	docUUID := uuid.New().String()
 
@@ -105,13 +171,18 @@ type ReadRequest struct {
 
 // ReadResult represents the read result
 type ReadResult struct {
-	Data     map[string]any     // Merged JSON data
-	Snapshot *snapshot.Snapshot // Snapshot info (if generated or used)
-	Entries  []index.ReadResult // Raw entries (for debugging)
+	Data     map[string]any      // Merged JSON data
+	Snapshot *snapshot.Snapshot  // Snapshot info (if generated or used)
+	Entries  []index.ReadResult  // Raw entries (for debugging)
 }
 
 // Read reads and merges data from the catalog
 func (c *Client) Read(ctx context.Context, req ReadRequest) (*ReadResult, error) {
+	// Ensure initialized before operation
+	if err := c.ensureInitialized(ctx); err != nil {
+		return nil, err
+	}
+
 	// Try to get existing snapshot
 	snap, err := c.snapMgr.GetLatest(ctx, req.Catalog, false)
 	if err != nil {
@@ -124,7 +195,7 @@ func (c *Client) Read(ctx context.Context, req ReadRequest) (*ReadResult, error)
 	if snap != nil {
 		// Start from snapshot
 		baseData = snap.Data
-
+		
 		// Read incremental data since snapshot
 		entries, err = c.reader.ReadSince(ctx, req.Catalog, snap.Timestamp)
 		if err != nil {
@@ -177,4 +248,41 @@ func (c *Client) Read(ctx context.Context, req ReadRequest) (*ReadResult, error)
 	}
 
 	return result, nil
+}
+
+// GetConfig returns the current config (loads from Redis if needed)
+func (c *Client) GetConfig(ctx context.Context) (*config.Config, error) {
+	c.mu.RLock()
+	if c.config != nil {
+		cfg := c.config
+		c.mu.RUnlock()
+		return cfg, nil
+	}
+	c.mu.RUnlock()
+
+	// Load config
+	cfg, err := c.configMgr.Load(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	c.mu.Lock()
+	c.config = cfg
+	c.mu.Unlock()
+
+	return cfg, nil
+}
+
+// UpdateConfig updates the config in Redis
+func (c *Client) UpdateConfig(ctx context.Context, cfg *config.Config) error {
+	if err := c.configMgr.Save(ctx, cfg); err != nil {
+		return err
+	}
+
+	// Update cached config
+	c.mu.Lock()
+	c.config = cfg
+	c.mu.Unlock()
+
+	return nil
 }

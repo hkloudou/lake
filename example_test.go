@@ -9,15 +9,12 @@ import (
 )
 
 func TestBasicUsage(t *testing.T) {
-	// Create client with in-memory storage (for testing)
-	client := lake.New(lake.Config{
-		RedisAddr: "localhost:6379",
-		Storage:   nil, // Uses MemoryStorage
-	})
+	// Create client - no error returned, initialization is lazy
+	client := lake.NewLake("redis://localhost:6379")
 
 	ctx := context.Background()
 
-	// Write some data
+	// Write some data (config loaded automatically on first operation)
 	err := client.Write(ctx, lake.WriteRequest{
 		Catalog: "users",
 		Field:   "profile.name",
@@ -49,5 +46,23 @@ func TestBasicUsage(t *testing.T) {
 	fmt.Printf("Number of entries: %d\n", len(result.Entries))
 	if result.Snapshot != nil {
 		fmt.Printf("Snapshot UUID: %s\n", result.Snapshot.UUID)
+	}
+}
+
+func TestWithCustomStorage(t *testing.T) {
+	// Can provide custom storage via options
+	client := lake.NewLake("localhost:6379", func(opt *lake.Option) {
+		// opt.Storage = myCustomStorage
+	})
+
+	ctx := context.Background()
+
+	err := client.Write(ctx, lake.WriteRequest{
+		Catalog: "test",
+		Field:   "data",
+		Value:   "hello",
+	})
+	if err != nil {
+		t.Fatalf("Write failed: %v", err)
 	}
 }
