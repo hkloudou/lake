@@ -28,28 +28,22 @@ func (w *Writer) SetPrefix(prefix string) {
 	w.prefix = prefix
 }
 
+func (w *Writer) GetTimeSeqID(ctx context.Context, catalog string) (TimeSeqID, error) {
+	return w.timeGen.Generate(ctx, catalog)
+}
+
 // AddWithTimeSeq adds an entry to the catalog index with auto-generated time+seqid
 // Returns the generated TimeSeqID
-func (w *Writer) AddWithTimeSeq(ctx context.Context, catalog, field string, mergeType MergeType) (TimeSeqID, error) {
+func (w *Writer) AddWithTimeSeq(ctx context.Context, tsSeq TimeSeqID, catalog, field string, mergeType MergeType) error {
 	// Generate timestamp + seqid from Redis
-	tsSeq, err := w.timeGen.Generate(ctx, catalog)
-	if err != nil {
-		return TimeSeqID{}, fmt.Errorf("failed to generate time+seqid: %w", err)
-	}
 
 	key := w.makeCatalogKey(catalog)
 	member := EncodeMember(field, tsSeq.String(), mergeType)
 
-	err = w.rdb.ZAdd(ctx, key, redis.Z{
+	return w.rdb.ZAdd(ctx, key, redis.Z{
 		Score:  tsSeq.Score(),
 		Member: member,
 	}).Err()
-
-	if err != nil {
-		return TimeSeqID{}, err
-	}
-
-	return tsSeq, nil
 }
 
 // Add adds an entry to the catalog index (legacy - for backward compatibility)

@@ -12,6 +12,7 @@ type MergeType int
 const (
 	MergeTypeReplace MergeType = 0 // Replace existing value
 	MergeTypeMerge   MergeType = 1 // Merge with existing value
+	MergeTypeRFC6902 MergeType = 2 // RFC 6902 merge
 )
 
 // String returns the string representation
@@ -31,7 +32,8 @@ func MergeTypeFromInt(i int) MergeType {
 	if i == 1 {
 		return MergeTypeMerge
 	}
-	return MergeTypeReplace
+
+	return MergeType(i)
 }
 
 // EncodeMember encodes field, tsSeqID, and mergeType into Redis ZADD member format

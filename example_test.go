@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/hkloudou/lake/v2"
+	"github.com/hkloudou/lake/v2/internal/index"
 	"github.com/hkloudou/lake/v2/internal/storage"
 )
 
@@ -73,6 +74,39 @@ func TestWithCustomStorage(t *testing.T) {
 	}
 }
 
+func TestWriteRFC6902(t *testing.T) {
+	client := lake.NewLake("redis://lake-redis-master.cs:6379/2")
+	ctx := context.Background()
+	catalog := "test_rfc6902"
+
+	// RFC6902 with auto-creation of missing parent paths
+	// The system will automatically create /a and /a/b when adding /a/b/c
+	reqJSON := []byte(`[
+		{ "op": "add", "path": "/a/b/c", "value": {"name": "John", "age": 30} },
+		{ "op": "replace", "path": "/a/b/c", "value": 42 },
+		{ "op": "move", "from": "/a/b/c", "path": "/a/b/d" },
+		{ "op": "copy", "from": "/a/b/d", "path": "/a/b/e" }
+	]`)
+	_, err := client.WriteRFC6902(ctx, catalog, reqJSON)
+	if err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+	t.Log("✓ Wrote RFC6902 (parent paths auto-created)")
+
+	// Verify the data
+	result, err := client.List(ctx, catalog)
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+
+	data, err := lake.ReadMap(ctx, result)
+	if err != nil {
+		t.Fatalf("ReadMap failed: %v", err)
+	}
+
+	t.Logf("Final data: %+v", data)
+}
+
 func TestWriteData(t *testing.T) {
 	// Test writing data with real Redis config
 	client := lake.NewLake("redis://lake-redis-master.cs:6379/2")
@@ -89,16 +123,18 @@ func TestWriteData(t *testing.T) {
 		Catalog:   catalog,
 		Field:     "user.name",
 		Value:     "Alice3",
-		MergeType: 0, // Replace
+		MergeType: index.MergeTypeReplace, // Replace
 	})
 	if err != nil {
 		t.Fatalf("Write user.name failed: %v", err)
 	}
 	_, err = client.Write(ctx, lake.WriteRequest{
-		Catalog:   catalog,
-		Field:     "user.name",
-		Value:     "Alice4",
-		MergeType: 0, // Replace
+		Catalog: catalog,
+		Field:   "user",
+		Value: map[string]any{
+			"xx": "yy",
+		},
+		MergeType: index.MergeTypeMerge, // Replace
 	})
 	if err != nil {
 		t.Fatalf("Write user.name failed: %v", err)
@@ -183,7 +219,6 @@ func TestList(t *testing.T) {
 	// 	}
 	// }
 }
-
 func TestRead(t *testing.T) {
 	// Test reading data with real Redis config
 	client := lake.NewLake("redis://lake-redis-master.cs:6379/2")
@@ -290,3 +325,5 @@ func TestRead(t *testing.T) {
 // 	t.Logf("Config to set: %+v", cfg)
 // 	t.Log("Run manually: redis-cli SET lake.setting '{...}'")
 // }
+
+// func Test
