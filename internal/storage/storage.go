@@ -3,6 +3,8 @@ package storage
 import (
 	"context"
 	"fmt"
+
+	"github.com/hkloudou/lake/v2/internal/index"
 )
 
 // Storage is the interface for object storage (OSS/S3/Local)
@@ -43,13 +45,13 @@ func MakeKey(catalog, identifier string) string {
 
 // MakeDataKey generates storage key for data files
 // Format: catalog/{ts}_{seqid}_{mergeTypeInt}.json
-func MakeDataKey(catalog, tsSeqID string, mergeType int) string {
-	return fmt.Sprintf("%s/%s_%d.json", catalog, tsSeqID, mergeType)
+func MakeDataKey(catalog string, tsSeqID index.TimeSeqID, mergeType int) string {
+	return fmt.Sprintf("%s/%s_%d.json", catalog, tsSeqID.String(), mergeType)
 }
 
 // MakeSnapKey generates storage key for snapshot files
 // Format: catalog/snap/{startTsSeq}~{stopTsSeq}.snap
 // Example: users/snap/1700000000_1~1700000100_500.snap
-func MakeSnapKey(catalog, startTsSeq, stopTsSeq string) string {
-	return fmt.Sprintf("%s/snap/%s~%s.snap", catalog, startTsSeq, stopTsSeq)
+func MakeSnapKey(catalog string, startTsSeq, stopTsSeq index.TimeSeqID) string {
+	return fmt.Sprintf("%s/snap/%s~%s.snap", catalog, startTsSeq.String(), stopTsSeq.String())
 }

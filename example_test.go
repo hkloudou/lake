@@ -50,9 +50,9 @@ func TestBasicUsage(t *testing.T) {
 
 	fmt.Printf("Merged data: %+v\n", result.Data)
 	fmt.Printf("Number of entries: %d\n", len(result.Entries))
-	if result.Snapshot != nil {
-		fmt.Printf("Snapshot UUID: %s\n", result.Snapshot.UUID)
-	}
+	// if result.Snapshot != nil {
+	// 	fmt.Printf("Snapshot UUID: %s\n", result.Snapshot.UUID)
+	// }
 }
 
 func TestWithCustomStorage(t *testing.T) {
@@ -89,7 +89,16 @@ func TestWriteData(t *testing.T) {
 	_, err = client.Write(ctx, lake.WriteRequest{
 		Catalog:   catalog,
 		Field:     "user.name",
-		Value:     "Alice2",
+		Value:     "Alice3",
+		MergeType: 0, // Replace
+	})
+	if err != nil {
+		t.Fatalf("Write user.name failed: %v", err)
+	}
+	_, err = client.Write(ctx, lake.WriteRequest{
+		Catalog:   catalog,
+		Field:     "user.name",
+		Value:     "Alice4",
 		MergeType: 0, // Replace
 	})
 	if err != nil {
@@ -145,9 +154,10 @@ func TestReadStorage(t *testing.T) {
 	t.Logf("  Data: %+v", result.Data)
 	// t.Logf("  Snapshot: %v", result.Snapshot != nil)
 	if result.Snapshot != nil {
-		t.Logf("  Snapshot UUID: %s", result.Snapshot.UUID)
-		t.Logf("  Snapshot Timestamp: %d", result.Snapshot.Timestamp)
-		t.Logf("  Snapshot Data: %+v", result.Snapshot.Data)
+		// t.Logf("  Snapshot UUID: %s", result.Snapshot.UUID)
+		// t.Logf("  Snapshot Timestamp: %d", result.Snapshot.Timestamp)
+		t.Logf("  Snapshot StartTsSeq: %s", result.Snapshot.StartTsSeq)
+		t.Logf("  Snapshot StopTsSeq: %s", result.Snapshot.StopTsSeq)
 	} else {
 		t.Log("No snapshot found")
 	}

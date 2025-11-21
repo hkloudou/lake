@@ -68,7 +68,7 @@ func (w *Writer) Add(ctx context.Context, catalog, field, uuid string, timestamp
 // startTsSeq: start time sequence (e.g., "1700000000_1" or "0_0" for first snap)
 // stopTsSeq: stop time sequence (e.g., "1700000100_500")
 // score: the score for Redis ZADD (typically parsed from stopTsSeq)
-func (w *Writer) AddSnap(ctx context.Context, catalog, startTsSeq, stopTsSeq string, score float64) error {
+func (w *Writer) AddSnap(ctx context.Context, catalog string, startTsSeq, stopTsSeq TimeSeqID, score float64) error {
 	key := w.makeSnapKey(catalog)
 	member := EncodeSnapMember(startTsSeq, stopTsSeq)
 

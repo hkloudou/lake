@@ -67,14 +67,14 @@ func TestDecodeMember(t *testing.T) {
 func TestSnapMember(t *testing.T) {
 	tests := []struct {
 		name        string
-		startTsSeq  string
-		stopTsSeq   string
+		startTsSeq  TimeSeqID
+		stopTsSeq   TimeSeqID
 		expected    string
 		expectError bool
 	}{
-		{"normal", "1700000000_1", "1700000100_500", "snap|1700000000_1|1700000100_500", false},
-		{"first snap", "0_0", "1700000100_500", "snap|0_0|1700000100_500", false},
-		{"consecutive", "1700000100_500", "1700000200_999", "snap|1700000100_500|1700000200_999", false},
+		{"normal", TimeSeqID{1700000000, 1}, TimeSeqID{1700000100, 500}, "snap|1700000000_1|1700000100_500", false},
+		{"first snap", TimeSeqID{0, 0}, TimeSeqID{1700000100, 500}, "snap|0_0|1700000100_500", false},
+		{"consecutive", TimeSeqID{1700000100, 500}, TimeSeqID{1700000200, 999}, "snap|1700000100_500|1700000200_999", false},
 	}
 
 	for _, tt := range tests {
@@ -82,7 +82,7 @@ func TestSnapMember(t *testing.T) {
 			// Encode
 			encoded := EncodeSnapMember(tt.startTsSeq, tt.stopTsSeq)
 			if encoded != tt.expected {
-				t.Errorf("EncodeSnapMember(%q, %q) = %q, want %q",
+				t.Errorf("EncodeSnapMember(%v, %v) = %q, want %q",
 					tt.startTsSeq, tt.stopTsSeq, encoded, tt.expected)
 			}
 
@@ -97,11 +97,11 @@ func TestSnapMember(t *testing.T) {
 				t.Errorf("DecodeSnapMember(%q) unexpected error: %v", encoded, err)
 			}
 			if decodedStart != tt.startTsSeq {
-				t.Errorf("DecodeSnapMember(%q) start = %q, want %q",
+				t.Errorf("DecodeSnapMember(%q) start = %v, want %v",
 					encoded, decodedStart, tt.startTsSeq)
 			}
 			if decodedStop != tt.stopTsSeq {
-				t.Errorf("DecodeSnapMember(%q) stop = %q, want %q",
+				t.Errorf("DecodeSnapMember(%q) stop = %v, want %v",
 					encoded, decodedStop, tt.stopTsSeq)
 			}
 		})

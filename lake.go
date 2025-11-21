@@ -160,7 +160,7 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 	if c.storage == nil {
 		return nil, fmt.Errorf("storage not initialized")
 	}
-	key := storage.MakeDataKey(req.Catalog, tsSeq.String(), int(req.MergeType))
+	key := storage.MakeDataKey(req.Catalog, tsSeq, int(req.MergeType))
 	if err := c.storage.Put(ctx, key, data); err != nil {
 		// Rollback: remove from Redis index (best effort)
 		// TODO: implement proper rollback mechanism
@@ -193,7 +193,7 @@ func (c *Client) mergeEntries(ctx context.Context, catalog string, baseData map[
 	merged := baseData
 	for _, entry := range entries {
 		// Read JSON from storage using new filename format
-		key := storage.MakeDataKey(catalog, entry.TsSeqID, int(entry.MergeType))
+		key := storage.MakeDataKey(catalog, entry.TsSeq, int(entry.MergeType))
 		data, err := c.storage.Get(ctx, key)
 		if err != nil {
 			continue // Skip missing data
@@ -246,10 +246,10 @@ func (c *Client) Read(ctx context.Context, req ReadRequest) (*ReadResult, error)
 	if snap != nil {
 		// With snapshot: read all entries in the time range [0, stopTsSeq]
 		// and incremental entries after stopTsSeq
-		tsSeq, err := index.ParseTimeSeqID(snap.StopTsSeq)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse snapshot stopTsSeq: %w", err)
-		}
+		// tsSeq, err := index.ParseTimeSeqID(snap.StopTsSeq)
+		// if err != nil {
+		// 	return nil, fmt.Errorf("failed to parse snapshot stopTsSeq: %w", err)
+		// }
 
 		// Read all entries (will merge all data from scratch)
 		allEntries, err = c.reader.ReadAll(ctx, req.Catalog)
@@ -259,7 +259,7 @@ func (c *Client) Read(ctx context.Context, req ReadRequest) (*ReadResult, error)
 
 		// TODO: Optimize by reading snapshot data range + incremental
 		// For now, we rebuild from all entries
-		_ = tsSeq
+		// _ = tsSeq
 	} else {
 		// No snapshot, read all
 		allEntries, err = c.reader.ReadAll(ctx, req.Catalog)
@@ -287,30 +287,25 @@ func (c *Client) Read(ctx context.Context, req ReadRequest) (*ReadResult, error)
 	// Generate snapshot if requested
 	if req.GenerateSnap && len(allEntries) > 0 {
 		// Determine startTsSeq and stopTsSeq
-		var startTsSeq string
+		var startTsSeq index.TimeSeqID
 		if snap != nil {
 			// Continue from previous snapshot
 			startTsSeq = snap.StopTsSeq
-		} else {
-			// First snapshot, start from 0_0
-			startTsSeq = "0_0"
 		}
 
 		// Use the last entry's TsSeqID as stop point
 		lastEntry := allEntries[len(allEntries)-1]
-		stopTsSeq := lastEntry.TsSeqID
+		// stopTsSeq, err := index.ParseTimeSeqID()
+		// if err != nil {
+		// 	return nil, fmt.Errorf("failed to parse last entry TsSeqID: %w", err)
+		// }
 
-		// Parse score from stopTsSeq
-		tsSeq, err := index.ParseTimeSeqID(stopTsSeq)
+		// score := tsSeq.Score()
+
+		// Save snapshot metadata (time range only, no data)
+		newSnap, err := c.snapMgr.Save(ctx, req.Catalog, startTsSeq, lastEntry.TsSeq, lastEntry.TsSeq.Score())
 		if err == nil {
-			score := tsSeq.Score()
-
-			// Save snapshot metadata (time range only, no data)
-			newSnap, err := c.snapMgr.Save(ctx, req.Catalog, startTsSeq, stopTsSeq, score)
-			if err == nil {
-				result.Snapshot = newSnap
-			}
-			// Ignore error, not critical
+			result.Snapshot = newSnap
 		}
 	}
 

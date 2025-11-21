@@ -80,23 +80,31 @@ func DecodeMember(member string) (field, tsSeqID string, mergeType MergeType, er
 // Format: "snap|{startTsSeq}|{stopTsSeq}"
 // Example: "snap|1700000000_1|1700000100_500"
 // If no previous snap (first snap): "snap|0_0|1700000100_500"
-func EncodeSnapMember(startTsSeq, stopTsSeq string) string {
+func EncodeSnapMember(startTsSeq, stopTsSeq TimeSeqID) string {
 	return fmt.Sprintf("snap|%s|%s", startTsSeq, stopTsSeq)
 }
 
 // DecodeSnapMember decodes snapshot member and returns start and stop tsSeqID
-func DecodeSnapMember(member string) (startTsSeq, stopTsSeq string, err error) {
+func DecodeSnapMember(member string) (startTsSeq, stopTsSeq TimeSeqID, err error) {
 	// Split by "|" delimiter
 	parts := strings.Split(member, "|")
 	if len(parts) != 3 {
-		return "", "", fmt.Errorf("invalid snap member format (expected 3 parts): %s", member)
+		return TimeSeqID{}, TimeSeqID{}, fmt.Errorf("invalid snap member format (expected 3 parts): %s", member)
 	}
 
 	if parts[0] != "snap" {
-		return "", "", fmt.Errorf("invalid snap member prefix (expected 'snap'): %s", parts[0])
+		return TimeSeqID{}, TimeSeqID{}, fmt.Errorf("invalid snap member prefix (expected 'snap'): %s", parts[0])
+	}
+	startTsSeq, err = ParseTimeSeqID(parts[1])
+	if err != nil {
+		return TimeSeqID{}, TimeSeqID{}, fmt.Errorf("failed to parse start tsSeqID: %w", err)
+	}
+	stopTsSeq, err = ParseTimeSeqID(parts[2])
+	if err != nil {
+		return TimeSeqID{}, TimeSeqID{}, fmt.Errorf("failed to parse stop tsSeqID: %w", err)
 	}
 
-	return parts[1], parts[2], nil
+	return startTsSeq, stopTsSeq, nil
 }
 
 // IsSnapMember checks if member is a snapshot member

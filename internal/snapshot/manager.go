@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/hkloudou/lake/v2/internal/index"
 	"github.com/hkloudou/lake/v2/internal/storage"
 	"github.com/hkloudou/lake/v2/internal/xsync"
@@ -36,11 +35,11 @@ func NewManager(
 
 // Snapshot represents a snapshot (time range only, no data)
 type Snapshot struct {
-	UUID       string `json:"uuid"`
-	Catalog    string `json:"catalog"`
-	StartTsSeq string `json:"start_ts_seq"` // Start time sequence
-	StopTsSeq  string `json:"stop_ts_seq"`  // Stop time sequence
-	Timestamp  int64  `json:"timestamp"`    // For backward compatibility (score)
+	// UUID       string          `json:"uuid"`
+	Catalog    string          `json:"catalog"`
+	StartTsSeq index.TimeSeqID `json:"start_ts_seq"` // Start time sequence
+	StopTsSeq  index.TimeSeqID `json:"stop_ts_seq"`  // Stop time sequence
+	Score      float64         `json:"score"`        // For backward compatibility (score)
 }
 
 // Save saves a snapshot metadata with the given time range
@@ -49,33 +48,33 @@ type Snapshot struct {
 // startTsSeq: the start time sequence (format: "ts_seqid")
 // stopTsSeq: the stop time sequence (format: "ts_seqid")
 // score: the Redis score for the snapshot (must match stopTsSeq)
-func (m *Manager) Save(ctx context.Context, catalog, startTsSeq, stopTsSeq string, score float64) (*Snapshot, error) {
+func (m *Manager) Save(ctx context.Context, catalog string, startTsSeq, stopTsSeq index.TimeSeqID, score float64) (*Snapshot, error) {
 	return m.flight.Do(catalog, func() (*Snapshot, error) {
 		return m.save(ctx, catalog, startTsSeq, stopTsSeq, score)
 	})
 }
 
-func (m *Manager) save(ctx context.Context, catalog, startTsSeq, stopTsSeq string, score float64) (*Snapshot, error) {
+func (m *Manager) save(ctx context.Context, catalog string, startTsSeq, stopTsSeq index.TimeSeqID, score float64) (*Snapshot, error) {
 	// Validate: stopTsSeq and score must match
-	tsSeq, err := index.ParseTimeSeqID(stopTsSeq)
-	if err != nil {
-		return nil, fmt.Errorf("invalid stopTsSeq format: %w", err)
-	}
-	expectedScore := tsSeq.Score()
+	// tsSeq, err := index.ParseTimeSeqID(stopTsSeq)
+	// if err != nil {
+	// 	return nil, fmt.Errorf("invalid stopTsSeq format: %w", err)
+	// }
+	expectedScore := stopTsSeq.Score()
 	if score != expectedScore {
 		return nil, fmt.Errorf("score mismatch: got %f, expected %f from stopTsSeq %s",
 			score, expectedScore, stopTsSeq)
 	}
 
 	// Create snapshot metadata (no data stored)
-	snapUUID := uuid.New().String()
+	// snapUUID := uuid.New().String()
 
 	snap := &Snapshot{
-		UUID:       snapUUID,
+		// UUID:       snapUUID,
 		Catalog:    catalog,
 		StartTsSeq: startTsSeq,
 		StopTsSeq:  stopTsSeq,
-		Timestamp:  int64(score), // For backward compatibility
+		Score:      score, // For backward compatibility
 	}
 
 	// Save snapshot metadata to storage
@@ -109,15 +108,15 @@ func (m *Manager) GetLatest(ctx context.Context, catalog string, _ bool) (*Snaps
 
 	// If snapshot exists, load metadata
 	if snapInfo != nil {
-		snap, err := m.loadSnapshot(ctx, catalog, snapInfo.StartTsSeq, snapInfo.StopTsSeq)
-		if err == nil {
-			return snap, nil
-		}
+		// snap, err := m.loadSnapshot(ctx, catalog, snapInfo.StartTsSeq, snapInfo.StopTsSeq)
+		// if err == nil {
+		// 	return snap, nil
+		// }
 		// If load fails, return the info we have from Redis
 		return &Snapshot{
 			StartTsSeq: snapInfo.StartTsSeq,
 			StopTsSeq:  snapInfo.StopTsSeq,
-			Timestamp:  snapInfo.Timestamp,
+			Score:      snapInfo.Score,
 		}, nil
 	}
 
@@ -127,7 +126,7 @@ func (m *Manager) GetLatest(ctx context.Context, catalog string, _ bool) (*Snaps
 
 // loadSnapshot loads snapshot using time range
 // filename: catalog/{startTsSeq}~{stopTsSeq}.snap
-func (m *Manager) loadSnapshot(ctx context.Context, catalog, startTsSeq, stopTsSeq string) (*Snapshot, error) {
+func (m *Manager) loadSnapshot(ctx context.Context, catalog string, startTsSeq, stopTsSeq index.TimeSeqID) (*Snapshot, error) {
 	key := storage.MakeSnapKey(catalog, startTsSeq, stopTsSeq)
 	data, err := m.storage.Get(ctx, key)
 	if err != nil {
