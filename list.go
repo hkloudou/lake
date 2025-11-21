@@ -10,6 +10,8 @@ import (
 // ReadResult represents the read result
 type ListResult struct {
 	// Data       map[string]any     // Merged JSON data
+	client     *Client          // Client instance
+	catalog    string           // Catalog name
 	LatestSnap *index.SnapInfo  // Snapshot info (if generated or used)
 	Entries    []index.DataInfo // Raw entries (for debugging)
 }
@@ -24,8 +26,10 @@ func (m ListResult) Dump() string {
 	if m.LatestSnap != nil {
 		output.WriteString(fmt.Sprintf("Latest Snapshot:\n"))
 		output.WriteString(m.LatestSnap.Dump())
-		output.WriteString(fmt.Sprintf("Next Snapshot:\n"))
-		output.WriteString(m.NextSnap().Dump())
+		if m.HasNextSnap() {
+			output.WriteString(fmt.Sprintf("Next Snapshot:\n"))
+			output.WriteString(m.NextSnap().Dump())
+		}
 	} else {
 		output.WriteString("No snapshot found\n")
 	}
@@ -51,18 +55,22 @@ func (m ListResult) Dump() string {
 	return output.String()
 }
 
+func (m ListResult) HasNextSnap() bool {
+	return len(m.Entries) > 0
+}
+
 func (m ListResult) NextSnap() index.SnapInfo {
 	if m.LatestSnap == nil {
 		return index.SnapInfo{
 			StartTsSeq: index.TimeSeqID{Timestamp: 0, SeqID: 0},
 			StopTsSeq:  m.Entries[len(m.Entries)-1].TsSeq,
-			Score:      m.Entries[len(m.Entries)-1].TsSeq.Score(),
+			// Score:      m.Entries[len(m.Entries)-1].TsSeq.Score(),
 		}
 	}
 
 	return index.SnapInfo{
 		StartTsSeq: m.LatestSnap.StopTsSeq,
 		StopTsSeq:  m.Entries[len(m.Entries)-1].TsSeq,
-		Score:      m.Entries[len(m.Entries)-1].TsSeq.Score(),
+		// Score:      m.Entries[len(m.Entries)-1].TsSeq.Score(),
 	}
 }

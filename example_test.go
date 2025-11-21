@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/hkloudou/lake/v2"
-	"github.com/hkloudou/lake/v2/internal/config"
 	"github.com/hkloudou/lake/v2/internal/storage"
 )
 
@@ -185,51 +184,109 @@ func TestList(t *testing.T) {
 	// }
 }
 
-func TestConfigRequired(t *testing.T) {
-	// This test verifies that client fails without proper config
-	client := lake.NewLake("redis://localhost:6379/15") // Empty test DB
-
+func TestRead(t *testing.T) {
+	// Test reading data with real Redis config
+	client := lake.NewLake("redis://lake-redis-master.cs:6379/2")
 	ctx := context.Background()
-
-	// Try to write without config - should fail
-	_, err := client.Write(ctx, lake.WriteRequest{
-		Catalog:   "test",
-		Field:     "data",
-		Value:     "value",
-		MergeType: 0, // Replace
-	})
-
-	if err == nil {
-		t.Error("Expected error when config is missing, got nil")
-	} else {
-		t.Logf("Correctly failed with: %v", err)
+	catalog := "test"
+	// Read the data
+	t.Log("Reading data...")
+	result, err := client.List(ctx, catalog)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
 	}
-}
-
-func TestSetupConfig(t *testing.T) {
-	// Helper test to setup config in Redis
-	t.Skip("Manual test - run only when needed to setup config")
-
-	_ = lake.NewLake("redis://lake-redis-master.cs:6379/2", func(opt *lake.Option) {
-		opt.Storage = storage.NewMemoryStorage() // Temporary for setup
-	})
-
-	_ = context.Background()
-
-	cfg := &config.Config{
-		Name:      "cs-lake",
-		Storage:   "oss",
-		Bucket:    "cs-lake",
-		Endpoint:  "oss-cn-hangzhou",
-		AccessKey: "your-access-key",
-		SecretKey: "your-secret-key",
+	t.Logf("Read result:")
+	// t.Logf("  Entries count: %d", len(result.Entries))
+	// t.Logf("  Latest Snap: %+v", result.LatestSnap != nil)
+	fmt.Println(result.Dump())
+	// t.Log()
+	data, err := lake.ReadMap(ctx, result)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
 	}
 
-	// This would fail because UpdateConfig is commented out
-	// err := client.UpdateConfig(ctx, cfg)
-	// For now, set manually in Redis:
-	// redis-cli SET lake.setting '{"Name":"cs-lake","Storage":"oss","Bucket":"cs-lake",...}'
+	t.Logf("Read data: %s", data)
+	// t.Logf("  Snapshot: %v", result.Snapshot != nil)
+	// if result.LatestSnap != nil {
+	// 	// t.Logf("  Snapshot UUID: %s", result.Snapshot.UUID)
+	// 	// t.Logf("  Snapshot Timestamp: %d", result.Snapshot.Timestamp)
+	// 	t.Logf("  Snapshot StartTsSeq: %s", result.LatestSnap.StartTsSeq)
+	// 	t.Logf("  Snapshot StopTsSeq: %s", result.LatestSnap.StopTsSeq)
+	// } else {
+	// 	t.Log("No snapshot found")
+	// }
 
-	t.Logf("Config to set: %+v", cfg)
-	t.Log("Run manually: redis-cli SET lake.setting '{...}'")
+	// if len(result.Entries) == 0 {
+	// 	t.Log("No entries found - catalog may be empty")
+	// 	return
+	// }
+
+	// if len(result.Data) == 0 {
+	// 	t.Error("Expected data but got empty map")
+	// 	return
+	// }
+
+	// // Verify merged data structure if user data exists
+	// if user, ok := result.Data["user"].(map[string]any); ok {
+	// 	t.Logf("User data found: %+v", user)
+
+	// 	if name, ok := user["name"].(string); ok {
+	// 		t.Logf("  ✓ user.name = %s", name)
+	// 	}
+	// 	if age, ok := user["age"].(float64); ok {
+	// 		t.Logf("  ✓ user.age = %.0f", age)
+	// 	}
+	// 	if email, ok := user["email"].(string); ok {
+	// 		t.Logf("  ✓ user.email = %s", email)
+	// 	}
+	// }
 }
+
+// func TestConfigRequired(t *testing.T) {
+// 	// This test verifies that client fails without proper config
+// 	client := lake.NewLake("redis://localhost:6379/15") // Empty test DB
+
+// 	ctx := context.Background()
+
+// 	// Try to write without config - should fail
+// 	_, err := client.Write(ctx, lake.WriteRequest{
+// 		Catalog:   "test",
+// 		Field:     "data",
+// 		Value:     "value",
+// 		MergeType: 0, // Replace
+// 	})
+
+// 	if err == nil {
+// 		t.Error("Expected error when config is missing, got nil")
+// 	} else {
+// 		t.Logf("Correctly failed with: %v", err)
+// 	}
+// }
+
+// func TestSetupConfig(t *testing.T) {
+// 	// Helper test to setup config in Redis
+// 	t.Skip("Manual test - run only when needed to setup config")
+
+// 	_ = lake.NewLake("redis://lake-redis-master.cs:6379/2", func(opt *lake.Option) {
+// 		opt.Storage = storage.NewMemoryStorage() // Temporary for setup
+// 	})
+
+// 	_ = context.Background()
+
+// 	cfg := &config.Config{
+// 		Name:      "cs-lake",
+// 		Storage:   "oss",
+// 		Bucket:    "cs-lake",
+// 		Endpoint:  "oss-cn-hangzhou",
+// 		AccessKey: "your-access-key",
+// 		SecretKey: "your-secret-key",
+// 	}
+
+// 	// This would fail because UpdateConfig is commented out
+// 	// err := client.UpdateConfig(ctx, cfg)
+// 	// For now, set manually in Redis:
+// 	// redis-cli SET lake.setting '{"Name":"cs-lake","Storage":"oss","Bucket":"cs-lake",...}'
+
+// 	t.Logf("Config to set: %+v", cfg)
+// 	t.Log("Run manually: redis-cli SET lake.setting '{...}'")
+// }

@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"sync"
 
+	jsonpatch "github.com/evanphx/json-patch/v5"
 	"github.com/hkloudou/lake/v2/internal/config"
 	"github.com/hkloudou/lake/v2/internal/index"
 	"github.com/hkloudou/lake/v2/internal/merge"
 	"github.com/hkloudou/lake/v2/internal/snapshot"
 	"github.com/hkloudou/lake/v2/internal/storage"
 	"github.com/redis/go-redis/v9"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 // Client is the main interface for Lake v2
@@ -174,6 +177,34 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 	}, nil
 }
 
+func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error) {
+	// Ensure initialized before operation
+	if err := c.ensureInitialized(ctx); err != nil {
+		return nil, err
+	}
+	var baseData = []byte("{}")
+	if list.LatestSnap != nil {
+		key := storage.MakeSnapKey(list.catalog, list.LatestSnap.StartTsSeq, list.LatestSnap.StopTsSeq)
+		data, err := c.storage.Get(ctx, key)
+		if err != nil {
+			return nil, err
+		}
+		baseData = data
+	}
+	resultData, err := c.mergeEntries(ctx, list.catalog, baseData, list.Entries)
+	if err != nil {
+		return nil, err
+	}
+	if len(list.Entries) > 0 {
+		nextSnap := list.NextSnap()
+		_, err := list.client.snapMgr.Save(ctx, list.catalog, nextSnap.StartTsSeq, nextSnap.StopTsSeq, resultData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to save snapshot: %w", err)
+		}
+	}
+	return resultData, nil
+}
+
 // ReadRequest represents a read request
 // type ReadRequest struct {
 // 	Catalog      string // Catalog name
@@ -182,7 +213,7 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 
 // mergeEntries merges entries into baseData
 // This is the single source of truth for data merging
-func (c *Client) mergeEntries(ctx context.Context, catalog string, baseData map[string]any, entries []index.DataInfo) (map[string]any, error) {
+func (c *Client) mergeEntries(ctx context.Context, catalog string, baseData []byte, entries []index.DataInfo) ([]byte, error) {
 	merged := baseData
 	for _, entry := range entries {
 		// Read JSON from storage using new filename format
@@ -192,26 +223,34 @@ func (c *Client) mergeEntries(ctx context.Context, catalog string, baseData map[
 			continue // Skip missing data
 		}
 
-		var value any
-		if err := json.Unmarshal(data, &value); err != nil {
-			continue // Skip invalid JSON
-		}
+		// var value any
+		// if err := json.Unmarshal(data, &value); err != nil {
+		// 	continue // Skip invalid JSON
+		// }
 
 		// Merge using the strategy from entry
 		// TODO: implement deep merge strategy for MergeTypeMerge
-		var strategy merge.Strategy
-		switch entry.MergeType {
-		case index.MergeTypeReplace:
-			strategy = merge.StrategySet // Replace: always overwrite
-		case index.MergeTypeMerge:
-			strategy = merge.StrategySet // Merge: for now, same as set (TODO: deep merge)
-		default:
-			strategy = merge.StrategySet
+		// var strategy merge.Strategy
+		mergaType := entry.MergeType
+		if mergaType == index.MergeTypeMerge {
+			// jsonpatch.me
+			mergedPatrh, err := jsonpatch.MergePatch([]byte(gjson.GetBytes(merged, entry.Field).Raw), data)
+			if err != nil {
+				return nil, fmt.Errorf("failed to merge patch: %w", err)
+			}
+			data = mergedPatrh
+			mergaType = index.MergeTypeReplace
 		}
 
-		merged, err = c.merger.Merge(merged, entry.Field, value, strategy)
-		if err != nil {
-			return nil, fmt.Errorf("failed to merge: %w", err)
+		switch mergaType {
+		case index.MergeTypeReplace:
+			merged, err = sjson.SetRawBytes([]byte(merged), entry.Field, data)
+			if err != nil {
+				return nil, fmt.Errorf("failed to set: %w", err)
+			}
+		default:
+			return nil, fmt.Errorf("unknown merge type: %d", entry.MergeType)
+			// strategy = merge.StrategySet
 		}
 	}
 	return merged, nil
@@ -245,6 +284,8 @@ func (c *Client) List(ctx context.Context, catalog string) (*ListResult, error) 
 		}
 	}
 	return &ListResult{
+		client:     c,
+		catalog:    catalog,
 		LatestSnap: snap,
 		Entries:    allEntries, // Return all entries for debugging
 	}, nil

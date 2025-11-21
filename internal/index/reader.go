@@ -18,7 +18,7 @@ type Reader struct {
 func NewReader(rdb *redis.Client) *Reader {
 	return &Reader{
 		rdb:    rdb,
-		prefix: "", // Will be set later via SetPrefix
+		prefix: "lake", // Will be set later via SetPrefix
 	}
 }
 
@@ -83,7 +83,7 @@ func (r *Reader) GetLatestSnap(ctx context.Context, catalog string) (*SnapInfo, 
 	return &SnapInfo{
 		StartTsSeq: startTsSeq,
 		StopTsSeq:  stopTsSeq,
-		Score:      results[0].Score,
+		// Score:      results[0].Score,
 	}, nil
 }
 
@@ -91,14 +91,14 @@ func (r *Reader) GetLatestSnap(ctx context.Context, catalog string) (*SnapInfo, 
 type SnapInfo struct {
 	StartTsSeq TimeSeqID // Start time sequence (e.g., "1700000000_1" or "0_0" for first snap)
 	StopTsSeq  TimeSeqID // Stop time sequence (e.g., "1700000100_500")
-	Score      float64   // Score in Redis (stopTsSeq's timestamp)
+	// Score      float64   // Score in Redis (stopTsSeq's timestamp)
 }
 
 func (m SnapInfo) Dump() string {
 	// fmt.Println(fmt.Sprintf("Snapshot:\n"))
 	var output strings.Builder
 	output.WriteString(fmt.Sprintf("  Time Range: %s ~ %s\n", m.StartTsSeq, m.StopTsSeq))
-	output.WriteString(fmt.Sprintf("  Score: %.6f\n", m.Score))
+	// output.WriteString(fmt.Sprintf("  Score: %.6f\n", m.Score))
 	return output.String()
 }
 

@@ -6,7 +6,7 @@ import "fmt"
 // Format: Storage:Name:data:$catalog (e.g., "oss:my-lake:data:users")
 func (r *Reader) makeCatalogKey(catalog string) string {
 	if r.prefix == "" {
-		return fmt.Sprintf("catalog:%s", catalog)
+		panic("prefix is not set")
 	}
 	return fmt.Sprintf("%s:data:%s", r.prefix, catalog)
 }
@@ -15,8 +15,7 @@ func (r *Reader) makeCatalogKey(catalog string) string {
 // Format: Storage:Name:snap:$catalog (e.g., "oss:my-lake:snap:users")
 func (r *Reader) makeSnapKey(catalog string) string {
 	if r.prefix == "" {
-		return fmt.Sprintf("catalog:%s:snap", catalog)
+		panic("prefix is not set")
 	}
 	return fmt.Sprintf("%s:snap:%s", r.prefix, catalog)
 }
-

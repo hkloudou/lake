@@ -16,7 +16,7 @@ type Manager struct {
 	storage storage.Storage
 	reader  *index.Reader
 	writer  *index.Writer
-	flight  xsync.SingleFlight[*Snapshot]
+	flight  xsync.SingleFlight[string]
 }
 
 // NewManager creates a new snapshot manager
@@ -29,7 +29,7 @@ func NewManager(
 		storage: storage,
 		reader:  reader,
 		writer:  writer,
-		flight:  xsync.NewSingleFlight[*Snapshot](),
+		flight:  xsync.NewSingleFlight[string](),
 	}
 }
 
@@ -48,53 +48,53 @@ type Snapshot struct {
 // startTsSeq: the start time sequence (format: "ts_seqid")
 // stopTsSeq: the stop time sequence (format: "ts_seqid")
 // score: the Redis score for the snapshot (must match stopTsSeq)
-func (m *Manager) Save(ctx context.Context, catalog string, startTsSeq, stopTsSeq index.TimeSeqID, score float64) (*Snapshot, error) {
-	return m.flight.Do(catalog, func() (*Snapshot, error) {
-		return m.save(ctx, catalog, startTsSeq, stopTsSeq, score)
+func (m *Manager) Save(ctx context.Context, catalog string, startTsSeq, stopTsSeq index.TimeSeqID, snapData []byte) (string, error) {
+	return m.flight.Do(catalog, func() (string, error) {
+		return m.save(ctx, catalog, startTsSeq, stopTsSeq, snapData)
 	})
 }
 
-func (m *Manager) save(ctx context.Context, catalog string, startTsSeq, stopTsSeq index.TimeSeqID, score float64) (*Snapshot, error) {
+func (m *Manager) save(ctx context.Context, catalog string, startTsSeq, stopTsSeq index.TimeSeqID, snapData []byte) (string, error) {
 	// Validate: stopTsSeq and score must match
 	// tsSeq, err := index.ParseTimeSeqID(stopTsSeq)
 	// if err != nil {
 	// 	return nil, fmt.Errorf("invalid stopTsSeq format: %w", err)
 	// }
-	expectedScore := stopTsSeq.Score()
-	if score != expectedScore {
-		return nil, fmt.Errorf("score mismatch: got %f, expected %f from stopTsSeq %s",
-			score, expectedScore, stopTsSeq)
-	}
+	// expectedScore := stopTsSeq.Score()
+	// if score != expectedScore {
+	// 	return nil, fmt.Errorf("score mismatch: got %f, expected %f from stopTsSeq %s",
+	// 		score, expectedScore, stopTsSeq)
+	// }
 
 	// Create snapshot metadata (no data stored)
 	// snapUUID := uuid.New().String()
 
-	snap := &Snapshot{
-		// UUID:       snapUUID,
-		Catalog:    catalog,
-		StartTsSeq: startTsSeq,
-		StopTsSeq:  stopTsSeq,
-		Score:      score, // For backward compatibility
-	}
+	// snap := &Snapshot{
+	// 	// UUID:       snapUUID,
+	// 	Catalog:    catalog,
+	// 	StartTsSeq: startTsSeq,
+	// 	StopTsSeq:  stopTsSeq,
+	// 	Score:      score, // For backward compatibility
+	// }
 
 	// Save snapshot metadata to storage
 	// Filename: catalog/snap/startTsSeq~stopTsSeq.snap
-	snapData, err := json.Marshal(snap)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal snapshot: %w", err)
-	}
+	// snapData, err := json.Marshal(snap)
+	// if err != nil {
+	// 	return nil, fmt.Errorf("failed to marshal snapshot: %w", err)
+	// }
 
 	snapKey := storage.MakeSnapKey(catalog, startTsSeq, stopTsSeq)
 	if err := m.storage.Put(ctx, snapKey, snapData); err != nil {
-		return nil, fmt.Errorf("failed to save snapshot: %w", err)
+		return "", fmt.Errorf("failed to save snapshot: %w", err)
 	}
 
 	// Add snapshot to index with time range
-	if err := m.writer.AddSnap(ctx, catalog, startTsSeq, stopTsSeq, score); err != nil {
-		return nil, fmt.Errorf("failed to add snapshot to index: %w", err)
+	if err := m.writer.AddSnap(ctx, catalog, startTsSeq, stopTsSeq); err != nil {
+		return "", fmt.Errorf("failed to add snapshot to index: %w", err)
 	}
 
-	return snap, nil
+	return snapKey, nil
 }
 
 // GetLatest gets the latest snapshot metadata
@@ -116,7 +116,7 @@ func (m *Manager) GetLatest(ctx context.Context, catalog string, _ bool) (*Snaps
 		return &Snapshot{
 			StartTsSeq: snapInfo.StartTsSeq,
 			StopTsSeq:  snapInfo.StopTsSeq,
-			Score:      snapInfo.Score,
+			// Score:      snapInfo.Score,
 		}, nil
 	}
 
