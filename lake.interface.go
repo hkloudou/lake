@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hkloudou/lake/internal/encrypt"
 	"github.com/hkloudou/xlib/threading"
 	"github.com/hkloudou/xlib/xcolor"
 	"github.com/hkloudou/xlib/xerror"
@@ -21,7 +22,7 @@ import (
 )
 
 func (m *lakeEngine) writeCryptOss(fullpath string, data []byte) error {
-	encoded, err := encrypt(data, []byte(m.meta.AESPwd))
+	encoded, err := encrypt.AesGcmEncrypt(data, []byte(m.meta.AESPwd))
 	if err != nil {
 		return err
 	}
@@ -46,7 +47,7 @@ func (m *lakeEngine) readCryptOSS(obj any, fullPath string) error {
 	if err != nil {
 		return err
 	}
-	decoded, err := decrypt(data, []byte(m.meta.AESPwd))
+	decoded, err := encrypt.AesGcmDecrypt(data, []byte(m.meta.AESPwd))
 	if err != nil {
 		return err
 	}

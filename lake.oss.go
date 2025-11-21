@@ -7,7 +7,7 @@ import (
 	"sync"
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
-	"github.com/hkloudou/xlib/xsync"
+	"github.com/hkloudou/lake/internal/xsync"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -126,7 +126,7 @@ func (m *lakeEngine) readMeta() error {
 			return obj, err
 		}
 		obj.location = location
-		// fmt.Println(obj.location)
+		fmt.Println(obj.location)
 		return obj, err
 	})
 	if err != nil {

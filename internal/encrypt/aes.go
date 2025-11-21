@@ -1,4 +1,4 @@
-package lake
+package encrypt
 
 import (
 	"crypto/aes"
@@ -7,7 +7,7 @@ import (
 	"io"
 )
 
-func encrypt(plaintext []byte, key []byte) (ciphertext []byte, err error) {
+func AesGcmEncrypt(plaintext []byte, key []byte) (ciphertext []byte, err error) {
 	paddedKey := padKey(key)
 	block, err := aes.NewCipher(paddedKey)
 	if err != nil {
@@ -28,7 +28,7 @@ func encrypt(plaintext []byte, key []byte) (ciphertext []byte, err error) {
 	return ciphertext, nil
 }
 
-func decrypt(ciphertext []byte, key []byte) (plaintext []byte, err error) {
+func AesGcmDecrypt(ciphertext []byte, key []byte) (plaintext []byte, err error) {
 	paddedKey := padKey(key)
 	block, err := aes.NewCipher(paddedKey)
 	if err != nil {
