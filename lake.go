@@ -91,28 +91,28 @@ func (c *Client) ensureInitialized(ctx context.Context) error {
 		return nil
 	}
 
-	// Load config from Redis if not provided
+	// Load config and initialize storage if not provided
 	if c.storage == nil {
+		// Load config from Redis if not already loaded
 		if c.config == nil {
-			// Load config from Redis
 			cfg, err := c.configMgr.Load(ctx)
 			if err != nil {
 				return fmt.Errorf("failed to load config from Redis (lake.setting): %w", err)
 			}
 			c.config = cfg
-
-			// Create storage from config - must succeed, no fallback
-			stor, err := cfg.CreateStorage()
-			if err != nil {
-				return fmt.Errorf("failed to create %s storage: %w", cfg.Storage, err)
-			}
-			c.storage = stor
-
-			// Set index prefix based on config: Storage:Name
-			prefix := fmt.Sprintf("%s:%s", cfg.Storage, cfg.Name)
-			c.writer.SetPrefix(prefix)
-			c.reader.SetPrefix(prefix)
 		}
+
+		// Create storage from config - must succeed, no fallback
+		stor, err := c.config.CreateStorage()
+		if err != nil {
+			return fmt.Errorf("failed to create %s storage: %w", c.config.Storage, err)
+		}
+		c.storage = stor
+
+		// Set index prefix based on config: Storage:Name
+		prefix := fmt.Sprintf("%s:%s", c.config.Storage, c.config.Name)
+		c.writer.SetPrefix(prefix)
+		c.reader.SetPrefix(prefix)
 	}
 
 	// Initialize snapshot manager
