@@ -48,7 +48,7 @@ import (
     "context"
     "fmt"
     
-    lake "github.com/hkloudou/lake/v2/pkg/client"
+    "github.com/hkloudou/lake/v2"
 )
 
 func main() {

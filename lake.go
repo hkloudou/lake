@@ -1,4 +1,4 @@
-package client
+package lake
 
 import (
 	"context"
@@ -195,7 +195,7 @@ func (c *Client) Read(ctx context.Context, req ReadRequest) (*ReadResult, error)
 	if snap != nil {
 		// Start from snapshot
 		baseData = snap.Data
-		
+
 		// Read incremental data since snapshot
 		entries, err = c.reader.ReadSince(ctx, req.Catalog, snap.Timestamp)
 		if err != nil {

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	lake "github.com/hkloudou/lake/v2/pkg/client"
+	"github.com/hkloudou/lake/v2"
 )
 
 func TestBasicUsage(t *testing.T) {
