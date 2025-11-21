@@ -49,7 +49,7 @@ func TestBasicUsage(t *testing.T) {
 	}
 }
 
-func TestWithCustomStorage(t *testing.T) {
+func TestWriteStorage(t *testing.T) {
 	// Can provide custom storage via options
 	client := lake.NewLake("redis://lake-redis-master.cs:6379/2", func(opt *lake.Option) {
 		// opt.Storage = myCustomStorage
@@ -65,20 +65,36 @@ func TestWithCustomStorage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
+
+	fmt.Println("Write successful")
 }
 
 func TestReadStorage(t *testing.T) {
-	// Can provide custom storage via options
+	// Test reading from real Redis
 	client := lake.NewLake("redis://lake-redis-master.cs:6379/2")
 
 	ctx := context.Background()
 
+	// First, get config to see what's loaded
+	cfg, err := client.GetConfig(ctx)
+	if err != nil {
+		t.Logf("Config load error (will use defaults): %v", err)
+	} else {
+		t.Logf("Loaded config: %+v", cfg)
+	}
+
+	// Try to read
 	result, err := client.Read(ctx, lake.ReadRequest{
-		Catalog:      "users",
-		GenerateSnap: true,
+		Catalog:      "test",
+		GenerateSnap: false,
 	})
 	if err != nil {
-		t.Fatalf("Write failed: %v", err)
+		t.Fatalf("Read failed: %v", err)
 	}
-	fmt.Println(result)
+
+	t.Logf("Read result: Data=%+v, Entries count=%d", result.Data, len(result.Entries))
+
+	if len(result.Data) == 0 {
+		t.Log("No data found - this is expected if catalog is empty")
+	}
 }

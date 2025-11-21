@@ -248,7 +248,7 @@ func (c *Client) Read(ctx context.Context, req ReadRequest) (*ReadResult, error)
 	result := &ReadResult{
 		Data:     merged,
 		Snapshot: snap,
-		Entries:  entries,
+		Entries:  allEntries, // Return all entries for debugging
 	}
 
 	// Generate snapshot if requested
@@ -289,6 +289,9 @@ func (c *Client) GetConfig(ctx context.Context) (*config.Config, error) {
 }
 
 // UpdateConfig updates the config in Redis
+// DEPRECATED: Temporarily disabled. DO NOT DELETE this code.
+// Will be re-enabled after testing storage reinitialization logic.
+/*
 func (c *Client) UpdateConfig(ctx context.Context, cfg *config.Config) error {
 	if err := c.configMgr.Save(ctx, cfg); err != nil {
 		return err
@@ -297,7 +300,9 @@ func (c *Client) UpdateConfig(ctx context.Context, cfg *config.Config) error {
 	// Update cached config
 	c.mu.Lock()
 	c.config = cfg
+	// TODO: Reinitialize storage based on new config
 	c.mu.Unlock()
 
 	return nil
 }
+*/
