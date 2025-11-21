@@ -81,9 +81,8 @@ func (m *Manager) Save(ctx context.Context, cfg *Config) error {
 func (cfg *Config) CreateStorage() (storage.Storage, error) {
 	switch cfg.Storage {
 	case "memory", "":
-		// Default to memory storage for testing
-		// return storage.NewMemoryStorage(), nil
-		return nil, fmt.Errorf("memory storage not implemented yet")
+		// Memory storage for testing
+		return storage.NewMemoryStorage(), nil
 
 	case "oss":
 		// Create OSS storage
@@ -109,9 +108,12 @@ func (cfg *Config) CreateStorage() (storage.Storage, error) {
 }
 
 // DefaultConfig returns a default configuration
+// Note: This should not be used in production
+// Always configure lake.setting in Redis before using
 func DefaultConfig() *Config {
 	return &Config{
-		Name:    "lake",
-		Storage: "memory",
+		Name:    "lake-default",
+		Storage: "oss",
+		Bucket:  "",
 	}
 }

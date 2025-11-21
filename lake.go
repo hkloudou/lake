@@ -94,14 +94,17 @@ func (c *Client) ensureInitialized(ctx context.Context) error {
 	// Load config from Redis if not provided
 	if c.storage == nil {
 		if c.config == nil {
+			// Load config from Redis
 			cfg, err := c.configMgr.Load(ctx)
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to load config from Redis (lake.setting): %w", err)
 			}
 			c.config = cfg
+
+			// Create storage from config - must succeed, no fallback
 			stor, err := cfg.CreateStorage()
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to create %s storage: %w", cfg.Storage, err)
 			}
 			c.storage = stor
 
@@ -150,6 +153,9 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) error {
 	}
 
 	// Write to storage
+	if c.storage == nil {
+		return fmt.Errorf("storage not initialized")
+	}
 	key := storage.MakeKey(req.Catalog, docUUID)
 	if err := c.storage.Put(ctx, key, data); err != nil {
 		return fmt.Errorf("failed to write to storage: %w", err)

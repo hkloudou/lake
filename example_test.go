@@ -6,15 +6,19 @@ import (
 	"testing"
 
 	"github.com/hkloudou/lake/v2"
+	"github.com/hkloudou/lake/v2/internal/config"
+	"github.com/hkloudou/lake/v2/internal/storage"
 )
 
 func TestBasicUsage(t *testing.T) {
-	// Create client - no error returned, initialization is lazy
-	client := lake.NewLake("redis://localhost:6379")
+	// For testing, provide storage directly via options
+	client := lake.NewLake("redis://localhost:6379", func(opt *lake.Option) {
+		opt.Storage = storage.NewMemoryStorage()
+	})
 
 	ctx := context.Background()
 
-	// Write some data (config loaded automatically on first operation)
+	// Write some data
 	err := client.Write(ctx, lake.WriteRequest{
 		Catalog: "users",
 		Field:   "profile.name",
@@ -49,10 +53,10 @@ func TestBasicUsage(t *testing.T) {
 	}
 }
 
-func TestWriteStorage(t *testing.T) {
-	// Can provide custom storage via options
-	client := lake.NewLake("redis://lake-redis-master.cs:6379/2", func(opt *lake.Option) {
-		// opt.Storage = myCustomStorage
+func TestWithCustomStorage(t *testing.T) {
+	// Provide custom storage via options
+	client := lake.NewLake("localhost:6379", func(opt *lake.Option) {
+		opt.Storage = storage.NewMemoryStorage()
 	})
 
 	ctx := context.Background()
@@ -65,27 +69,25 @@ func TestWriteStorage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
-
-	fmt.Println("Write successful")
 }
 
 func TestReadStorage(t *testing.T) {
-	// Test reading from real Redis
+	// Test with real Redis config
 	client := lake.NewLake("redis://lake-redis-master.cs:6379/2")
 
 	ctx := context.Background()
 
-	// First, get config to see what's loaded
+	// Get config to see what's loaded
 	cfg, err := client.GetConfig(ctx)
 	if err != nil {
-		t.Logf("Config load error (will use defaults): %v", err)
-	} else {
-		t.Logf("Loaded config: Name=%s, Storage=%s, Bucket=%s", cfg.Name, cfg.Storage, cfg.Bucket)
+		t.Skipf("Skipping test: config not found in Redis: %v", err)
+		return
 	}
+	t.Logf("Loaded config: Name=%s, Storage=%s, Bucket=%s", cfg.Name, cfg.Storage, cfg.Bucket)
 
 	catalog := "test-read"
 
-	// Write some test data first
+	// Write some test data
 	t.Log("Writing test data...")
 	err = client.Write(ctx, lake.WriteRequest{
 		Catalog: catalog,
@@ -151,4 +153,52 @@ func TestReadStorage(t *testing.T) {
 	} else {
 		t.Error("Expected user object in data")
 	}
+}
+
+func TestConfigRequired(t *testing.T) {
+	// This test verifies that client fails without proper config
+	client := lake.NewLake("redis://localhost:6379/15") // Empty test DB
+
+	ctx := context.Background()
+
+	// Try to write without config - should fail
+	err := client.Write(ctx, lake.WriteRequest{
+		Catalog: "test",
+		Field:   "data",
+		Value:   "value",
+	})
+
+	if err == nil {
+		t.Error("Expected error when config is missing, got nil")
+	} else {
+		t.Logf("Correctly failed with: %v", err)
+	}
+}
+
+func TestSetupConfig(t *testing.T) {
+	// Helper test to setup config in Redis
+	t.Skip("Manual test - run only when needed to setup config")
+
+	_ = lake.NewLake("redis://lake-redis-master.cs:6379/2", func(opt *lake.Option) {
+		opt.Storage = storage.NewMemoryStorage() // Temporary for setup
+	})
+
+	_ = context.Background()
+
+	cfg := &config.Config{
+		Name:      "cs-lake",
+		Storage:   "oss",
+		Bucket:    "cs-lake",
+		Endpoint:  "oss-cn-hangzhou",
+		AccessKey: "your-access-key",
+		SecretKey: "your-secret-key",
+	}
+
+	// This would fail because UpdateConfig is commented out
+	// err := client.UpdateConfig(ctx, cfg)
+	// For now, set manually in Redis:
+	// redis-cli SET lake.setting '{"Name":"cs-lake","Storage":"oss","Bucket":"cs-lake",...}'
+
+	t.Logf("Config to set: %+v", cfg)
+	t.Log("Run manually: redis-cli SET lake.setting '{...}'")
 }
