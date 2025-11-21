@@ -51,4 +51,3 @@ func TestBasicUsage(t *testing.T) {
 		fmt.Printf("Snapshot UUID: %s\n", result.Snapshot.UUID)
 	}
 }
-

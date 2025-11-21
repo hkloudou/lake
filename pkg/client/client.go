@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hkloudou/lake/v2/internal/config"
 	"github.com/hkloudou/lake/v2/internal/index"
 	"github.com/hkloudou/lake/v2/internal/merge"
 	"github.com/hkloudou/lake/v2/internal/snapshot"
@@ -16,11 +17,13 @@ import (
 
 // Client is the main interface for Lake v2
 type Client struct {
-	storage storage.Storage
-	writer  *index.Writer
-	reader  *index.Reader
-	merger  *merge.Engine
-	snapMgr *snapshot.Manager
+	storage   storage.Storage
+	writer    *index.Writer
+	reader    *index.Reader
+	merger    *merge.Engine
+	snapMgr   *snapshot.Manager
+	rdb       *redis.Client   // For config management
+	configMgr *config.Manager // Config manager (optional)
 }
 
 // Config holds client configuration
@@ -46,11 +49,13 @@ func New(cfg Config) *Client {
 	snapMgr := snapshot.NewManager(stor, reader, writer, merger)
 
 	return &Client{
-		storage: stor,
-		writer:  writer,
-		reader:  reader,
-		merger:  merger,
-		snapMgr: snapMgr,
+		storage:   stor,
+		writer:    writer,
+		reader:    reader,
+		merger:    merger,
+		snapMgr:   snapMgr,
+		rdb:       rdb,
+		configMgr: config.NewManager(rdb),
 	}
 }
 
