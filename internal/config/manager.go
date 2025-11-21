@@ -85,12 +85,13 @@ func (cfg *Config) CreateStorage() (storage.Storage, error) {
 		return storage.NewMemoryStorage(), nil
 
 	case "oss":
-		// Create OSS storage
+		// Create OSS storage with encryption
 		return storage.NewOSSStorage(storage.OSSConfig{
 			Endpoint:  cfg.Endpoint,
 			Bucket:    cfg.Bucket,
 			AccessKey: cfg.AccessKey,
 			SecretKey: cfg.SecretKey,
+			AESKey:    cfg.AESPwd,
 			Internal:  false, // TODO: make this configurable
 		})
 

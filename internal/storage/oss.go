@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
+	"github.com/hkloudou/lake/v2/internal/encrypt"
 )
 
 // OSSStorage implements Storage interface for Aliyun OSS
@@ -16,6 +17,7 @@ type OSSStorage struct {
 	client   *oss.Client
 	bucket   *oss.Bucket
 	endpoint string
+	aesKey   []byte // AES encryption key
 	mu       sync.RWMutex
 }
 
@@ -25,6 +27,7 @@ type OSSConfig struct {
 	Bucket    string // Bucket name
 	AccessKey string // Access key
 	SecretKey string // Secret key
+	AESKey    string // AES encryption key
 	Internal  bool   // Use internal endpoint
 }
 
@@ -55,22 +58,37 @@ func NewOSSStorage(cfg OSSConfig) (*OSSStorage, error) {
 		client:   client,
 		bucket:   bucket,
 		endpoint: endpoint,
+		aesKey:   []byte(cfg.AESKey),
 	}, nil
 }
 
-// Put stores data with the given key
+// Put stores data with the given key (with AES encryption)
 func (s *OSSStorage) Put(ctx context.Context, key string, data []byte) error {
 	s.mu.RLock()
 	bucket := s.bucket
+	aesKey := s.aesKey
 	s.mu.RUnlock()
 
-	return bucket.PutObject(key, bytes.NewReader(data))
+	// Encrypt data if AES key is provided
+	var dataToWrite []byte
+	if len(aesKey) > 0 {
+		encrypted, err := encrypt.AesGcmEncrypt(data, aesKey)
+		if err != nil {
+			return fmt.Errorf("failed to encrypt data: %w", err)
+		}
+		dataToWrite = encrypted
+	} else {
+		dataToWrite = data
+	}
+
+	return bucket.PutObject(key, bytes.NewReader(dataToWrite))
 }
 
-// Get retrieves data by key
+// Get retrieves data by key (with AES decryption)
 func (s *OSSStorage) Get(ctx context.Context, key string) ([]byte, error) {
 	s.mu.RLock()
 	bucket := s.bucket
+	aesKey := s.aesKey
 	s.mu.RUnlock()
 
 	reader, err := bucket.GetObject(key)
@@ -79,7 +97,21 @@ func (s *OSSStorage) Get(ctx context.Context, key string) ([]byte, error) {
 	}
 	defer reader.Close()
 
-	return io.ReadAll(reader)
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, err
+	}
+
+	// Decrypt data if AES key is provided
+	if len(aesKey) > 0 {
+		decrypted, err := encrypt.AesGcmDecrypt(data, aesKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt data: %w", err)
+		}
+		return decrypted, nil
+	}
+
+	return data, nil
 }
 
 // Delete removes data by key
