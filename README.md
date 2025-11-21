@@ -86,24 +86,20 @@ func main() {
 
 Configuration is stored in Redis at key `lake.setting`:
 
-```go
-import "github.com/hkloudou/lake/v2/internal/config"
-
-// Set config in Redis
-cfg := &config.Config{
-    Name:      "my-lake",
-    Storage:   "oss",  // or "memory", "s3", "local"
-    Bucket:    "my-bucket",
-    AccessKey: "your-key",
-    SecretKey: "your-secret",
-    AESPwd:    "encryption-key",
-}
-
-client.UpdateConfig(ctx, cfg)
-
-// Get current config
-cfg, err := client.GetConfig(ctx)
+```bash
+# Set config in Redis manually
+redis-cli SET lake.setting '{
+  "Name": "my-lake",
+  "Storage": "oss",
+  "Bucket": "my-bucket",
+  "Endpoint": "oss-cn-hangzhou",
+  "AccessKey": "your-key",
+  "SecretKey": "your-secret",
+  "AESPwd": "encryption-key"
+}'
 ```
+
+**Note:** Config management API (GetConfig/UpdateConfig) is temporarily disabled while we finalize the storage reinitialization logic. For now, configure `lake.setting` directly in Redis.
 
 ## Custom Storage
 

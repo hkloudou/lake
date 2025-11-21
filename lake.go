@@ -276,6 +276,9 @@ func (c *Client) Read(ctx context.Context, req ReadRequest) (*ReadResult, error)
 }
 
 // GetConfig returns the current config (loads from Redis if needed)
+// DEPRECATED: Temporarily disabled. DO NOT DELETE this code.
+// Will be re-enabled after API stabilization.
+/*
 func (c *Client) GetConfig(ctx context.Context) (*config.Config, error) {
 	c.mu.RLock()
 	if c.config != nil {
@@ -297,10 +300,11 @@ func (c *Client) GetConfig(ctx context.Context) (*config.Config, error) {
 
 	return cfg, nil
 }
+*/
 
 // UpdateConfig updates the config in Redis
 // DEPRECATED: Temporarily disabled. DO NOT DELETE this code.
-// Will be re-enabled after testing storage reinitialization logic.
+// Will be re-enabled after storage reinitialization logic is implemented.
 /*
 func (c *Client) UpdateConfig(ctx context.Context, cfg *config.Config) error {
 	if err := c.configMgr.Save(ctx, cfg); err != nil {
