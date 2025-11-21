@@ -51,7 +51,7 @@ func TestBasicUsage(t *testing.T) {
 
 func TestWithCustomStorage(t *testing.T) {
 	// Can provide custom storage via options
-	client := lake.NewLake("localhost:6379", func(opt *lake.Option) {
+	client := lake.NewLake("redis://lake-redis-master.cs:6379/2", func(opt *lake.Option) {
 		// opt.Storage = myCustomStorage
 	})
 
@@ -65,4 +65,20 @@ func TestWithCustomStorage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
+}
+
+func TestReadStorage(t *testing.T) {
+	// Can provide custom storage via options
+	client := lake.NewLake("redis://lake-redis-master.cs:6379/2")
+
+	ctx := context.Background()
+
+	result, err := client.Read(ctx, lake.ReadRequest{
+		Catalog:      "users",
+		GenerateSnap: true,
+	})
+	if err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+	fmt.Println(result)
 }

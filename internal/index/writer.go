@@ -31,7 +31,7 @@ func (w *Writer) SetPrefix(prefix string) {
 func (w *Writer) Add(ctx context.Context, catalog, field, uuid string, timestamp int64) error {
 	key := w.makeCatalogKey(catalog)
 	member := EncodeMember(field, uuid)
-	
+
 	return w.rdb.ZAdd(ctx, key, redis.Z{
 		Score:  float64(timestamp),
 		Member: member,
@@ -42,7 +42,7 @@ func (w *Writer) Add(ctx context.Context, catalog, field, uuid string, timestamp
 func (w *Writer) AddSnap(ctx context.Context, catalog, snapUUID string, timestamp int64) error {
 	key := w.makeSnapKey(catalog)
 	member := EncodeSnapMember(snapUUID)
-	
+
 	return w.rdb.ZAdd(ctx, key, redis.Z{
 		Score:  float64(timestamp),
 		Member: member,
@@ -54,10 +54,10 @@ func (w *Writer) BatchAdd(ctx context.Context, catalog string, entries []Entry) 
 	if len(entries) == 0 {
 		return nil
 	}
-	
+
 	pipe := w.rdb.Pipeline()
 	key := w.makeCatalogKey(catalog)
-	
+
 	for _, e := range entries {
 		member := EncodeMember(e.Field, e.UUID)
 		pipe.ZAdd(ctx, key, redis.Z{
@@ -65,7 +65,7 @@ func (w *Writer) BatchAdd(ctx context.Context, catalog string, entries []Entry) 
 			Member: member,
 		})
 	}
-	
+
 	_, err := pipe.Exec(ctx)
 	return err
 }

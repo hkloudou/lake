@@ -8,17 +8,15 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hkloudou/lake/v2/internal/index"
-	"github.com/hkloudou/lake/v2/internal/merge"
 	"github.com/hkloudou/lake/v2/internal/storage"
 	"github.com/hkloudou/lake/v2/internal/xsync"
 )
 
-// Manager handles snapshot generation and reading
+// Manager handles snapshot saving and reading
 type Manager struct {
 	storage storage.Storage
 	reader  *index.Reader
 	writer  *index.Writer
-	merger  *merge.Engine
 	flight  xsync.SingleFlight[*Snapshot]
 }
 
@@ -27,13 +25,11 @@ func NewManager(
 	storage storage.Storage,
 	reader *index.Reader,
 	writer *index.Writer,
-	merger *merge.Engine,
 ) *Manager {
 	return &Manager{
 		storage: storage,
 		reader:  reader,
 		writer:  writer,
-		merger:  merger,
 		flight:  xsync.NewSingleFlight[*Snapshot](),
 	}
 }
@@ -46,56 +42,24 @@ type Snapshot struct {
 	Data      map[string]any `json:"data"`
 }
 
-// Generate generates a snapshot for the catalog
-// Uses SingleFlight to prevent duplicate snapshot generation
-func (m *Manager) Generate(ctx context.Context, catalog string) (*Snapshot, error) {
+// Save saves a snapshot with the given data
+// This is the single entry point for saving snapshots
+// Data merging should be done by the caller (Client.Read)
+func (m *Manager) Save(ctx context.Context, catalog string, data map[string]any, timestamp int64) (*Snapshot, error) {
 	return m.flight.Do(catalog, func() (*Snapshot, error) {
-		return m.generate(ctx, catalog)
+		return m.save(ctx, catalog, data, timestamp)
 	})
 }
 
-func (m *Manager) generate(ctx context.Context, catalog string) (*Snapshot, error) {
-	// Read all entries from index
-	entries, err := m.reader.ReadAll(ctx, catalog)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read index: %w", err)
-	}
-
-	if len(entries) == 0 {
-		return nil, fmt.Errorf("no data to snapshot")
-	}
-
-	// Merge all data
-	merged := make(map[string]any)
-	for _, entry := range entries {
-		// Read JSON from storage
-		key := storage.MakeKey(catalog, entry.UUID)
-		data, err := m.storage.Get(ctx, key)
-		if err != nil {
-			continue // Skip missing data
-		}
-
-		var value any
-		if err := json.Unmarshal(data, &value); err != nil {
-			continue // Skip invalid JSON
-		}
-
-		// Merge with strategy "set" (always overwrite)
-		merged, err = m.merger.Merge(merged, entry.Field, value, merge.StrategySet)
-		if err != nil {
-			return nil, fmt.Errorf("failed to merge: %w", err)
-		}
-	}
-
+func (m *Manager) save(ctx context.Context, catalog string, data map[string]any, timestamp int64) (*Snapshot, error) {
 	// Create snapshot
 	snapUUID := uuid.New().String()
-	lastTimestamp := entries[len(entries)-1].Timestamp
 
 	snap := &Snapshot{
 		UUID:      snapUUID,
 		Catalog:   catalog,
-		Timestamp: lastTimestamp,
-		Data:      merged,
+		Timestamp: timestamp,
+		Data:      data,
 	}
 
 	// Save snapshot to storage
@@ -110,15 +74,15 @@ func (m *Manager) generate(ctx context.Context, catalog string) (*Snapshot, erro
 	}
 
 	// Add snapshot to index
-	if err := m.writer.AddSnap(ctx, catalog, snapUUID, lastTimestamp); err != nil {
+	if err := m.writer.AddSnap(ctx, catalog, snapUUID, timestamp); err != nil {
 		return nil, fmt.Errorf("failed to add snapshot to index: %w", err)
 	}
 
 	return snap, nil
 }
 
-// GetLatest gets the latest snapshot or generates one if needed
-func (m *Manager) GetLatest(ctx context.Context, catalog string, generateIfMissing bool) (*Snapshot, error) {
+// GetLatest gets the latest snapshot
+func (m *Manager) GetLatest(ctx context.Context, catalog string, _ bool) (*Snapshot, error) {
 	// Check for existing snapshot
 	snapInfo, err := m.reader.GetLatestSnap(ctx, catalog)
 	if err != nil {
@@ -131,14 +95,9 @@ func (m *Manager) GetLatest(ctx context.Context, catalog string, generateIfMissi
 		if err == nil {
 			return snap, nil
 		}
-		// If loading fails, fall through to generate new one
 	}
 
-	// Generate new snapshot if needed
-	if generateIfMissing {
-		return m.Generate(ctx, catalog)
-	}
-
+	// No snapshot found
 	return nil, nil
 }
 

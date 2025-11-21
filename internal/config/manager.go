@@ -82,7 +82,8 @@ func (cfg *Config) CreateStorage() (storage.Storage, error) {
 	switch cfg.Storage {
 	case "memory", "":
 		// Default to memory storage for testing
-		return storage.NewMemoryStorage(), nil
+		// return storage.NewMemoryStorage(), nil
+		return nil, fmt.Errorf("memory storage not implemented yet")
 
 	case "oss":
 		// Create OSS storage

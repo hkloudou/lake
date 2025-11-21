@@ -96,30 +96,25 @@ func (c *Client) ensureInitialized(ctx context.Context) error {
 		if c.config == nil {
 			cfg, err := c.configMgr.Load(ctx)
 			if err != nil {
-				// Fallback to memory storage if config not found
-				c.storage = storage.NewMemoryStorage()
-				c.config = config.DefaultConfig()
-			} else {
-				c.config = cfg
-				stor, err := cfg.CreateStorage()
-				if err != nil {
-					// Fallback to memory storage
-					c.storage = storage.NewMemoryStorage()
-				} else {
-					c.storage = stor
-				}
-
-				// Set index prefix based on config: Storage:Name
-				prefix := fmt.Sprintf("%s:%s", cfg.Storage, cfg.Name)
-				c.writer.SetPrefix(prefix)
-				c.reader.SetPrefix(prefix)
+				return err
 			}
+			c.config = cfg
+			stor, err := cfg.CreateStorage()
+			if err != nil {
+				return err
+			}
+			c.storage = stor
+
+			// Set index prefix based on config: Storage:Name
+			prefix := fmt.Sprintf("%s:%s", cfg.Storage, cfg.Name)
+			c.writer.SetPrefix(prefix)
+			c.reader.SetPrefix(prefix)
 		}
 	}
 
 	// Initialize snapshot manager
 	if c.snapMgr == nil {
-		c.snapMgr = snapshot.NewManager(c.storage, c.reader, c.writer, c.merger)
+		c.snapMgr = snapshot.NewManager(c.storage, c.reader, c.writer)
 	}
 
 	return nil
@@ -181,45 +176,13 @@ type ReadResult struct {
 	Entries  []index.ReadResult // Raw entries (for debugging)
 }
 
-// Read reads and merges data from the catalog
-func (c *Client) Read(ctx context.Context, req ReadRequest) (*ReadResult, error) {
-	// Ensure initialized before operation
-	if err := c.ensureInitialized(ctx); err != nil {
-		return nil, err
-	}
-
-	// Try to get existing snapshot
-	snap, err := c.snapMgr.GetLatest(ctx, req.Catalog, false)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get snapshot: %w", err)
-	}
-
-	var baseData map[string]any
-	var entries []index.ReadResult
-
-	if snap != nil {
-		// Start from snapshot
-		baseData = snap.Data
-
-		// Read incremental data since snapshot
-		entries, err = c.reader.ReadSince(ctx, req.Catalog, snap.Timestamp)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read incremental data: %w", err)
-		}
-	} else {
-		// No snapshot, read all
-		baseData = make(map[string]any)
-		entries, err = c.reader.ReadAll(ctx, req.Catalog)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read all data: %w", err)
-		}
-	}
-
-	// Merge incremental data
+// mergeEntries merges entries into baseData
+// This is the single source of truth for data merging
+func (c *Client) mergeEntries(ctx context.Context, catalog string, baseData map[string]any, entries []index.ReadResult) (map[string]any, error) {
 	merged := baseData
 	for _, entry := range entries {
 		// Read JSON from storage
-		key := storage.MakeKey(req.Catalog, entry.UUID)
+		key := storage.MakeKey(catalog, entry.UUID)
 		data, err := c.storage.Get(ctx, key)
 		if err != nil {
 			continue // Skip missing data
@@ -236,6 +199,51 @@ func (c *Client) Read(ctx context.Context, req ReadRequest) (*ReadResult, error)
 			return nil, fmt.Errorf("failed to merge: %w", err)
 		}
 	}
+	return merged, nil
+}
+
+// Read reads and merges data from the catalog
+func (c *Client) Read(ctx context.Context, req ReadRequest) (*ReadResult, error) {
+	// Ensure initialized before operation
+	if err := c.ensureInitialized(ctx); err != nil {
+		return nil, err
+	}
+
+	// Try to get existing snapshot
+	snap, err := c.snapMgr.GetLatest(ctx, req.Catalog, false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get snapshot: %w", err)
+	}
+
+	var baseData map[string]any
+	var entries []index.ReadResult
+	var allEntries []index.ReadResult // For snapshot generation
+
+	if snap != nil {
+		// Start from snapshot
+		baseData = snap.Data
+
+		// Read incremental data since snapshot
+		entries, err = c.reader.ReadSince(ctx, req.Catalog, snap.Timestamp)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read incremental data: %w", err)
+		}
+		allEntries = entries
+	} else {
+		// No snapshot, read all
+		baseData = make(map[string]any)
+		allEntries, err = c.reader.ReadAll(ctx, req.Catalog)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read all data: %w", err)
+		}
+		entries = allEntries
+	}
+
+	// Merge data (single source of truth)
+	merged, err := c.mergeEntries(ctx, req.Catalog, baseData, entries)
+	if err != nil {
+		return nil, err
+	}
 
 	result := &ReadResult{
 		Data:     merged,
@@ -244,8 +252,10 @@ func (c *Client) Read(ctx context.Context, req ReadRequest) (*ReadResult, error)
 	}
 
 	// Generate snapshot if requested
-	if req.GenerateSnap && len(entries) > 0 {
-		newSnap, err := c.snapMgr.Generate(ctx, req.Catalog)
+	if req.GenerateSnap && len(allEntries) > 0 {
+		// Save snapshot with merged data
+		lastTimestamp := allEntries[len(allEntries)-1].Timestamp
+		newSnap, err := c.snapMgr.Save(ctx, req.Catalog, merged, lastTimestamp)
 		if err == nil {
 			result.Snapshot = newSnap
 		}
