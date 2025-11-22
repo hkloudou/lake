@@ -2,7 +2,7 @@ package cache
 
 import (
 	"context"
-	"strings"
+	"log"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -37,44 +37,48 @@ func NewRedisCacheWithURL(metaUrl string, ttl time.Duration) (*RedisCache, error
 
 // Take implements Cache interface
 func (c *RedisCache) Take(namespace, key string, loader func() ([]byte, error)) ([]byte, error) {
-	// Only cache .snap files
-	if !strings.HasSuffix(key, ".snap") {
-		return loader()
-	}
-
 	ctx := context.Background()
 	// Build cache key with namespace to avoid conflicts
 	// Format: lake_cache:{namespace}:{key}
 	// Example: lake_cache:oss:mylake:users/snap/1700000000_1~1700000100_500.snap
 	cacheKey := "lake_cache:" + namespace + ":" + key
 
+	log.Printf("[Cache] Take: namespace=%s, key=%s, cacheKey=%s", namespace, key, cacheKey)
+
 	// Try to get from Redis
 	cachedData, err := c.client.GetEx(ctx, cacheKey, c.ttl).Result()
 	if err == redis.Nil {
 		// Cache miss
 		c.stat.IncrementMiss()
+		log.Printf("[Cache] MISS: %s (loading from storage)", cacheKey)
 
 		// Call loader function to get []byte
 		data, err := loader()
 		if err != nil {
+			log.Printf("[Cache] Loader failed for %s: %v", cacheKey, err)
 			return nil, err
 		}
+
+		log.Printf("[Cache] Loaded %d bytes from storage for %s", len(data), cacheKey)
 
 		// Write to Redis with TTL (data is already []byte, no need to marshal)
 		err = c.client.Set(ctx, cacheKey, data, c.ttl).Err()
 		if err != nil {
-			// Log error but don't fail (cache is optional)
-			// Continue with loaded data
+			log.Printf("[Cache] Failed to cache %s: %v (continuing with data)", cacheKey, err)
+		} else {
+			log.Printf("[Cache] Cached %d bytes for %s (TTL: %v)", len(data), cacheKey, c.ttl)
 		}
 
 		return data, nil
 	} else if err != nil {
 		// Redis error, fallback to loader
+		log.Printf("[Cache] Redis error for %s: %v (fallback to loader)", cacheKey, err)
 		return loader()
 	}
 
 	// Cache hit
 	c.stat.IncrementHit()
+	log.Printf("[Cache] HIT: %s (%d bytes)", cacheKey, len(cachedData))
 
 	// Return cached data as []byte
 	return []byte(cachedData), nil
