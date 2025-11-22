@@ -10,10 +10,10 @@ Lake V2 是一个基于 Redis ZADD + OSS 的高性能 JSON 文档写入系统。
 
 #### Redis 索引层
 ```
-ZADD {prefix}:data:{catalog_name} {score} "data|{base64_field}|{ts}_{seqid}|{mergetype}"
+ZADD {prefix}:delta:{catalog_name} {score} "data|{base64_field}|{ts}_{seqid}|{mergetype}"
 ```
 
-- **Key**: `{prefix}:data:{catalog_name}` (e.g., `oss:mylake:data:users`)
+- **Key**: `{prefix}:delta:{catalog_name}` (e.g., `oss:mylake:delta:users`)
 - **Score**: Float64 = timestamp + (seqid / 1000000)
   - Timestamp: Unix timestamp (seconds) from Redis TIME
   - SeqID: Auto-incremented sequence per second (1-999999)

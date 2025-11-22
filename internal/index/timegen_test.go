@@ -156,11 +156,11 @@ func TestEncodingWithTimeSeq(t *testing.T) {
 
 	for _, tt := range tests {
 		// Encode
-		member := EncodeMember(tt.field, tt.tsSeqID, tt.mergeType)
+		member := EncodeDeltaMember(tt.field, tt.tsSeqID, tt.mergeType)
 		t.Logf("Encoded: field=%q -> member=%s", tt.field, member)
 
 		// Decode
-		field, tsSeqID, mergeType, err := DecodeMember(member)
+		field, tsSeqID, mergeType, err := DecodeDeltaMember(member)
 		if err != nil {
 			t.Errorf("Decode failed for %s: %v", member, err)
 			continue

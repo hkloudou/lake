@@ -47,23 +47,23 @@ func MergeTypeFromInt(i int) MergeType {
 // EncodeMember encodes field, tsSeqID, and mergeType into Redis ZADD member format
 // Format: "data|{base64_field}|{tsSeqID}|{mergeTypeInt}"
 // Example: "data|dXNlci5uYW1l|1700000000_123|0"
-func EncodeMember(field, tsSeqID string, mergeType MergeType) string {
+func EncodeDeltaMember(field, tsSeqID string, mergeType MergeType) string {
 	// Encode field using base64 URL encoding (safe for Redis keys)
 	encodedField := base64.URLEncoding.EncodeToString([]byte(field))
-	return fmt.Sprintf("data|%s|%s|%d", encodedField, tsSeqID, mergeType)
+	return fmt.Sprintf("delta|%s|%s|%d", encodedField, tsSeqID, mergeType)
 }
 
 // DecodeMember decodes Redis ZADD member into field, tsSeqID, and mergeType
 // Returns tsSeqID in format "ts_seqid"
-func DecodeMember(member string) (field, tsSeqID string, mergeType MergeType, err error) {
+func DecodeDeltaMember(member string) (field, tsSeqID string, mergeType MergeType, err error) {
 	// Split by "|" delimiter
 	parts := strings.Split(member, "|")
 	if len(parts) != 4 {
 		return "", "", 0, fmt.Errorf("invalid member format (expected 4 parts): %s", member)
 	}
 
-	if parts[0] != "data" {
-		return "", "", 0, fmt.Errorf("invalid member prefix (expected 'data'): %s", parts[0])
+	if parts[0] != "delta" {
+		return "", "", 0, fmt.Errorf("invalid member prefix (expected 'delta'): %s", parts[0])
 	}
 
 	// Decode base64 field
@@ -122,7 +122,7 @@ func IsSnapMember(member string) bool {
 	return strings.HasPrefix(member, "snap|")
 }
 
-// IsDataMember checks if member is a data member
-func IsDataMember(member string) bool {
-	return strings.HasPrefix(member, "data|")
+// IsDeltaMember checks if member is a delta member
+func IsDeltaMember(member string) bool {
+	return strings.HasPrefix(member, "delta|")
 }

@@ -20,7 +20,6 @@ func TestWithCacheHelper(t *testing.T) {
 	)
 
 	ctx := context.Background()
-
 	// Write some data
 	// _, err := client.Write(ctx, lake.WriteRequest{
 	// 	Catalog:   "users",
@@ -31,7 +30,6 @@ func TestWithCacheHelper(t *testing.T) {
 	// if err != nil {
 	// 	t.Fatalf("Write failed: %v", err)
 	// }
-
 	// First read: cache miss, loads from OSS
 	list1, err := client.List(ctx, "users")
 	if err != nil {

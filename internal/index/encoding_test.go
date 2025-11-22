@@ -20,7 +20,7 @@ func TestEncodeMember(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result := EncodeMember(tt.field, tt.tsSeqID, tt.mergeType)
+		result := EncodeDeltaMember(tt.field, tt.tsSeqID, tt.mergeType)
 		if result != tt.expected {
 			t.Errorf("EncodeMember(%q, %q, %d) = %q, want %q",
 				tt.field, tt.tsSeqID, tt.mergeType, result, tt.expected)
@@ -46,7 +46,7 @@ func TestDecodeMember(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		field, tsSeqID, mergeType, err := DecodeMember(tt.member)
+		field, tsSeqID, mergeType, err := DecodeDeltaMember(tt.member)
 		if tt.expectError {
 			if err == nil {
 				t.Errorf("DecodeMember(%q) expected error, got nil", tt.member)
@@ -113,10 +113,10 @@ func TestSnapMember(t *testing.T) {
 	}
 
 	// Test IsDataMember
-	if !IsDataMember("data|dXNlci5uYW1l|1700000000_123|0") {
+	if !IsDeltaMember("data|dXNlci5uYW1l|1700000000_123|0") {
 		t.Error("IsDataMember(\"data|dXNlci5uYW1l|1700000000_123|0\") = false, want true")
 	}
-	if IsDataMember("snap|1700000000_1|1700000100_500") {
+	if IsDeltaMember("snap|1700000000_1|1700000100_500") {
 		t.Error("IsDataMember(\"snap|1700000000_1|1700000100_500\") = true, want false")
 	}
 

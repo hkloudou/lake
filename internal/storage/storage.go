@@ -41,14 +41,14 @@ type Storage interface {
 // MakeKey generates storage key for catalog and file identifier
 // For data files: catalog/{ts}_{seqid}_{mergeTypeInt}.json
 // For snap files: catalog/{uuid}.json (legacy format)
-func MakeKey(catalog, identifier string) string {
-	return catalog + "/" + identifier + ".json"
-}
+// func MakeKey(catalog, identifier string) string {
+// 	return catalog + "/" + identifier + ".json"
+// }
 
 // MakeDataKey generates storage key for data files
-// Format: catalog/{ts}_{seqid}_{mergeTypeInt}.json
-func MakeDataKey(catalog string, tsSeqID index.TimeSeqID, mergeType int) string {
-	return fmt.Sprintf("%s/%s_%d.json", catalog, tsSeqID.String(), mergeType)
+// Format: catalog/delta/{ts}_{seqid}_{mergeTypeInt}.json
+func MakeDeltaKey(catalog string, tsSeqID index.TimeSeqID, mergeType int) string {
+	return fmt.Sprintf("%s/delta/%s_%d.json", catalog, tsSeqID.String(), mergeType)
 }
 
 // MakeSnapKey generates storage key for snapshot files

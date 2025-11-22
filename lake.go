@@ -214,7 +214,7 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 	if c.storage == nil {
 		return nil, fmt.Errorf("storage not initialized")
 	}
-	key := storage.MakeDataKey(req.Catalog, tsSeq, int(req.MergeType))
+	key := storage.MakeDeltaKey(req.Catalog, tsSeq, int(req.MergeType))
 	if err := c.storage.Put(ctx, key, req.Body); err != nil {
 		// Rollback: remove from Redis index (best effort)
 		// TODO: implement proper rollback mechanism
@@ -278,6 +278,67 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 	return resultData, nil
 }
 
+// fillDeltasBody fills the Body field for all deltas concurrently
+// Uses a worker pool with max 10 concurrent goroutines
+func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []index.DeltaInfo) error {
+	if len(deltas) == 0 {
+		return nil
+	}
+
+	// Channel for work distribution
+	type job struct {
+		index int
+		delta *index.DeltaInfo
+	}
+
+	jobs := make(chan job, len(deltas))
+	errors := make(chan error, len(deltas))
+
+	// Worker pool with max 10 concurrent workers
+	maxWorkers := 10
+	if len(deltas) < maxWorkers {
+		maxWorkers = len(deltas)
+	}
+
+	// Start workers
+	var wg sync.WaitGroup
+	for i := 0; i < maxWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				key := storage.MakeDeltaKey(catalog, j.delta.TsSeq, int(j.delta.MergeType))
+				data, err := c.storage.Get(ctx, key)
+				if err != nil {
+					errors <- fmt.Errorf("failed to load delta %d: %w", j.index, err)
+					continue
+				}
+				j.delta.Body = data
+			}
+		}()
+	}
+
+	// Send jobs
+	for i := range deltas {
+		jobs <- job{index: i, delta: &deltas[i]}
+	}
+	close(jobs)
+
+	// Wait for all workers to finish
+	wg.Wait()
+	close(errors)
+
+	// Check for errors (optional: could just skip failed deltas)
+	var firstErr error
+	for err := range errors {
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	return firstErr // nil if no errors
+}
+
 // ReadRequest represents a read request
 // type ReadRequest struct {
 // 	Catalog      string // Catalog name
@@ -287,20 +348,16 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 // applyPatchWithAutoCreate applies RFC6902 patch with automatic parent path creation
 // mergeEntries merges entries into baseData
 // This is the single source of truth for data merging
-func (c *Client) mergeEntries(ctx context.Context, catalog string, baseData []byte, entries []index.DataInfo) ([]byte, error) {
+func (c *Client) mergeEntries(ctx context.Context, catalog string, baseData []byte, entries []index.DeltaInfo) ([]byte, error) {
 	merged := baseData
 	for _, entry := range entries {
-		// Read JSON from storage using new filename format
-		key := storage.MakeDataKey(catalog, entry.TsSeq, int(entry.MergeType))
-		data, err := c.storage.Get(ctx, key)
-		if err != nil {
-			continue // Skip missing data
+		// Use pre-loaded Body data (filled by fillDeltasBody)
+		if len(entry.Body) == 0 {
+			continue // Skip entries without body data
 		}
 
-		// var value any
-		// if err := json.Unmarshal(data, &value); err != nil {
-		// 	continue // Skip invalid JSON
-		// }
+		data := entry.Body
+		var err error
 
 		// Merge using the strategy from entry
 		switch entry.MergeType {
@@ -360,25 +417,32 @@ func (c *Client) List(ctx context.Context, catalog string) (*ListResult, error) 
 		return nil, fmt.Errorf("failed to get snapshot: %w", err)
 	}
 
-	var allEntries []index.DataInfo
+	var deltas []index.DeltaInfo
 
 	if snap != nil {
-		allEntries, err = c.reader.ReadSince(ctx, catalog, snap.StopTsSeq.Score())
+		deltas, err = c.reader.ReadSince(ctx, catalog, snap.StopTsSeq.Score())
 		if err != nil {
-			return nil, fmt.Errorf("failed to read all data: %w", err)
+			return nil, fmt.Errorf("failed to read delta index: %w", err)
 		}
 	} else {
 		// No snapshot, read all
-		allEntries, err = c.reader.ReadAll(ctx, catalog)
+		deltas, err = c.reader.ReadAll(ctx, catalog)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read all data: %w", err)
+			return nil, fmt.Errorf("failed to read all delta index: %w", err)
 		}
 	}
+
+	// Asynchronously fill delta bodies (max 10 concurrent)
+	if err := c.fillDeltasBody(ctx, catalog, deltas); err != nil {
+		// Log error but continue (some deltas may have been loaded)
+		// Missing deltas will be skipped during merge
+	}
+
 	return &ListResult{
 		client:     c,
 		catalog:    catalog,
 		LatestSnap: snap,
-		Entries:    allEntries, // Return all entries for debugging
+		Entries:    deltas,
 	}, nil
 
 	// Merge data from all entries (rebuild from scratch)

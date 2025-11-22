@@ -38,7 +38,7 @@ func (w *Writer) AddWithTimeSeq(ctx context.Context, tsSeq TimeSeqID, catalog, f
 	// Generate timestamp + seqid from Redis
 
 	key := w.makeCatalogKey(catalog)
-	member := EncodeMember(field, tsSeq.String(), mergeType)
+	member := EncodeDeltaMember(field, tsSeq.String(), mergeType)
 
 	return w.rdb.ZAdd(ctx, key, redis.Z{
 		Score:  tsSeq.Score(),
@@ -50,7 +50,7 @@ func (w *Writer) AddWithTimeSeq(ctx context.Context, tsSeq TimeSeqID, catalog, f
 // DEPRECATED: Use AddWithTimeSeq instead
 func (w *Writer) Add(ctx context.Context, catalog, field, uuid string, timestamp int64, mergeType MergeType) error {
 	key := w.makeCatalogKey(catalog)
-	member := EncodeMember(field, uuid, mergeType)
+	member := EncodeDeltaMember(field, uuid, mergeType)
 
 	return w.rdb.ZAdd(ctx, key, redis.Z{
 		Score:  float64(timestamp),
@@ -148,7 +148,7 @@ func (w *Writer) makeCatalogKey(catalog string) string {
 	if w.prefix == "" {
 		panic("prefix is not set")
 	}
-	return fmt.Sprintf("%s:data:%s", w.prefix, catalog)
+	return fmt.Sprintf("%s:delta:%s", w.prefix, catalog)
 }
 
 // makeSnapKey generates the Redis key for catalog snapshot index

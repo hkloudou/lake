@@ -27,22 +27,23 @@ func (r *Reader) SetPrefix(prefix string) {
 	r.prefix = prefix
 }
 
-// ReadResult represents a read result from the index
-type DataInfo struct {
+// DeltaInfo represents delta information (with optional body data)
+type DeltaInfo struct {
 	Field     string
-	TsSeq     TimeSeqID // Format: "ts_seqid"
+	TsSeq     TimeSeqID
 	MergeType MergeType
-	Score     float64 // Unix timestamp (from score)
+	Score     float64
+	Body      []byte // Optional: filled by fillDeltasBody
 }
 
 // ReadAll reads all entries from the catalog
-func (r *Reader) ReadAll(ctx context.Context, catalog string) ([]DataInfo, error) {
+func (r *Reader) ReadAll(ctx context.Context, catalog string) ([]DeltaInfo, error) {
 	key := r.makeCatalogKey(catalog)
 	return r.readRange(ctx, key, "-inf", "+inf")
 }
 
 // ReadSince reads entries since the given timestamp (exclusive)
-func (r *Reader) ReadSince(ctx context.Context, catalog string, sinceTimestamp float64) ([]DataInfo, error) {
+func (r *Reader) ReadSince(ctx context.Context, catalog string, sinceTimestamp float64) ([]DeltaInfo, error) {
 	key := r.makeCatalogKey(catalog)
 	// Use '(' to exclude the timestamp itself
 	// minScore := fmt.Sprintf("(%d", sinceTimestamp)
@@ -50,7 +51,7 @@ func (r *Reader) ReadSince(ctx context.Context, catalog string, sinceTimestamp f
 }
 
 // ReadRange reads entries between timestamps
-func (r *Reader) ReadRange(ctx context.Context, catalog string, minTimestamp, maxTimestamp int64) ([]DataInfo, error) {
+func (r *Reader) ReadRange(ctx context.Context, catalog string, minTimestamp, maxTimestamp int64) ([]DeltaInfo, error) {
 	key := r.makeCatalogKey(catalog)
 	return r.readRange(ctx, key, fmt.Sprintf("%d", minTimestamp), fmt.Sprintf("%d", maxTimestamp))
 }
@@ -102,7 +103,7 @@ func (m SnapInfo) Dump() string {
 	return output.String()
 }
 
-func (r *Reader) readRange(ctx context.Context, key, min, max string) ([]DataInfo, error) {
+func (r *Reader) readRange(ctx context.Context, key, min, max string) ([]DeltaInfo, error) {
 	results, err := r.rdb.ZRangeByScoreWithScores(ctx, key, &redis.ZRangeBy{
 		Min: min,
 		Max: max,
@@ -112,7 +113,7 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) ([]DataInf
 		return nil, err
 	}
 
-	var entries []DataInfo
+	var entries []DeltaInfo
 	for _, z := range results {
 		member := z.Member.(string)
 
@@ -122,11 +123,11 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) ([]DataInf
 		}
 
 		// Skip non-data members
-		if !IsDataMember(member) {
+		if !IsDeltaMember(member) {
 			continue
 		}
 
-		field, tsSeqString, mergeType, err := DecodeMember(member)
+		field, tsSeqString, mergeType, err := DecodeDeltaMember(member)
 		if err != nil {
 			continue // Skip invalid members
 		}
@@ -140,7 +141,7 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) ([]DataInf
 			return nil, fmt.Errorf("score mismatch: got %f, expected %f", tsSeq.Score(), z.Score)
 		}
 
-		entries = append(entries, DataInfo{
+		entries = append(entries, DeltaInfo{
 			Field:     field,
 			TsSeq:     tsSeq,
 			MergeType: mergeType,

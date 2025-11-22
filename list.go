@@ -10,10 +10,10 @@ import (
 // ReadResult represents the read result
 type ListResult struct {
 	// Data       map[string]any     // Merged JSON data
-	client     *Client          // Client instance
-	catalog    string           // Catalog name
-	LatestSnap *index.SnapInfo  // Snapshot info (if generated or used)
-	Entries    []index.DataInfo // Raw entries (for debugging)
+	client     *Client           // Client instance
+	catalog    string            // Catalog name
+	LatestSnap *index.SnapInfo   // Snapshot info (if generated or used)
+	Entries    []index.DeltaInfo // Raw entries (for debugging)
 }
 
 // Dump returns a debug string representation of the ListResult
