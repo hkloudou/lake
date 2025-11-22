@@ -15,7 +15,7 @@ func TestEncodeMember(t *testing.T) {
 		{"profile", "1700000001_456", MergeTypeRFC7396, "delta|cHJvZmlsZQ|1700000001_456|2"},
 		// "" in base64 URL encoding = ""
 		{"", "1700000002_789", MergeTypeRFC6902, "delta||1700000002_789|3"},
-		// Test field with special chars: "user:profile" 
+		// Test field with special chars: "user:profile"
 		{"user:profile", "1700000003_100", MergeTypeReplace, "delta|dXNlcjpwcm9maWxl|1700000003_100|1"},
 	}
 
