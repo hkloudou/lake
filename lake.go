@@ -230,12 +230,13 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 
 	var baseData []byte
 	var err error
-	
+
 	if list.LatestSnap != nil {
 		key := storage.MakeSnapKey(list.catalog, list.LatestSnap.StartTsSeq, list.LatestSnap.StopTsSeq)
+		namespace := c.storage.RedisPrefix()
 
-		// Use cache to load snapshot data
-		baseData, err = c.cache.Take(key, func() ([]byte, error) {
+		// Use cache to load snapshot data with namespace
+		baseData, err = c.cache.Take(namespace, key, func() ([]byte, error) {
 			// Cache miss: load from storage
 			return c.storage.Get(ctx, key)
 		})

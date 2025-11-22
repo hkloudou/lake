@@ -36,14 +36,17 @@ func NewRedisCacheWithURL(metaUrl string, ttl time.Duration) (*RedisCache, error
 }
 
 // Take implements Cache interface
-func (c *RedisCache) Take(key string, loader func() ([]byte, error)) ([]byte, error) {
+func (c *RedisCache) Take(namespace, key string, loader func() ([]byte, error)) ([]byte, error) {
 	// Only cache .snap files
 	if !strings.HasSuffix(key, ".snap") {
 		return loader()
 	}
 
 	ctx := context.Background()
-	cacheKey := "lake_cache:" + key
+	// Build cache key with namespace to avoid conflicts
+	// Format: lake_cache:{namespace}:{key}
+	// Example: lake_cache:oss:mylake:users/snap/1700000000_1~1700000100_500.snap
+	cacheKey := "lake_cache:" + namespace + ":" + key
 
 	// Try to get from Redis
 	cachedData, err := c.client.GetEx(ctx, cacheKey, c.ttl).Result()
@@ -72,7 +75,7 @@ func (c *RedisCache) Take(key string, loader func() ([]byte, error)) ([]byte, er
 
 	// Cache hit
 	c.stat.IncrementHit()
-	
+
 	// Return cached data as []byte
 	return []byte(cachedData), nil
 }
