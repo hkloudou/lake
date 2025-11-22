@@ -44,37 +44,21 @@ func TestEncodingComparison(t *testing.T) {
 
 	for _, catalog := range tests {
 		// 1. Hex (current)
-		hexResult := hex.EncodeToString([]byte(catalog))
+		// hexResult := hex.EncodeToString([]byte(catalog))
 
 		// 2. Base32 lowercase (no case issues)
-		encoder := base32.StdEncoding.WithPadding(base32.NoPadding)
-		b32Result := strings.ToLower(encoder.EncodeToString([]byte(catalog)))
+		// encoder := base32.StdEncoding.WithPadding(base32.NoPadding)
+		// b32Result := strings.ToLower(encoder.EncodeToString([]byte(catalog)))
 
 		// 3. Safe chars only (alphanumeric + dash/underscore)
-		safeResult := makeSafe(catalog)
+		safeResult := encodeCatalogName(catalog)
 
 		t.Logf("\nCatalog: %q", catalog)
-		t.Logf("  Hex:          %s (len=%d)", hexResult, len(hexResult))
-		t.Logf("  Base32Lower:  %s (len=%d)", b32Result, len(b32Result))
+		// t.Logf("  Hex:          %s (len=%d)", hexResult, len(hexResult))
+		// t.Logf("  Base32Lower:  %s (len=%d)", b32Result, len(b32Result))
 		t.Logf("  Safe:         %s (len=%d)", safeResult, len(safeResult))
 	}
 }
 
 // makeSafe converts catalog to safe filename using only alphanumeric and allowed chars
 // Falls back to hex for unsafe characters
-func makeSafe(catalog string) string {
-	safe := true
-	for _, r := range catalog {
-		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
-			(r >= '0' && r <= '9') || r == '-' || r == '_') {
-			safe = false
-			break
-		}
-	}
-
-	if safe {
-		return catalog // Use as-is if safe
-	}
-
-	return hex.EncodeToString([]byte(catalog)) // Hex for unsafe
-}

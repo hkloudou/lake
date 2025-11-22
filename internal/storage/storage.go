@@ -76,36 +76,53 @@ func encodeCatalogPath(catalog string, shardSize int) string {
 }
 
 // encodeCatalogName encodes catalog name with optimal compression
-// Returns the shortest safe representation
+// Returns the shortest safe representation with prefix for type identification
 func encodeCatalogName(catalog string) string {
-	// Check if catalog contains only safe characters
-	safe := true
-	for _, r := range catalog {
-		if !isSafeChar(r) {
-			safe = false
-			break
-		}
+	// Check if all lowercase safe
+	if isLowerSafe(catalog) {
+		// Prefix: _ (underscore) for lowercase
+		// Example: "users" -> "_users"
+		return "_" + catalog
 	}
 
-	if safe {
-		// Use catalog as-is (most efficient)
-		return "_" + catalog // Prefix with underscore to avoid case-sensitivity conflicts
+	// Check if all uppercase safe
+	if isUpperSafe(catalog) {
+		// Prefix: ^ (caret) for uppercase
+		// Example: "USERS" -> "^USERS"
+		return "^" + catalog
 	}
 
-	// Use base32 lowercase for unsafe characters
+	// Mixed case or unsafe characters: use base32 lowercase
+	// No prefix for base32 (starts with lowercase letter or digit)
 	// Base32 is ~20% shorter than hex and OSS case-insensitive safe
 	encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString([]byte(catalog))
 	return strings.ToLower(encoded)
 }
 
-// isSafeChar checks if a rune is safe for OSS paths (case-insensitive filesystems)
-// Only lowercase letters allowed to avoid case-sensitivity conflicts
-func isSafeChar(r rune) bool {
-	return (r >= 'a' && r <= 'z') || // Only lowercase (OSS-safe)
-		(r >= '0' && r <= '9') || // Numbers
-		r == '-' || r == '_' // Safe separators
-	// NOTE: Uppercase letters NOT allowed because:
-	//   "Users" and "users" would both be safe, but conflict on case-insensitive OSS
+// isLowerSafe checks if catalog contains only lowercase safe characters
+func isLowerSafe(catalog string) bool {
+	if len(catalog) == 0 {
+		return false
+	}
+	for _, r := range catalog {
+		if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+// isUpperSafe checks if catalog contains only uppercase safe characters
+func isUpperSafe(catalog string) bool {
+	if len(catalog) == 0 {
+		return false
+	}
+	for _, r := range catalog {
+		if !((r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 // MakeDeltaKey generates storage key for data files with MD5-sharded path
