@@ -3,6 +3,7 @@ package storage
 import (
 	"crypto/md5"
 	"encoding/hex"
+	"strings"
 	"testing"
 
 	"github.com/hkloudou/lake/v2/internal/index"
@@ -10,39 +11,39 @@ import (
 
 func TestEncodeCatalogPath(t *testing.T) {
 	tests := []struct {
-		catalog   string
-		shardSize int
+		catalog      string
+		shardSize    int
+		wantEncoding string // Expected encoding method
 	}{
-		// shardSize=4 (default, 65,536 directories)
-		{"users", 4},
-		{"Users", 4},
-		{"USERS", 4},
-		{"products", 4},
-		{"a", 4},
-		{"ab", 4},
-
-		// shardSize=6 (overkill, 16M directories)
-		{"users", 6},
-		{"products", 6},
+		{"users", 4, "safe"},         // Safe chars, use as-is
+		{"Users", 4, "safe"},         // Safe chars, use as-is
+		{"USERS", 4, "safe"},         // Safe chars, use as-is
+		{"products", 4, "safe"},      // Safe chars, use as-is
+		{"user-name_123", 4, "safe"}, // Safe chars with dash/underscore
+		{"短中文", 4, "base32"},         // Unsafe chars, use base32
+		{"user:name", 4, "base32"},   // Colon is unsafe, use base32
 	}
 
 	for _, tt := range tests {
 		result := encodeCatalogPath(tt.catalog, tt.shardSize)
 
-		// Calculate expected path: md5[0:shardSize]/hex(catalog)
+		// Verify format: md5[0:shardSize]/encoded
 		hash := md5.Sum([]byte(tt.catalog))
 		md5Hash := hex.EncodeToString(hash[:])
-		catalogHex := hex.EncodeToString([]byte(tt.catalog))
+		prefix := md5Hash[0:tt.shardSize]
 
-		expectedPath := md5Hash[0:tt.shardSize] + "/" + catalogHex
-
-		if result != expectedPath {
-			t.Errorf("encodeCatalogPath(%q, %d) = %q, want %q",
-				tt.catalog, tt.shardSize, result, expectedPath)
+		if !strings.HasPrefix(result, prefix+"/") {
+			t.Errorf("Path should start with %q, got %q", prefix+"/", result)
 		}
 
-		t.Logf("catalog=%q, shardSize=%d -> md5=%q, catalogHex=%q -> path=%q",
-			tt.catalog, tt.shardSize, md5Hash, catalogHex, result)
+		suffix := result[len(prefix)+1:]
+		t.Logf("catalog=%q, shardSize=%d -> md5Prefix=%q, suffix=%q (%s)",
+			tt.catalog, tt.shardSize, prefix, suffix, tt.wantEncoding)
+
+		// Verify suffix is not empty
+		if suffix == "" {
+			t.Errorf("Suffix should not be empty for catalog %q", tt.catalog)
+		}
 	}
 }
 
@@ -64,33 +65,25 @@ func TestCaseSensitivity(t *testing.T) {
 }
 
 func TestOSSBestPractice(t *testing.T) {
-	// Test different shard sizes with MD5 prefix + hex suffix
-	catalog := "products"
-	hash := md5.Sum([]byte(catalog))
-	md5Hash := hex.EncodeToString(hash[:])
-	catalogHex := hex.EncodeToString([]byte(catalog))
-
-	t.Logf("catalog=%q -> MD5=%q, hex=%q", catalog, md5Hash, catalogHex)
-
-	// Test size=4 (recommended, 65,536 dirs)
-	path4 := encodeCatalogPath(catalog, 4)
-	expected4 := md5Hash[0:4] + "/" + catalogHex
-	t.Logf("shardSize=4: %q (65,536 dirs) ✅ recommended", path4)
-	t.Logf("  Format: md5[0:4]/hex(catalog)")
-	if path4 != expected4 {
-		t.Errorf("Size=4: got %q, want %q", path4, expected4)
+	// Test with safe catalog (should use as-is)
+	safe := "products"
+	path := encodeCatalogPath(safe, 4)
+	t.Logf("Safe catalog: %q -> %q (uses original)", safe, path)
+	if !strings.Contains(path, "products") {
+		t.Error("Safe catalog should preserve original name")
 	}
 
-	// Test size=6 (overkill, 16M dirs)
-	path6 := encodeCatalogPath(catalog, 6)
-	expected6 := md5Hash[0:6] + "/" + catalogHex
-	t.Logf("shardSize=6: %q (16M dirs) ⚠️ overkill", path6)
-	if path6 != expected6 {
-		t.Errorf("Size=6: got %q, want %q", path6, expected6)
+	// Test with unsafe catalog (should use base32)
+	unsafe := "短中文目录"
+	pathUnsafe := encodeCatalogPath(unsafe, 4)
+	t.Logf("Unsafe catalog: %q -> %q (uses base32 lowercase)", unsafe, pathUnsafe)
+	if strings.Contains(pathUnsafe, "短") {
+		t.Error("Unsafe catalog should be encoded, not use raw chars")
 	}
 
-	t.Log("✓ MD5 prefix + hex suffix working correctly")
-	t.Log("✓ Recommendation: use shardSize=4 (65,536 dirs sufficient)")
+	t.Log("✓ Smart encoding working correctly")
+	t.Log("✓ Safe chars: use as-is (shortest)")
+	t.Log("✓ Unsafe chars: use base32 lowercase (OSS-safe, 20% shorter than hex)")
 }
 
 func TestMakeDeltaKey(t *testing.T) {

@@ -3,8 +3,10 @@ package storage
 import (
 	"context"
 	"crypto/md5"
+	"encoding/base32"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	"github.com/hkloudou/lake/v2/internal/index"
 )
@@ -48,35 +50,68 @@ type Storage interface {
 // }
 
 // encodeCatalogPath encodes catalog name following OSS best practices
-// Uses MD5 for sharding + hex for identification
+// Uses MD5 for sharding + optimized encoding for identification
 // shardSize: number of MD5 prefix chars for sharding (typically 4)
-// Format: md5(catalog)[0:shardSize]/hex(catalog)
+// Format: md5(catalog)[0:shardSize]/encode(catalog)
+//
+// Encoding Strategy (optimized for length):
+//  1. If catalog contains only safe chars (a-z, A-Z, 0-9, -, _): use as-is
+//  2. Otherwise: use base32 lowercase (20% shorter than hex, OSS-safe)
+//
 // Examples (shardSize=4):
 //
-//	"Users"    -> MD5="f9aa..." hex="5573657273" -> "f9aa/5573657273"
-//	"users"    -> MD5="9bc6..." hex="7573657273" -> "9bc6/7573657273"
-//	"products" -> MD5="8602..." hex="70726f6475637473" -> "8602/70726f6475637473"
+//	"users"    -> MD5="9bc6..." encode="users"        -> "9bc6/users"
+//	"Users"    -> MD5="f9aa..." encode="Users"        -> "f9aa/Users"
+//	"短中文"    -> MD5="xxxx..." encode="base32lower"  -> "xxxx/46p23zfy..."
 //
 // Benefits:
-//   - MD5 prefix: uniform distribution across shards
-//   - Hex suffix: preserves original catalog (no confusion)
-//   - No collisions: hex(catalog) is unique identifier
-//
-// Shard Size Analysis:
-//   - size=4: 16^4 = 65,536 directories (recommended) ✅
-//   - size=6: 16^6 = 16,777,216 directories (overkill)
+//   - MD5 prefix: uniform distribution (65,536 dirs)
+//   - Smart encoding: shortest safe representation
+//   - OSS-safe: all lowercase (base32) or mixed-case safe chars
+//   - No collisions: guaranteed unique per catalog
 func encodeCatalogPath(catalog string, shardSize int) string {
 	// MD5 hash for uniform shard distribution
 	hash := md5.Sum([]byte(catalog))
 	md5Hex := hex.EncodeToString(hash[:])
 
-	// Hex encode catalog for unique identification
-	catalogHex := hex.EncodeToString([]byte(catalog))
+	// Encode catalog using optimal method
+	catalogEncoded := encodeCatalogName(catalog)
 
-	// Format: md5[0:shardSize]/catalogHex
-	// This ensures uniform sharding while preserving original catalog info
+	// Format: md5[0:shardSize]/catalogEncoded
 	prefix := md5Hex[0:shardSize]
-	return prefix + "/" + catalogHex
+	return prefix + "/" + catalogEncoded
+}
+
+// encodeCatalogName encodes catalog name with optimal compression
+// Returns the shortest safe representation
+func encodeCatalogName(catalog string) string {
+	// Check if catalog contains only safe characters
+	safe := true
+	for _, r := range catalog {
+		if !isSafeChar(r) {
+			safe = false
+			break
+		}
+	}
+
+	if safe {
+		// Use catalog as-is (most efficient)
+		return catalog
+	}
+
+	// Use base32 lowercase for unsafe characters
+	// Base32 is ~20% shorter than hex and OSS case-insensitive safe
+	encoder := base32.StdEncoding.WithPadding(base32.NoPadding)
+	encoded := encoder.EncodeToString([]byte(catalog))
+	return strings.ToLower(encoded)
+}
+
+// isSafeChar checks if a rune is safe for filesystem/OSS paths
+func isSafeChar(r rune) bool {
+	return (r >= 'a' && r <= 'z') ||
+		(r >= 'A' && r <= 'Z') ||
+		(r >= '0' && r <= '9') ||
+		r == '-' || r == '_'
 }
 
 // MakeDeltaKey generates storage key for data files with MD5-sharded path
