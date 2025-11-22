@@ -1,7 +1,6 @@
 package index
 
 import (
-	"encoding/base64"
 	"fmt"
 	"strings"
 
@@ -69,7 +68,7 @@ func DecodeDeltaMember(member string) (field, tsSeqID string, mergeType MergeTyp
 	}
 
 	// Decode base64 field
-	fieldBytes, err := base64.URLEncoding.DecodeString(parts[1])
+	fieldBytes, err := encode.DecodeRedisCatalogName(parts[1])
 	if err != nil {
 		return "", "", 0, fmt.Errorf("failed to decode field: %w", err)
 	}

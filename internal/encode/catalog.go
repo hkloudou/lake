@@ -32,11 +32,31 @@ func EncodeOssCatalogName(catalog string) string {
 // Uses base64 URL encoding without padding (safe for Redis keys)
 func EncodeRedisCatalogName(catalog string) string {
 	// For Redis, if catalog is safe, use as-is with prefix
-	if IsRedisSafe(catalog) {
-		return "(" + catalog
-	}
+	// if IsRedisSafe(catalog) {
+	// 	return "(" + catalog
+	// }
 	// Use base64 URL encoding without padding
 	return base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString([]byte(catalog))
+}
+
+func DecodeRedisCatalogName(catalog string) (string, error) {
+	// For Redis, if catalog is safe, use as-is with prefix
+	// if IsRedisSafe(catalog) {
+	// 	return "(" + catalog
+	// }
+	if len(catalog) == 0 {
+		return "", nil
+	}
+	if strings.HasPrefix(catalog, "(") {
+		return catalog[1:], nil
+	}
+	// Use base64 URL encoding without padding
+	decoded, err := base64.URLEncoding.WithPadding(base64.NoPadding).DecodeString(catalog)
+	if err != nil {
+		return "", err
+	}
+	// fmt.Println("catalog", catalog, "decoded", string(decoded))
+	return string(decoded), nil
 }
 
 // EncodeOssCatalogPath generates OSS path with MD5 sharding
