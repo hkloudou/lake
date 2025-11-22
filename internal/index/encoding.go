@@ -10,9 +10,10 @@ import (
 type MergeType int
 
 const (
-	MergeTypeReplace MergeType = 0 // Replace existing value (simple set)
-	MergeTypeRFC7396 MergeType = 1 // RFC 7396 JSON Merge Patch
-	MergeTypeRFC6902 MergeType = 2 // RFC 6902 JSON Patch
+	MergeTypeUnknown MergeType = 0 // Unknown merge type
+	MergeTypeReplace MergeType = 1 // Replace existing value (simple set)
+	MergeTypeRFC7396 MergeType = 2 // RFC 7396 JSON Merge Patch
+	MergeTypeRFC6902 MergeType = 3 // RFC 6902 JSON Patch
 )
 
 // String returns the string representation
@@ -33,11 +34,13 @@ func (m MergeType) String() string {
 func MergeTypeFromInt(i int) MergeType {
 	switch i {
 	case 1:
-		return MergeTypeRFC7396
+		return MergeTypeReplace
 	case 2:
+		return MergeTypeRFC7396
+	case 3:
 		return MergeTypeRFC6902
 	default:
-		return MergeTypeReplace
+		return MergeTypeUnknown
 	}
 }
 

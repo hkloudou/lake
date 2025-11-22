@@ -133,7 +133,7 @@ func (c *Client) ensureInitialized(ctx context.Context) error {
 type WriteRequest struct {
 	Catalog   string          // Catalog name
 	Field     string          // JSON path (e.g., "user.profile.name")
-	Value     any             // Value to write
+	Value     any             // Value to write (will be JSON marshaled if not []byte)
 	MergeType index.MergeType // Merge strategy (Replace or Merge)
 }
 
@@ -161,10 +161,19 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 		return nil, err
 	}
 
-	// Marshal value to JSON
-	data, err := json.Marshal(req.Value)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal value: %w", err)
+	// Marshal value to JSON if not already []byte
+	var data []byte
+	switch v := req.Value.(type) {
+	case []byte:
+		data = v
+	case string:
+		data = []byte(v)
+	default:
+		var err error
+		data, err = json.Marshal(req.Value)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal value: %w", err)
+		}
 	}
 
 	tsSeq, err := c.writer.GetTimeSeqID(ctx, req.Catalog)
