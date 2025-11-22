@@ -48,22 +48,22 @@ type Storage interface {
 
 // encodeCatalogPath encodes catalog name to sharded path
 // Uses hex encoding (lowercase only) to avoid case-sensitivity issues on OSS
-// Splits every 3 chars for better OSS performance
-// Examples:
+// shardSize: number of characters per shard (e.g., 3)
+// Examples (shardSize=3):
 //
 //	"Users" -> "5573657273" -> "557/365/727/3"
 //	"users" -> "7573657273" -> "757/365/727/3"
 //	"a"     -> "61"         -> "61"
-func encodeCatalogPath(catalog string) string {
+func encodeCatalogPath(catalog string, shardSize int) string {
 	// Hex encode the catalog name (lowercase only, OSS case-insensitive safe)
 	// Hex uses: 0-9, a-f (no uppercase, no conflicts)
 	encoded := hex.EncodeToString([]byte(catalog))
 
-	// Split into 3-character chunks for path sharding
+	// Split into shardSize-character chunks for path sharding
 	// This creates a balanced directory tree structure
 	var parts []string
-	for i := 0; i < len(encoded); i += 3 {
-		end := i + 3
+	for i := 0; i < len(encoded); i += shardSize {
+		end := i + shardSize
 		if end > len(encoded) {
 			end = len(encoded)
 		}
@@ -79,23 +79,23 @@ func encodeCatalogPath(catalog string) string {
 		return parts[0] + "/" + parts[1]
 	} else {
 		// 3+ parts: use first, second, and last for sharding
-		// Example: "557/365/3" (if parts = [557, 365, 727, 3])
+		// Example: "557/365/3" (if parts = [557, 365, 727, 3] and shardSize=3)
 		return parts[0] + "/" + parts[1] + "/" + parts[len(parts)-1]
 	}
 }
 
 // MakeDeltaKey generates storage key for data files with sharded path
 // Format: {hex1}/{hex2}/{hexN}/delta/{ts}_{seqid}_{mergeTypeInt}.json
-// Example: 557/365/3/delta/1700000000_123_1.json (for catalog "Users")
+// Example: 557/365/3/delta/1700000000_123_1.json (for catalog "Users" with shardSize=3)
 func MakeDeltaKey(catalog string, tsSeqID index.TimeSeqID, mergeType int) string {
-	shardedPath := encodeCatalogPath(catalog)
+	shardedPath := encodeCatalogPath(catalog, 3) // Default shard size: 3 chars
 	return fmt.Sprintf("%s/delta/%s_%d.json", shardedPath, tsSeqID.String(), mergeType)
 }
 
 // MakeSnapKey generates storage key for snapshot files with sharded path
 // Format: {hex1}/{hex2}/{hexN}/snap/{startTsSeq}~{stopTsSeq}.snap
-// Example: 557/365/3/snap/1700000000_1~1700000100_500.snap (for catalog "Users")
+// Example: 557/365/3/snap/1700000000_1~1700000100_500.snap (for catalog "Users" with shardSize=3)
 func MakeSnapKey(catalog string, startTsSeq, stopTsSeq index.TimeSeqID) string {
-	shardedPath := encodeCatalogPath(catalog)
+	shardedPath := encodeCatalogPath(catalog, 3) // Default shard size: 3 chars
 	return fmt.Sprintf("%s/snap/%s~%s.snap", shardedPath, startTsSeq.String(), stopTsSeq.String())
 }

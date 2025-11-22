@@ -8,25 +8,46 @@ import (
 
 func TestEncodeCatalogPath(t *testing.T) {
 	tests := []struct {
-		catalog  string
-		expected string
+		catalog   string
+		shardSize int
+		wantPath  string
 	}{
-		{"users", "dXN/lcn/M"},         // "users" -> "dXNlcnM=" -> "dXNlcnM" -> "dXN/lcn/M"
-		{"Users", "VXN/lcn/M"},         // "Users" -> "VXNlcnM=" -> "VXNlcnM" -> "VXN/lcn/M"
-		{"USERS", "VVN/FUl/M"},         // Different!
-		{"products", "cHJ/vZH/Vjd/HM"}, // longer catalog
-		{"a", "YQ"},                    // short catalog
+		{"users", 3, "757/365/3"},       // hex: 7573657273
+		{"Users", 3, "557/365/3"},       // hex: 5573657273 (different!)
+		{"USERS", 3, "555/345/3"},       // hex: 5553455253 (different!)
+		{"products", 3, "707/26f/3"},    // hex: 70726f6475637473
+		{"a", 3, "61"},                  // hex: 61 (short)
+		{"ab", 3, "616/2"},              // hex: 6162 (2 parts)
+		{"users", 2, "75/73/73"},        // different shard size
+		{"users", 4, "7573/6572/73"},    // different shard size
 	}
 
 	for _, tt := range tests {
-		result := encodeCatalogPath(tt.catalog)
-		t.Logf("catalog=%q -> encoded=%q", tt.catalog, result)
+		result := encodeCatalogPath(tt.catalog, tt.shardSize)
+		t.Logf("catalog=%q, shardSize=%d -> path=%q", tt.catalog, tt.shardSize, result)
 
-		// Check for case sensitivity
-		if tt.catalog == "users" || tt.catalog == "Users" {
-			t.Logf("  Case sensitive check: %s vs Users", tt.catalog)
+		if result != tt.wantPath {
+			t.Errorf("encodeCatalogPath(%q, %d) = %q, want %q",
+				tt.catalog, tt.shardSize, result, tt.wantPath)
 		}
 	}
+}
+
+func TestCaseSensitivity(t *testing.T) {
+	// Verify that different case catalogs get different paths
+	path1 := encodeCatalogPath("users", 3)
+	path2 := encodeCatalogPath("Users", 3)
+	path3 := encodeCatalogPath("USERS", 3)
+
+	t.Logf("users -> %s", path1)
+	t.Logf("Users -> %s", path2)
+	t.Logf("USERS -> %s", path3)
+
+	if path1 == path2 || path2 == path3 || path1 == path3 {
+		t.Error("Different case catalogs should have different paths!")
+	}
+
+	t.Log("✓ Case sensitivity preserved correctly")
 }
 
 func TestMakeDeltaKey(t *testing.T) {
@@ -42,3 +63,4 @@ func TestMakeDeltaKey(t *testing.T) {
 		t.Error("Different catalogs (users vs Users) should have different paths!")
 	}
 }
+
