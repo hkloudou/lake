@@ -2,30 +2,24 @@ package index
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/redis/go-redis/v9"
 )
 
 // Writer handles writing to Redis ZADD index
 type Writer struct {
-	rdb     *redis.Client
-	prefix  string
+	rdb *redis.Client
+	indexKey
 	timeGen *TimeGenerator
 }
 
 // NewWriter creates a new index writer
 func NewWriter(rdb *redis.Client) *Writer {
 	return &Writer{
-		rdb:     rdb,
-		prefix:  "lake", // Will be set later via SetPrefix
-		timeGen: NewTimeGenerator(rdb),
+		rdb:      rdb,
+		indexKey: indexKey{prefix: "lake"}, // Will be set later via SetPrefix
+		timeGen:  NewTimeGenerator(rdb),
 	}
-}
-
-// SetPrefix sets the key prefix (e.g., "oss:my-lake")
-func (w *Writer) SetPrefix(prefix string) {
-	w.prefix = prefix
 }
 
 func (w *Writer) GetTimeSeqID(ctx context.Context, catalog string) (TimeSeqID, error) {
@@ -141,21 +135,3 @@ type Entry struct {
 // 	_, err := pipe.Exec(ctx)
 // 	return err
 // }
-
-// makeCatalogKey generates the Redis key for catalog data index
-// Kept in sync with Reader.makeCatalogKey in keys.go
-func (w *Writer) makeCatalogKey(catalog string) string {
-	if w.prefix == "" {
-		panic("prefix is not set")
-	}
-	return fmt.Sprintf("%s:delta:%s", w.prefix, catalog)
-}
-
-// makeSnapKey generates the Redis key for catalog snapshot index
-// Kept in sync with Reader.makeSnapKey in keys.go
-func (w *Writer) makeSnapKey(catalog string) string {
-	if w.prefix == "" {
-		panic("prefix is not set")
-	}
-	return fmt.Sprintf("%s:snap:%s", w.prefix, catalog)
-}

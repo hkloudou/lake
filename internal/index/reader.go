@@ -10,21 +10,19 @@ import (
 
 // Reader handles reading from Redis ZADD index
 type Reader struct {
-	rdb    *redis.Client
-	prefix string
+	rdb *redis.Client
+	// prefix string
+	indexKey
 }
 
 // NewReader creates a new index reader
 func NewReader(rdb *redis.Client) *Reader {
 	return &Reader{
-		rdb:    rdb,
-		prefix: "lake", // Will be set later via SetPrefix
+		rdb: rdb,
+		indexKey: indexKey{
+			prefix: "lake",
+		}, // Will be set later via SetPrefix
 	}
-}
-
-// SetPrefix sets the key prefix (e.g., "oss:my-lake")
-func (r *Reader) SetPrefix(prefix string) {
-	r.prefix = prefix
 }
 
 // DeltaInfo represents delta information (with optional body data)
