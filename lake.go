@@ -200,6 +200,12 @@ type WriteResult struct {
 //   - RFC7396 patch: []byte(`{"age":31,"city":null}`)
 //   - RFC6902 patch: []byte(`[{"op":"add","path":"/a","value":1}]`)
 func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, error) {
+	if req.MergeType == 0 {
+		return nil, fmt.Errorf("merge type replace is not supported")
+	}
+	if len(req.Body) == 0 {
+		return nil, fmt.Errorf("body is empty")
+	}
 	// Ensure initialized before operation
 	if err := c.ensureInitialized(ctx); err != nil {
 		return nil, err
