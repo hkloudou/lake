@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/hkloudou/lake/v2/internal/cache"
 	"github.com/hkloudou/lake/v2/internal/config"
 	"github.com/hkloudou/lake/v2/internal/index"
 	"github.com/hkloudou/lake/v2/internal/merge"
@@ -28,6 +29,7 @@ type Client struct {
 	reader    *index.Reader
 	merger    *merge.Engine // Legacy (deprecated)
 	configMgr *config.Manager
+	cache     cache.Cache
 
 	// Lazy-loaded components
 	mu      sync.RWMutex
@@ -38,7 +40,8 @@ type Client struct {
 
 // Option is a function that configures the client
 type Option struct {
-	Storage storage.Storage
+	Storage       storage.Storage
+	CacheProvider cache.Cache
 }
 
 // NewLake creates a new Lake client with the given Redis URL
@@ -66,6 +69,12 @@ func NewLake(metaUrl string, opts ...func(*Option)) *Client {
 	merger := merge.NewEngine()
 	configMgr := config.NewManager(rdb)
 
+	// Use provided cache or default to no-op cache
+	cacheProvider := option.CacheProvider
+	if cacheProvider == nil {
+		cacheProvider = cache.NewNoOpCache()
+	}
+
 	client := &Client{
 		rdb:       rdb,
 		writer:    writer,
@@ -73,9 +82,24 @@ func NewLake(metaUrl string, opts ...func(*Option)) *Client {
 		merger:    merger,
 		configMgr: configMgr,
 		storage:   option.Storage, // May be nil, will be loaded lazily
+		cache:     cacheProvider,
 	}
 
 	return client
+}
+
+// WithCache returns an option function that sets the cache provider
+func WithCache(cacheProvider cache.Cache) func(*Option) {
+	return func(opt *Option) {
+		opt.CacheProvider = cacheProvider
+	}
+}
+
+// WithStorage returns an option function that sets the storage provider
+func WithStorage(storage storage.Storage) func(*Option) {
+	return func(opt *Option) {
+		opt.Storage = storage
+	}
 }
 
 // ensureInitialized ensures storage and snapMgr are initialized
@@ -120,9 +144,9 @@ func (c *Client) ensureInitialized(ctx context.Context) error {
 	c.writer.SetPrefix(prefix)
 	c.reader.SetPrefix(prefix)
 
-	// Initialize snapshot manager
+	// Initialize snapshot manager with cache
 	if c.snapMgr == nil {
-		c.snapMgr = snapshot.NewManager(c.storage, c.reader, c.writer)
+		c.snapMgr = snapshot.NewManager(c.storage, c.reader, c.writer, c.cache)
 	}
 
 	return nil

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/hkloudou/lake/v2/internal/cache"
 	"github.com/hkloudou/lake/v2/internal/index"
 	"github.com/hkloudou/lake/v2/internal/storage"
 	"github.com/hkloudou/lake/v2/internal/xsync"
@@ -16,6 +17,7 @@ type Manager struct {
 	storage storage.Storage
 	reader  *index.Reader
 	writer  *index.Writer
+	cache   cache.Cache
 	flight  xsync.SingleFlight[string]
 }
 
@@ -24,11 +26,13 @@ func NewManager(
 	storage storage.Storage,
 	reader *index.Reader,
 	writer *index.Writer,
+	cacheProvider cache.Cache,
 ) *Manager {
 	return &Manager{
 		storage: storage,
 		reader:  reader,
 		writer:  writer,
+		cache:   cacheProvider,
 		flight:  xsync.NewSingleFlight[string](),
 	}
 }
@@ -124,21 +128,47 @@ func (m *Manager) GetLatest(ctx context.Context, catalog string, _ bool) (*Snaps
 	return nil, nil
 }
 
-// loadSnapshot loads snapshot using time range
+// loadSnapshot loads snapshot using time range with cache support
 // filename: catalog/{startTsSeq}~{stopTsSeq}.snap
 func (m *Manager) loadSnapshot(ctx context.Context, catalog string, startTsSeq, stopTsSeq index.TimeSeqID) (*Snapshot, error) {
 	key := storage.MakeSnapKey(catalog, startTsSeq, stopTsSeq)
-	data, err := m.storage.Get(ctx, key)
+
+	// Use cache if available
+	obj, err := m.cache.Take(key, func() (any, error) {
+		// Cache miss: load from storage
+		data, err := m.storage.Get(ctx, key)
+		if err != nil {
+			return nil, err
+		}
+
+		var snap Snapshot
+		if err := json.Unmarshal(data, &snap); err != nil {
+			return nil, err
+		}
+
+		return &snap, nil
+	})
+
 	if err != nil {
 		return nil, err
 	}
 
-	var snap Snapshot
-	if err := json.Unmarshal(data, &snap); err != nil {
-		return nil, err
+	snap, ok := obj.(*Snapshot)
+	if !ok {
+		// Type assertion failed, reload from storage
+		data, err := m.storage.Get(ctx, key)
+		if err != nil {
+			return nil, err
+		}
+
+		var snapObj Snapshot
+		if err := json.Unmarshal(data, &snapObj); err != nil {
+			return nil, err
+		}
+		return &snapObj, nil
 	}
 
-	return &snap, nil
+	return snap, nil
 }
 
 // ShouldGenerate checks if a snapshot should be generated based on strategy
