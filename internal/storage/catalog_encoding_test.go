@@ -12,13 +12,17 @@ func TestCatalogEncodingTypes(t *testing.T) {
 		wantPrefix   string
 		description  string
 	}{
-		{"users", "_", "pure lowercase"},
-		{"user_name", "_", "lowercase with underscore"},
-		{"user-123", "_", "lowercase with dash and number"},
+		{"users", "(", "pure lowercase"},
+		{"user_name", "(", "lowercase with underscore"},
+		{"user-123", "(", "lowercase with dash and number"},
+		{"api/users", "(", "lowercase with slash"},
+		{"v2.users", "(", "lowercase with dot"},
 		
-		{"USERS", "^", "pure uppercase"},
-		{"USER_NAME", "^", "uppercase with underscore"},
-		{"USER-123", "^", "uppercase with dash and number"},
+		{"USERS", ")", "pure uppercase"},
+		{"USER_NAME", ")", "uppercase with underscore"},
+		{"USER-123", ")", "uppercase with dash and number"},
+		{"API/USERS", ")", "uppercase with slash"},
+		{"V2.USERS", ")", "uppercase with dot"},
 		
 		{"Users", "", "mixed case (base32)"},
 		{"userS", "", "mixed case (base32)"},
@@ -44,13 +48,13 @@ func TestCatalogEncodingTypes(t *testing.T) {
 					tt.description, tt.catalog, result, gotPrefix)
 			}
 		} else {
-			// Base32: should NOT start with _ or ^
-			if gotPrefix == "_" || gotPrefix == "^" {
-				t.Errorf("%s: catalog=%q should use base32, got %q",
-					tt.description, tt.catalog, result)
+			// Base32: should NOT start with ( or )
+			if gotPrefix == "(" || gotPrefix == ")" {
+				t.Errorf("catalog=%q should use base32, got %q",
+					tt.catalog, result)
 			} else {
-				t.Logf("✓ %s: %q -> %q (base32)",
-					tt.description, tt.catalog, result)
+				t.Logf("✓ catalog=%q -> %q (base32)",
+					tt.catalog, result)
 			}
 		}
 	}

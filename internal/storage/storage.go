@@ -82,14 +82,14 @@ func encodeCatalogName(catalog string) string {
 	if isLowerSafe(catalog) {
 		// Prefix: _ (underscore) for lowercase
 		// Example: "users" -> "_users"
-		return "_" + catalog
+		return "(" + catalog
 	}
 
 	// Check if all uppercase safe
 	if isUpperSafe(catalog) {
 		// Prefix: ^ (caret) for uppercase
 		// Example: "USERS" -> "^USERS"
-		return "^" + catalog
+		return ")" + catalog
 	}
 
 	// Mixed case or unsafe characters: use base32 lowercase
@@ -100,12 +100,15 @@ func encodeCatalogName(catalog string) string {
 }
 
 // isLowerSafe checks if catalog contains only lowercase safe characters
+// Allows: a-z, 0-9, -, _, /, .
 func isLowerSafe(catalog string) bool {
 	if len(catalog) == 0 {
 		return false
 	}
 	for _, r := range catalog {
-		if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_') {
+		if !((r >= 'a' && r <= 'z') ||
+			(r >= '0' && r <= '9') ||
+			r == '-' || r == '_' || r == '/' || r == '.') {
 			return false
 		}
 	}
@@ -113,12 +116,15 @@ func isLowerSafe(catalog string) bool {
 }
 
 // isUpperSafe checks if catalog contains only uppercase safe characters
+// Allows: A-Z, 0-9, -, _, /, .
 func isUpperSafe(catalog string) bool {
 	if len(catalog) == 0 {
 		return false
 	}
 	for _, r := range catalog {
-		if !((r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_') {
+		if !((r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') ||
+			r == '-' || r == '_' || r == '/' || r == '.') {
 			return false
 		}
 	}

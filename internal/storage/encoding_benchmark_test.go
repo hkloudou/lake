@@ -37,6 +37,7 @@ func BenchmarkEncodings(b *testing.B) {
 func TestEncodingComparison(t *testing.T) {
 	tests := []string{
 		"users",
+		"USER",
 		"Users",
 		"very-long-catalog-name-with-special-chars-12345",
 		"短中文目录",
