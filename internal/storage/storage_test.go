@@ -12,14 +12,14 @@ func TestEncodeCatalogPath(t *testing.T) {
 		catalog  string
 		wantPath string
 	}{
-		{"users", "7573/7573657273"},          // hex: 7573657273, 4-char prefix
+		{"users", "7573/7573657273"},          // hex: 7573657273 (10 chars >4, sharded)
 		{"Users", "5573/5573657273"},          // hex: 5573657273 (different!)
 		{"USERS", "5553/5553455253"},          // hex: 5553455253 (different!)
-		{"products", "7072/70726f6475637473"}, // hex: 70726f6475637473
-		{"a", "61"},                           // hex: 61 (<=4 chars, no shard)
-		{"ab", "6162"},                        // hex: 6162 (<=4 chars, no shard)
-		{"abc", "616263"},                     // hex: 616263 (<=4 chars, no shard)
-		{"abcd", "6162/61626364"},             // hex: 61626364 (>4 chars, shard)
+		{"products", "7072/70726f6475637473"}, // hex: 70726f6475637473 (16 chars >4)
+		{"a", "61"},                           // hex: 61 (2 chars <=4, no shard)
+		{"ab", "6162"},                        // hex: 6162 (4 chars <=4, no shard)
+		{"abc", "6162/616263"},                // hex: 616263 (6 chars >4, sharded)
+		{"abcd", "6162/61626364"},             // hex: 61626364 (8 chars >4, sharded)
 	}
 
 	for _, tt := range tests {
