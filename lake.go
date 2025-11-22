@@ -280,6 +280,7 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 
 // fillDeltasBody fills the Body field for all deltas concurrently
 // Uses a worker pool with max 10 concurrent goroutines
+// Idempotent: skips deltas that already have Body loaded (len(Body) > 0)
 func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []index.DeltaInfo) error {
 	if len(deltas) == 0 {
 		return nil
@@ -294,10 +295,22 @@ func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []in
 	jobs := make(chan job, len(deltas))
 	errors := make(chan error, len(deltas))
 
+	// Count deltas that need loading
+	needLoading := 0
+	for i := range deltas {
+		if len(deltas[i].Body) == 0 {
+			needLoading++
+		}
+	}
+
+	if needLoading == 0 {
+		return nil // All bodies already loaded
+	}
+
 	// Worker pool with max 10 concurrent workers
 	maxWorkers := 10
-	if len(deltas) < maxWorkers {
-		maxWorkers = len(deltas)
+	if needLoading < maxWorkers {
+		maxWorkers = needLoading
 	}
 
 	// Start workers
@@ -307,6 +320,11 @@ func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []in
 		go func() {
 			defer wg.Done()
 			for j := range jobs {
+				// Skip if already loaded
+				if len(j.delta.Body) > 0 {
+					continue
+				}
+
 				key := storage.MakeDeltaKey(catalog, j.delta.TsSeq, int(j.delta.MergeType))
 				data, err := c.storage.Get(ctx, key)
 				if err != nil {
@@ -318,7 +336,7 @@ func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []in
 		}()
 	}
 
-	// Send jobs
+	// Send jobs (only for deltas that need loading)
 	for i := range deltas {
 		jobs <- job{index: i, delta: &deltas[i]}
 	}
@@ -345,10 +363,14 @@ func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []in
 // 	GenerateSnap bool   // Whether to generate snapshot automatically
 // }
 
-// applyPatchWithAutoCreate applies RFC6902 patch with automatic parent path creation
 // mergeEntries merges entries into baseData
 // This is the single source of truth for data merging
 func (c *Client) mergeEntries(ctx context.Context, catalog string, baseData []byte, entries []index.DeltaInfo) ([]byte, error) {
+	// Fill delta bodies concurrently (idempotent: skips already loaded)
+	if err := c.fillDeltasBody(ctx, catalog, entries); err != nil {
+		// Log but continue - some deltas may still be loaded
+	}
+
 	merged := baseData
 	for _, entry := range entries {
 		// Use pre-loaded Body data (filled by fillDeltasBody)
@@ -430,12 +452,6 @@ func (c *Client) List(ctx context.Context, catalog string) (*ListResult, error) 
 		if err != nil {
 			return nil, fmt.Errorf("failed to read all delta index: %w", err)
 		}
-	}
-
-	// Asynchronously fill delta bodies (max 10 concurrent)
-	if err := c.fillDeltasBody(ctx, catalog, deltas); err != nil {
-		// Log error but continue (some deltas may have been loaded)
-		// Missing deltas will be skipped during merge
 	}
 
 	return &ListResult{
