@@ -29,13 +29,14 @@ func EncodeOssCatalogName(catalog string) string {
 }
 
 // EncodeRedisCatalogName encodes catalog name for Redis keys
-// Uses base64 URL encoding (safe for Redis keys)
+// Uses base64 URL encoding without padding (safe for Redis keys)
 func EncodeRedisCatalogName(catalog string) string {
-	// For Redis, if catalog is safe, use as-is; otherwise base64
+	// For Redis, if catalog is safe, use as-is with prefix
 	if IsRedisSafe(catalog) {
 		return "(" + catalog
 	}
-	return base64.URLEncoding.EncodeToString([]byte(catalog))
+	// Use base64 URL encoding without padding
+	return base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString([]byte(catalog))
 }
 
 // EncodeOssCatalogPath generates OSS path with MD5 sharding
