@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/hkloudou/lake/v2/internal/cache"
 	"github.com/hkloudou/lake/v2/internal/config"
@@ -91,6 +92,16 @@ func NewLake(metaUrl string, opts ...func(*Option)) *Client {
 // WithCache returns an option function that sets the cache provider
 func WithCache(cacheProvider cache.Cache) func(*Option) {
 	return func(opt *Option) {
+		opt.CacheProvider = cacheProvider
+	}
+}
+
+func WithRedisCache(metaUrl string, ttl time.Duration) func(*Option) {
+	return func(opt *Option) {
+		cacheProvider, err := cache.NewRedisCacheWithURL(metaUrl, ttl)
+		if err != nil {
+			panic(err)
+		}
 		opt.CacheProvider = cacheProvider
 	}
 }

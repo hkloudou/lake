@@ -11,42 +11,52 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// ExampleWithCache demonstrates how to use cache with Lake
-func ExampleWithCache() {
-	// Create Redis client for cache
-	rdb := redis.NewClient(&redis.Options{
-		Addr: "localhost:6379",
-	})
-
-	// Create Redis cache with 5 minute TTL
-	redisCache := cache.NewRedisCache(rdb, 5*time.Minute)
-
-	// Create Lake client with cache
+// TestWithCacheHelper demonstrates how to use cache with Lake
+func TestWithCacheHelper(t *testing.T) {
+	// Create Lake client with Redis cache
 	client := lake.NewLake(
-		"redis://localhost:6379/2",
-		lake.WithCache(redisCache),
+		"redis://lake-redis-master.cs:6379/2",
+		lake.WithRedisCache("redis://lake-redis-master.cs:6379/2", 5*time.Minute),
 	)
 
 	ctx := context.Background()
 
 	// Write some data
-	client.Write(ctx, lake.WriteRequest{
+	_, err := client.Write(ctx, lake.WriteRequest{
 		Catalog:   "users",
 		Field:     "profile",
 		Body:      []byte(`{"name":"Alice","age":30}`),
 		MergeType: index.MergeTypeReplace,
 	})
+	if err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
 
 	// First read: cache miss, loads from OSS
-	list1, _ := client.List(ctx, "users")
-	lake.ReadMap(ctx, list1) // Generates snapshot, cached
+	list1, err := client.List(ctx, "users")
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	data1, err := lake.ReadMap(ctx, list1)
+	if err != nil {
+		t.Fatalf("ReadMap failed: %v", err)
+	}
+	t.Logf("First read (cache miss): %+v", data1)
 
 	// Second read: cache hit, loads from Redis
-	list2, _ := client.List(ctx, "users")
-	lake.ReadMap(ctx, list2) // Uses cached snapshot
+	list2, err := client.List(ctx, "users")
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	data2, err := lake.ReadMap(ctx, list2)
+	if err != nil {
+		t.Fatalf("ReadMap failed: %v", err)
+	}
+	t.Logf("Second read (cache hit): %+v", data2)
 
 	// Cache stats will be logged every 10 seconds:
 	// [Lake Cache lake] qpm: 2, hit_ratio: 50.0%, elements: 1, hit: 1, miss: 1
+	t.Log("✓ Cache integration with WithRedisCache successful")
 }
 
 func TestWithRedisCache(t *testing.T) {
@@ -63,7 +73,7 @@ func TestWithRedisCache(t *testing.T) {
 	}
 
 	// Create cache with 1 minute TTL
-	redisCache := cache.NewRedisCache[[]byte](rdb, 1*time.Minute)
+	redisCache := cache.NewRedisCache(rdb, 1*time.Minute)
 
 	// Create client with cache
 	client := lake.NewLake(
@@ -132,4 +142,3 @@ func TestWithNoOpCache(t *testing.T) {
 
 	t.Log("✓ NoOpCache (default) works correctly")
 }
-
