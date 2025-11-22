@@ -106,12 +106,14 @@ func encodeCatalogName(catalog string) string {
 	return strings.ToLower(encoded)
 }
 
-// isSafeChar checks if a rune is safe for filesystem/OSS paths
+// isSafeChar checks if a rune is safe for OSS paths (case-insensitive filesystems)
+// Only lowercase letters allowed to avoid case-sensitivity conflicts
 func isSafeChar(r rune) bool {
-	return (r >= 'a' && r <= 'z') ||
-		(r >= 'A' && r <= 'Z') ||
-		(r >= '0' && r <= '9') ||
-		r == '-' || r == '_'
+	return (r >= 'a' && r <= 'z') ||  // Only lowercase (OSS-safe)
+		(r >= '0' && r <= '9') ||     // Numbers
+		r == '-' || r == '_'          // Safe separators
+	// NOTE: Uppercase letters NOT allowed because:
+	//   "Users" and "users" would both be safe, but conflict on case-insensitive OSS
 }
 
 // MakeDeltaKey generates storage key for data files with MD5-sharded path

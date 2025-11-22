@@ -31,7 +31,8 @@ func (w *indexKey) makeCatalogKey(catalog string) string {
 	if w.prefix == "" {
 		panic("prefix is not set")
 	}
-	return fmt.Sprintf("%s:delta:%s", w.prefix, base64.URLEncoding.EncodeToString([]byte(catalog)))
+
+	return fmt.Sprintf("%s:delta:%s", w.prefix, base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString([]byte(catalog)))
 }
 
 // makeSnapKey generates the Redis key for catalog snapshot index
@@ -40,7 +41,7 @@ func (w *indexKey) makeSnapKey(catalog string) string {
 	if w.prefix == "" {
 		panic("prefix is not set")
 	}
-	return fmt.Sprintf("%s:snap:%s", w.prefix, base64.URLEncoding.EncodeToString([]byte(catalog)))
+	return fmt.Sprintf("%s:snap:%s", w.prefix, base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString([]byte(catalog)))
 }
 
 // SetPrefix sets the key prefix (e.g., "oss:my-lake")
