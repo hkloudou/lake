@@ -8,22 +8,22 @@ import (
 
 func TestCatalogEncodingTypes(t *testing.T) {
 	tests := []struct {
-		catalog      string
-		wantPrefix   string
-		description  string
+		catalog     string
+		wantPrefix  string
+		description string
 	}{
 		{"users", "(", "pure lowercase"},
 		{"user_name", "(", "lowercase with underscore"},
 		{"user-123", "(", "lowercase with dash and number"},
 		{"api/users", "(", "lowercase with slash"},
 		{"v2.users", "(", "lowercase with dot"},
-		
+
 		{"USERS", ")", "pure uppercase"},
 		{"USER_NAME", ")", "uppercase with underscore"},
 		{"USER-123", ")", "uppercase with dash and number"},
 		{"API/USERS", ")", "uppercase with slash"},
 		{"V2.USERS", ")", "uppercase with dot"},
-		
+
 		{"Users", "", "mixed case (base32)"},
 		{"userS", "", "mixed case (base32)"},
 		{"user name", "", "space (base32)"},
@@ -33,12 +33,12 @@ func TestCatalogEncodingTypes(t *testing.T) {
 
 	for _, tt := range tests {
 		result := encodeCatalogName(tt.catalog)
-		
+
 		var gotPrefix string
 		if len(result) > 0 {
 			gotPrefix = string(result[0])
 		}
-		
+
 		if tt.wantPrefix != "" {
 			if gotPrefix != tt.wantPrefix {
 				t.Errorf("%s: catalog=%q -> prefix=%q, want %q",
@@ -62,7 +62,7 @@ func TestCatalogEncodingTypes(t *testing.T) {
 
 func TestFullPathExamples(t *testing.T) {
 	shardSize := 4
-	
+
 	examples := []struct {
 		catalog string
 		desc    string
@@ -76,15 +76,14 @@ func TestFullPathExamples(t *testing.T) {
 
 	for _, ex := range examples {
 		path := encodeCatalogPath(ex.catalog, shardSize)
-		
+
 		// Extract parts
 		hash := md5.Sum([]byte(ex.catalog))
 		md5Hash := hex.EncodeToString(hash[:])
-		
+
 		t.Logf("\n%s: catalog=%q", ex.desc, ex.catalog)
 		t.Logf("  MD5: %s", md5Hash)
 		t.Logf("  Path: %s", path)
 		t.Logf("  Example full: %s/delta/1700000000_123_1.json", path)
 	}
 }
-

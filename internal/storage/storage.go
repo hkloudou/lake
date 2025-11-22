@@ -2,12 +2,9 @@ package storage
 
 import (
 	"context"
-	"crypto/md5"
-	"encoding/base32"
-	"encoding/hex"
 	"fmt"
-	"strings"
 
+	"github.com/hkloudou/lake/v2/internal/encode"
 	"github.com/hkloudou/lake/v2/internal/index"
 )
 
@@ -50,85 +47,9 @@ type Storage interface {
 // }
 
 // encodeCatalogPath encodes catalog name following OSS best practices
-// Uses MD5 for sharding + optimized encoding for identification
-// shardSize: number of MD5 prefix chars for sharding (typically 4)
-// Format: md5(catalog)[0:shardSize]/encode(catalog)
-//
-// Encoding Strategy (optimized for length):
-//  1. If catalog contains only safe chars (a-z, A-Z, 0-9, -, _): use as-is
-//  2. Otherwise: use base32 lowercase (20% shorter than hex, OSS-safe)
-//
-// Examples (shardSize=4):
-//
-//	"users"    -> MD5="9bc6..." encode="users"        -> "9bc6/users"
-//	"Users"    -> MD5="f9aa..." encode="Users"        -> "f9aa/Users"
-//	"短中文"    -> MD5="xxxx..." encode="base32lower"  -> "xxxx/46p23zfy..."
-//
-// Benefits:
-//   - MD5 prefix: uniform distribution (65,536 dirs)
-//   - Smart encoding: shortest safe representation
-//   - OSS-safe: all lowercase (base32) or mixed-case safe chars
-//   - No collisions: guaranteed unique per catalog
+// Delegates to encode.EncodeOssCatalogPath
 func encodeCatalogPath(catalog string, shardSize int) string {
-	// MD5 hash for uniform shard distribution
-	hash := md5.Sum([]byte(catalog))
-	return hex.EncodeToString(hash[:])[0:shardSize] + "/" + encodeCatalogName(catalog)
-}
-
-// encodeCatalogName encodes catalog name with optimal compression
-// Returns the shortest safe representation with prefix for type identification
-func encodeCatalogName(catalog string) string {
-	// Check if all lowercase safe
-	if isLowerSafe(catalog) {
-		// Prefix: _ (underscore) for lowercase
-		// Example: "users" -> "_users"
-		return "(" + catalog
-	}
-
-	// Check if all uppercase safe
-	if isUpperSafe(catalog) {
-		// Prefix: ^ (caret) for uppercase
-		// Example: "USERS" -> "^USERS"
-		return ")" + catalog
-	}
-
-	// Mixed case or unsafe characters: use base32 lowercase
-	// No prefix for base32 (starts with lowercase letter or digit)
-	// Base32 is ~20% shorter than hex and OSS case-insensitive safe
-	encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString([]byte(catalog))
-	return strings.ToLower(encoded)
-}
-
-// isLowerSafe checks if catalog contains only lowercase safe characters
-// Allows: a-z, 0-9, -, _, /, .
-func isLowerSafe(catalog string) bool {
-	if len(catalog) == 0 {
-		return false
-	}
-	for _, r := range catalog {
-		if !((r >= 'a' && r <= 'z') ||
-			(r >= '0' && r <= '9') ||
-			r == '-' || r == '_' || r == '/' || r == '.') {
-			return false
-		}
-	}
-	return true
-}
-
-// isUpperSafe checks if catalog contains only uppercase safe characters
-// Allows: A-Z, 0-9, -, _, /, .
-func isUpperSafe(catalog string) bool {
-	if len(catalog) == 0 {
-		return false
-	}
-	for _, r := range catalog {
-		if !((r >= 'A' && r <= 'Z') ||
-			(r >= '0' && r <= '9') ||
-			r == '-' || r == '_' || r == '/' || r == '.') {
-			return false
-		}
-	}
-	return true
+	return encode.EncodeOssCatalogPath(catalog, shardSize)
 }
 
 // MakeDeltaKey generates storage key for data files with MD5-sharded path
