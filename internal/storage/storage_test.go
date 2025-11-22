@@ -28,20 +28,20 @@ func TestEncodeCatalogPath(t *testing.T) {
 
 	for _, tt := range tests {
 		result := encodeCatalogPath(tt.catalog, tt.shardSize)
-		
+
 		// Calculate expected path: md5[0:shardSize]/hex(catalog)
 		hash := md5.Sum([]byte(tt.catalog))
 		md5Hash := hex.EncodeToString(hash[:])
 		catalogHex := hex.EncodeToString([]byte(tt.catalog))
-		
+
 		expectedPath := md5Hash[0:tt.shardSize] + "/" + catalogHex
-		
+
 		if result != expectedPath {
 			t.Errorf("encodeCatalogPath(%q, %d) = %q, want %q",
 				tt.catalog, tt.shardSize, result, expectedPath)
 		}
-		
-		t.Logf("catalog=%q, shardSize=%d -> md5=%q, catalogHex=%q -> path=%q", 
+
+		t.Logf("catalog=%q, shardSize=%d -> md5=%q, catalogHex=%q -> path=%q",
 			tt.catalog, tt.shardSize, md5Hash, catalogHex, result)
 	}
 }
