@@ -115,10 +115,10 @@ func (c *Client) ensureInitialized(ctx context.Context) error {
 		c.storage = stor
 
 		// Set index prefix based on config: Storage:Name
-		prefix := fmt.Sprintf("%s:%s", c.config.Storage, c.config.Name)
-		c.writer.SetPrefix(prefix)
-		c.reader.SetPrefix(prefix)
 	}
+	prefix := c.storage.RedisPrefix()
+	c.writer.SetPrefix(prefix)
+	c.reader.SetPrefix(prefix)
 
 	// Initialize snapshot manager
 	if c.snapMgr == nil {

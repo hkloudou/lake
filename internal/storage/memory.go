@@ -8,19 +8,21 @@ import (
 )
 
 // MemoryStorage is an in-memory implementation of Storage (for testing)
-type MemoryStorage struct {
+type memoryStorage struct {
 	mu   sync.RWMutex
+	name string
 	data map[string][]byte
 }
 
 // NewMemoryStorage creates a new in-memory storage
-func NewMemoryStorage() *MemoryStorage {
-	return &MemoryStorage{
+func NewMemoryStorage(name string) *memoryStorage {
+	return &memoryStorage{
 		data: make(map[string][]byte),
+		name: name,
 	}
 }
 
-func (m *MemoryStorage) Put(ctx context.Context, key string, data []byte) error {
+func (m *memoryStorage) Put(ctx context.Context, key string, data []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -31,7 +33,7 @@ func (m *MemoryStorage) Put(ctx context.Context, key string, data []byte) error 
 	return nil
 }
 
-func (m *MemoryStorage) Get(ctx context.Context, key string) ([]byte, error) {
+func (m *memoryStorage) Get(ctx context.Context, key string) ([]byte, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -46,7 +48,7 @@ func (m *MemoryStorage) Get(ctx context.Context, key string) ([]byte, error) {
 	return copied, nil
 }
 
-func (m *MemoryStorage) Delete(ctx context.Context, key string) error {
+func (m *memoryStorage) Delete(ctx context.Context, key string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -54,7 +56,7 @@ func (m *MemoryStorage) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
-func (m *MemoryStorage) Exists(ctx context.Context, key string) (bool, error) {
+func (m *memoryStorage) Exists(ctx context.Context, key string) (bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -62,7 +64,7 @@ func (m *MemoryStorage) Exists(ctx context.Context, key string) (bool, error) {
 	return ok, nil
 }
 
-func (m *MemoryStorage) List(ctx context.Context, prefix string) ([]string, error) {
+func (m *memoryStorage) List(ctx context.Context, prefix string) ([]string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -73,4 +75,8 @@ func (m *MemoryStorage) List(ctx context.Context, prefix string) ([]string, erro
 		}
 	}
 	return keys, nil
+}
+
+func (m *memoryStorage) RedisPrefix() string {
+	return fmt.Sprintf("memory:%s", m.name)
 }

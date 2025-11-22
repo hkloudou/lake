@@ -10,13 +10,13 @@ func TestEncodeMember(t *testing.T) {
 		expected  string
 	}{
 		// "user.name" in base64 URL encoding = "dXNlci5uYW1l"
-		{"user.name", "1700000000_123", MergeTypeReplace, "data|dXNlci5uYW1l|1700000000_123|0"},
+		{"user.name", "1700000000_123", MergeTypeReplace, "data|dXNlci5uYW1l|1700000000_123|1"},
 		// "profile" in base64 URL encoding = "cHJvZmlsZQ=="
-		{"profile", "1700000001_456", MergeTypeRFC7396, "data|cHJvZmlsZQ==|1700000001_456|1"},
+		{"profile", "1700000001_456", MergeTypeRFC7396, "data|cHJvZmlsZQ==|1700000001_456|2"},
 		// "" in base64 URL encoding = ""
-		{"", "1700000002_789", MergeTypeReplace, "data||1700000002_789|0"},
+		{"", "1700000002_789", MergeTypeRFC6902, "data||1700000002_789|3"},
 		// Test field with special chars: "user:profile" = "dXNlcjpwcm9maWxl"
-		{"user:profile", "1700000003_100", MergeTypeReplace, "data|dXNlcjpwcm9maWxl|1700000003_100|0"},
+		{"user:profile", "1700000003_100", MergeTypeReplace, "data|dXNlcjpwcm9maWxl|1700000003_100|1"},
 	}
 
 	for _, tt := range tests {
@@ -36,10 +36,10 @@ func TestDecodeMember(t *testing.T) {
 		expectMergeType MergeType
 		expectError     bool
 	}{
-		{"data|dXNlci5uYW1l|1700000000_123|0", "user.name", "1700000000_123", MergeTypeReplace, false},
-		{"data|cHJvZmlsZQ==|1700000001_456|1", "profile", "1700000001_456", MergeTypeRFC7396, false},
-		{"data||1700000002_789|0", "", "1700000002_789", MergeTypeReplace, false},
-		{"data|dXNlcjpwcm9maWxl|1700000003_100|0", "user:profile", "1700000003_100", MergeTypeReplace, false},
+		{"data|dXNlci5uYW1l|1700000000_123|1", "user.name", "1700000000_123", MergeTypeReplace, false},
+		{"data|cHJvZmlsZQ==|1700000001_456|2", "profile", "1700000001_456", MergeTypeRFC7396, false},
+		{"data||1700000002_789|3", "", "1700000002_789", MergeTypeRFC6902, false},
+		{"data|dXNlcjpwcm9maWxl|1700000003_100|1", "user:profile", "1700000003_100", MergeTypeReplace, false},
 		{"invalid", "", "", MergeTypeReplace, true},
 		{"data:user.name:1700000000_123_0", "", "", MergeTypeReplace, true},      // Old format, should fail
 		{"data|invalid-base64|1700000000_123|0", "", "", MergeTypeReplace, true}, // Invalid base64

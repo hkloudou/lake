@@ -23,6 +23,8 @@ type Storage interface {
 
 	// List lists all keys with the given prefix
 	List(ctx context.Context, prefix string) ([]string, error)
+
+	RedisPrefix() string
 }
 
 // StreamStorage extends Storage with streaming support

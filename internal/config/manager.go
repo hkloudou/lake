@@ -82,11 +82,12 @@ func (cfg *Config) CreateStorage() (storage.Storage, error) {
 	switch cfg.Storage {
 	case "memory", "":
 		// Memory storage for testing
-		return storage.NewMemoryStorage(), nil
+		return storage.NewMemoryStorage(cfg.Name), nil
 
 	case "oss":
 		// Create OSS storage with encryption
 		return storage.NewOSSStorage(storage.OSSConfig{
+			Name:      cfg.Name,
 			Endpoint:  cfg.Endpoint,
 			Bucket:    cfg.Bucket,
 			AccessKey: cfg.AccessKey,

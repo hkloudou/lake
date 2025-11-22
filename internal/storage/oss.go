@@ -13,7 +13,8 @@ import (
 )
 
 // OSSStorage implements Storage interface for Aliyun OSS
-type OSSStorage struct {
+type ossStorage struct {
+	name     string
 	client   *oss.Client
 	bucket   *oss.Bucket
 	endpoint string
@@ -23,6 +24,7 @@ type OSSStorage struct {
 
 // OSSConfig holds OSS configuration
 type OSSConfig struct {
+	Name      string
 	Endpoint  string // OSS endpoint (e.g., "oss-cn-hangzhou")
 	Bucket    string // Bucket name
 	AccessKey string // Access key
@@ -32,7 +34,7 @@ type OSSConfig struct {
 }
 
 // NewOSSStorage creates a new OSS storage instance
-func NewOSSStorage(cfg OSSConfig) (*OSSStorage, error) {
+func NewOSSStorage(cfg OSSConfig) (*ossStorage, error) {
 	// Build endpoint URL
 	endpoint := cfg.Endpoint
 	if cfg.Internal {
@@ -54,16 +56,17 @@ func NewOSSStorage(cfg OSSConfig) (*OSSStorage, error) {
 		return nil, fmt.Errorf("failed to get bucket: %w", err)
 	}
 
-	return &OSSStorage{
+	return &ossStorage{
 		client:   client,
 		bucket:   bucket,
+		name:     cfg.Name,
 		endpoint: endpoint,
 		aesKey:   []byte(cfg.AESKey),
 	}, nil
 }
 
 // Put stores data with the given key (with AES encryption)
-func (s *OSSStorage) Put(ctx context.Context, key string, data []byte) error {
+func (s *ossStorage) Put(ctx context.Context, key string, data []byte) error {
 	s.mu.RLock()
 	bucket := s.bucket
 	aesKey := s.aesKey
@@ -85,7 +88,7 @@ func (s *OSSStorage) Put(ctx context.Context, key string, data []byte) error {
 }
 
 // Get retrieves data by key (with AES decryption)
-func (s *OSSStorage) Get(ctx context.Context, key string) ([]byte, error) {
+func (s *ossStorage) Get(ctx context.Context, key string) ([]byte, error) {
 	s.mu.RLock()
 	bucket := s.bucket
 	aesKey := s.aesKey
@@ -115,7 +118,7 @@ func (s *OSSStorage) Get(ctx context.Context, key string) ([]byte, error) {
 }
 
 // Delete removes data by key
-func (s *OSSStorage) Delete(ctx context.Context, key string) error {
+func (s *ossStorage) Delete(ctx context.Context, key string) error {
 	s.mu.RLock()
 	bucket := s.bucket
 	s.mu.RUnlock()
@@ -124,7 +127,7 @@ func (s *OSSStorage) Delete(ctx context.Context, key string) error {
 }
 
 // Exists checks if key exists
-func (s *OSSStorage) Exists(ctx context.Context, key string) (bool, error) {
+func (s *ossStorage) Exists(ctx context.Context, key string) (bool, error) {
 	s.mu.RLock()
 	bucket := s.bucket
 	s.mu.RUnlock()
@@ -137,7 +140,7 @@ func (s *OSSStorage) Exists(ctx context.Context, key string) (bool, error) {
 }
 
 // List lists all keys with the given prefix
-func (s *OSSStorage) List(ctx context.Context, prefix string) ([]string, error) {
+func (s *ossStorage) List(ctx context.Context, prefix string) ([]string, error) {
 	s.mu.RLock()
 	bucket := s.bucket
 	s.mu.RUnlock()
@@ -162,6 +165,10 @@ func (s *OSSStorage) List(ctx context.Context, prefix string) ([]string, error) 
 	}
 
 	return keys, nil
+}
+
+func (s *ossStorage) RedisPrefix() string {
+	return fmt.Sprintf("%s:%s", "oss", s.name)
 }
 
 // PutStream stores data from a reader

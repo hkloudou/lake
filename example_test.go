@@ -13,7 +13,7 @@ import (
 func TestBasicUsage(t *testing.T) {
 	// For testing, provide storage directly via options
 	client := lake.NewLake("redis://lake-redis-master.cs:6379/2", func(opt *lake.Option) {
-		opt.Storage = storage.NewMemoryStorage()
+		opt.Storage = storage.NewMemoryStorage("test")
 	})
 
 	ctx := context.Background()
