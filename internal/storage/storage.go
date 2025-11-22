@@ -46,56 +46,47 @@ type Storage interface {
 // 	return catalog + "/" + identifier + ".json"
 // }
 
-// encodeCatalogPath encodes catalog name to sharded path
-// Uses hex encoding (lowercase only) to avoid case-sensitivity issues on OSS
-// shardSize: number of characters per shard (e.g., 3)
-// Examples (shardSize=3):
+// encodeCatalogPath encodes catalog name following OSS best practices
+// Uses hex encoding (lowercase only) to avoid case-sensitivity issues
+// Format: hash[0:4]/hash (OSS best practice for sharding)
+// Examples:
 //
-//	"Users" -> "5573657273" -> "557/365/727/3"
-//	"users" -> "7573657273" -> "757/365/727/3"
-//	"a"     -> "61"         -> "61"
-func encodeCatalogPath(catalog string, shardSize int) string {
+//	"Users"    -> "5573657273" -> "5573/5573657273"
+//	"users"    -> "7573657273" -> "7573/7573657273"
+//	"a"        -> "61"         -> "61" (short catalog, no sharding)
+//	"products" -> "70726f6475637473" -> "7072/70726f6475637473"
+func encodeCatalogPath(catalog string) string {
 	// Hex encode the catalog name (lowercase only, OSS case-insensitive safe)
 	// Hex uses: 0-9, a-f (no uppercase, no conflicts)
+	// This preserves case sensitivity while being OSS-safe
 	encoded := hex.EncodeToString([]byte(catalog))
 
-	// Split into shardSize-character chunks for path sharding
-	// This creates a balanced directory tree structure
-	var parts []string
-	for i := 0; i < len(encoded); i += shardSize {
-		end := i + shardSize
-		if end > len(encoded) {
-			end = len(encoded)
-		}
-		parts = append(parts, encoded[i:end])
+	// OSS best practice: prefix directory for sharding
+	// Use first 4 chars as directory, full hash as identifier
+	// This creates max 16^4 = 65,536 directories
+	if len(encoded) <= 4 {
+		// Short catalog, no sharding needed
+		return encoded
 	}
 
-	// Build path based on number of parts
-	if len(parts) == 0 {
-		return ""
-	} else if len(parts) == 1 {
-		return parts[0]
-	} else if len(parts) == 2 {
-		return parts[0] + "/" + parts[1]
-	} else {
-		// 3+ parts: use first, second, and last for sharding
-		// Example: "557/365/3" (if parts = [557, 365, 727, 3] and shardSize=3)
-		return parts[0] + "/" + parts[1] + "/" + parts[len(parts)-1]
-	}
+	// Format: hash[0:4]/hash (OSS best practice)
+	// Example: "5573/5573657273"
+	prefix := encoded[0:4]
+	return prefix + "/" + encoded
 }
 
 // MakeDeltaKey generates storage key for data files with sharded path
-// Format: {hex1}/{hex2}/{hexN}/delta/{ts}_{seqid}_{mergeTypeInt}.json
-// Example: 557/365/3/delta/1700000000_123_1.json (for catalog "Users" with shardSize=3)
+// Format: {hash[0:4]}/{hash}/delta/{ts}_{seqid}_{mergeTypeInt}.json
+// Example: 5573/5573657273/delta/1700000000_123_1.json (for catalog "Users")
 func MakeDeltaKey(catalog string, tsSeqID index.TimeSeqID, mergeType int) string {
-	shardedPath := encodeCatalogPath(catalog, 3) // Default shard size: 3 chars
+	shardedPath := encodeCatalogPath(catalog)
 	return fmt.Sprintf("%s/delta/%s_%d.json", shardedPath, tsSeqID.String(), mergeType)
 }
 
 // MakeSnapKey generates storage key for snapshot files with sharded path
-// Format: {hex1}/{hex2}/{hexN}/snap/{startTsSeq}~{stopTsSeq}.snap
-// Example: 557/365/3/snap/1700000000_1~1700000100_500.snap (for catalog "Users" with shardSize=3)
+// Format: {hash[0:4]}/{hash}/snap/{startTsSeq}~{stopTsSeq}.snap
+// Example: 5573/5573657273/snap/1700000000_1~1700000100_500.snap (for catalog "Users")
 func MakeSnapKey(catalog string, startTsSeq, stopTsSeq index.TimeSeqID) string {
-	shardedPath := encodeCatalogPath(catalog, 3) // Default shard size: 3 chars
+	shardedPath := encodeCatalogPath(catalog)
 	return fmt.Sprintf("%s/snap/%s~%s.snap", shardedPath, startTsSeq.String(), stopTsSeq.String())
 }

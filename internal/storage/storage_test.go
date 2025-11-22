@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"encoding/hex"
 	"testing"
 
 	"github.com/hkloudou/lake/v2/internal/index"
@@ -8,36 +9,36 @@ import (
 
 func TestEncodeCatalogPath(t *testing.T) {
 	tests := []struct {
-		catalog   string
-		shardSize int
-		wantPath  string
+		catalog  string
+		wantPath string
 	}{
-		{"users", 3, "757/365/3"},       // hex: 7573657273
-		{"Users", 3, "557/365/3"},       // hex: 5573657273 (different!)
-		{"USERS", 3, "555/345/3"},       // hex: 5553455253 (different!)
-		{"products", 3, "707/26f/3"},    // hex: 70726f6475637473
-		{"a", 3, "61"},                  // hex: 61 (short)
-		{"ab", 3, "616/2"},              // hex: 6162 (2 parts)
-		{"users", 2, "75/73/73"},        // different shard size
-		{"users", 4, "7573/6572/73"},    // different shard size
+		{"users", "7573/7573657273"},          // hex: 7573657273, 4-char prefix
+		{"Users", "5573/5573657273"},          // hex: 5573657273 (different!)
+		{"USERS", "5553/5553455253"},          // hex: 5553455253 (different!)
+		{"products", "7072/70726f6475637473"}, // hex: 70726f6475637473
+		{"a", "61"},                           // hex: 61 (<=4 chars, no shard)
+		{"ab", "6162"},                        // hex: 6162 (<=4 chars, no shard)
+		{"abc", "616263"},                     // hex: 616263 (<=4 chars, no shard)
+		{"abcd", "6162/61626364"},             // hex: 61626364 (>4 chars, shard)
 	}
 
 	for _, tt := range tests {
-		result := encodeCatalogPath(tt.catalog, tt.shardSize)
-		t.Logf("catalog=%q, shardSize=%d -> path=%q", tt.catalog, tt.shardSize, result)
+		result := encodeCatalogPath(tt.catalog)
+		hexFull := hex.EncodeToString([]byte(tt.catalog))
+		t.Logf("catalog=%q -> hex=%q -> path=%q", tt.catalog, hexFull, result)
 
 		if result != tt.wantPath {
-			t.Errorf("encodeCatalogPath(%q, %d) = %q, want %q",
-				tt.catalog, tt.shardSize, result, tt.wantPath)
+			t.Errorf("encodeCatalogPath(%q) = %q, want %q",
+				tt.catalog, result, tt.wantPath)
 		}
 	}
 }
 
 func TestCaseSensitivity(t *testing.T) {
 	// Verify that different case catalogs get different paths
-	path1 := encodeCatalogPath("users", 3)
-	path2 := encodeCatalogPath("Users", 3)
-	path3 := encodeCatalogPath("USERS", 3)
+	path1 := encodeCatalogPath("users")
+	path2 := encodeCatalogPath("Users")
+	path3 := encodeCatalogPath("USERS")
 
 	t.Logf("users -> %s", path1)
 	t.Logf("Users -> %s", path2)
@@ -48,6 +49,23 @@ func TestCaseSensitivity(t *testing.T) {
 	}
 
 	t.Log("✓ Case sensitivity preserved correctly")
+}
+
+func TestOSSBestPractice(t *testing.T) {
+	// OSS best practice: hash[0:4]/hash format
+	catalog := "products"
+	path := encodeCatalogPath(catalog)
+	hexFull := hex.EncodeToString([]byte(catalog))
+
+	t.Logf("catalog=%q -> hex=%q -> path=%q", catalog, hexFull, path)
+
+	// Verify format: should be "7072/70726f6475637473"
+	expected := hexFull[0:4] + "/" + hexFull
+	if path != expected {
+		t.Errorf("Path should follow hash[0:4]/hash format, got %q, want %q", path, expected)
+	}
+
+	t.Log("✓ OSS best practice format verified")
 }
 
 func TestMakeDeltaKey(t *testing.T) {
@@ -63,4 +81,3 @@ func TestMakeDeltaKey(t *testing.T) {
 		t.Error("Different catalogs (users vs Users) should have different paths!")
 	}
 }
-
