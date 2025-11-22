@@ -3,7 +3,6 @@ package snapshot
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/hkloudou/lake/v2/internal/index"
 	"github.com/hkloudou/lake/v2/internal/storage"
@@ -33,13 +32,13 @@ func NewManager(
 }
 
 // Snapshot represents a snapshot (time range only, no data)
-type Snapshot struct {
-	// UUID       string          `json:"uuid"`
-	Catalog    string          `json:"catalog"`
-	StartTsSeq index.TimeSeqID `json:"start_ts_seq"` // Start time sequence
-	StopTsSeq  index.TimeSeqID `json:"stop_ts_seq"`  // Stop time sequence
-	Score      float64         `json:"score"`        // For backward compatibility (score)
-}
+// type Snapshot struct {
+// 	// UUID       string          `json:"uuid"`
+// 	Catalog    string          `json:"catalog"`
+// 	StartTsSeq index.TimeSeqID `json:"start_ts_seq"` // Start time sequence
+// 	StopTsSeq  index.TimeSeqID `json:"stop_ts_seq"`  // Stop time sequence
+// 	Score      float64         `json:"score"`        // For backward compatibility (score)
+// }
 
 // Save saves a snapshot metadata with the given time range
 // This is the single entry point for saving snapshots
@@ -98,51 +97,51 @@ func (m *Manager) save(ctx context.Context, catalog string, startTsSeq, stopTsSe
 
 // GetLatest gets the latest snapshot metadata from Redis index
 // Returns the snapshot metadata (time range only)
-func (m *Manager) GetLatest(ctx context.Context, catalog string, _ bool) (*Snapshot, error) {
-	// Check for existing snapshot in Redis index
-	snapInfo, err := m.reader.GetLatestSnap(ctx, catalog)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get latest snapshot: %w", err)
-	}
+// func (m *Manager) GetLatest(ctx context.Context, catalog string, _ bool) (*Snapshot, error) {
+// 	// Check for existing snapshot in Redis index
+// 	snapInfo, err := m.reader.GetLatestSnap(ctx, catalog)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to get latest snapshot: %w", err)
+// 	}
 
-	// If snapshot exists, return metadata from Redis
-	if snapInfo != nil {
-		return &Snapshot{
-			StartTsSeq: snapInfo.StartTsSeq,
-			StopTsSeq:  snapInfo.StopTsSeq,
-		}, nil
-	}
+// 	// If snapshot exists, return metadata from Redis
+// 	if snapInfo != nil {
+// 		return &Snapshot{
+// 			StartTsSeq: snapInfo.StartTsSeq,
+// 			StopTsSeq:  snapInfo.StopTsSeq,
+// 		}, nil
+// 	}
 
-	// No snapshot found
-	return nil, nil
-}
+// 	// No snapshot found
+// 	return nil, nil
+// }
 
 // ShouldGenerate checks if a snapshot should be generated based on strategy
-func ShouldGenerate(lastSnapTime time.Time, entryCount int, strategy GenerationStrategy) bool {
-	switch strategy {
-	case StrategyAlways:
-		return true
-	case StrategyNever:
-		return false
-	case StrategyAuto:
-		// Generate if:
-		// 1. No snapshot exists (lastSnapTime is zero)
-		// 2. Last snapshot is older than 1 hour and has more than 100 entries
-		if lastSnapTime.IsZero() {
-			return entryCount > 10
-		}
-		age := time.Since(lastSnapTime)
-		return age > time.Hour && entryCount > 100
-	default:
-		return false
-	}
-}
+// func ShouldGenerate(lastSnapTime time.Time, entryCount int, strategy GenerationStrategy) bool {
+// 	switch strategy {
+// 	case StrategyAlways:
+// 		return true
+// 	case StrategyNever:
+// 		return false
+// 	case StrategyAuto:
+// 		// Generate if:
+// 		// 1. No snapshot exists (lastSnapTime is zero)
+// 		// 2. Last snapshot is older than 1 hour and has more than 100 entries
+// 		if lastSnapTime.IsZero() {
+// 			return entryCount > 10
+// 		}
+// 		age := time.Since(lastSnapTime)
+// 		return age > time.Hour && entryCount > 100
+// 	default:
+// 		return false
+// 	}
+// }
 
 // GenerationStrategy defines when to generate snapshots
-type GenerationStrategy int
+// type GenerationStrategy int
 
-const (
-	StrategyAuto   GenerationStrategy = iota // Auto-generate based on heuristics
-	StrategyAlways                           // Always generate
-	StrategyNever                            // Never generate
-)
+// const (
+// 	StrategyAuto   GenerationStrategy = iota // Auto-generate based on heuristics
+// 	StrategyAlways                           // Always generate
+// 	StrategyNever                            // Never generate
+// )

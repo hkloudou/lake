@@ -209,6 +209,9 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate time+seqid: %w", err)
 	}
+	if tsSeq.SeqID > 1000000 {
+		return nil, fmt.Errorf("seqid too large: %d", tsSeq.SeqID)
+	}
 
 	// Write to storage with filename: catalog/{ts}_{seqid}_{mergetype}.json
 	if c.storage == nil {

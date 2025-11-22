@@ -21,15 +21,15 @@ func TestWithCacheHelper(t *testing.T) {
 
 	ctx := context.Background()
 	// Write some data
-	// _, err := client.Write(ctx, lake.WriteRequest{
-	// 	Catalog:   "users",
-	// 	Field:     "profile",
-	// 	Body:      []byte(`{"name":"Alice2","age":30}`),
-	// 	MergeType: index.MergeTypeReplace,
-	// })
-	// if err != nil {
-	// 	t.Fatalf("Write failed: %v", err)
-	// }
+	_, err := client.Write(ctx, lake.WriteRequest{
+		Catalog:   "users",
+		Field:     "profile",
+		Body:      []byte(`{"name":"Alice2","age":30}`),
+		MergeType: index.MergeTypeReplace,
+	})
+	if err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
 	// First read: cache miss, loads from OSS
 	list1, err := client.List(ctx, "users")
 	if err != nil {
