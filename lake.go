@@ -239,29 +239,51 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 		return nil, err
 	}
 
+	// Parallel execution: load snapshot base data and delta bodies concurrently
 	var baseData []byte
-	var err error
+	var baseDataErr error
+	var deltasErr error
 
-	if list.LatestSnap != nil {
-		key := storage.MakeSnapKey(list.catalog, list.LatestSnap.StartTsSeq, list.LatestSnap.StopTsSeq)
-		namespace := c.storage.RedisPrefix()
+	var wg sync.WaitGroup
 
-		// Use cache to load snapshot data with namespace
-		baseData, err = c.cache.Take(namespace, key, func() ([]byte, error) {
-			// Cache miss: load from storage
-			return c.storage.Get(ctx, key)
-		})
+	// Goroutine 1: Load snapshot base data from cache/storage
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if list.LatestSnap != nil {
+			key := storage.MakeSnapKey(list.catalog, list.LatestSnap.StartTsSeq, list.LatestSnap.StopTsSeq)
+			namespace := c.storage.RedisPrefix()
 
-		if err != nil {
-			return nil, fmt.Errorf("failed to load snapshot: %w", err)
+			// Use cache to load snapshot data with namespace
+			baseData, baseDataErr = c.cache.Take(namespace, key, func() ([]byte, error) {
+				// Cache miss: load from storage
+				return c.storage.Get(ctx, key)
+			})
+		} else {
+			baseData = []byte("{}")
 		}
-	} else {
-		baseData = []byte("{}")
+	}()
+
+	// Goroutine 2: Load delta bodies concurrently (max 10 workers)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		deltasErr = c.fillDeltasBody(ctx, list.catalog, list.Entries)
+	}()
+
+	// Wait for both operations to complete
+	wg.Wait()
+
+	// Check for errors
+	if baseDataErr != nil {
+		return nil, fmt.Errorf("failed to load snapshot: %w", baseDataErr)
+	}
+	if deltasErr != nil {
+		return nil, fmt.Errorf("failed to load deltas: %w", deltasErr)
 	}
 
-	// Merge entries with base data
-	var resultData []byte
-	resultData, err = c.mergeEntries(ctx, list.catalog, baseData, list.Entries)
+	// Merge entries with base data (pure CPU operation, all data loaded)
+	resultData, err := c.mergeEntries(ctx, list.catalog, baseData, list.Entries)
 	if err != nil {
 		return nil, err
 	}
@@ -387,13 +409,8 @@ func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []in
 
 // mergeEntries merges entries into baseData
 // This is the single source of truth for data merging
+// Assumes all entry.Body fields are already loaded (by fillDeltasBody)
 func (c *Client) mergeEntries(ctx context.Context, catalog string, baseData []byte, entries []index.DeltaInfo) ([]byte, error) {
-	// Fill delta bodies concurrently (idempotent: skips already loaded)
-	// Returns error if any delta fails to load (no partial success allowed)
-	if err := c.fillDeltasBody(ctx, catalog, entries); err != nil {
-		return nil, fmt.Errorf("failed to load delta bodies: %w", err)
-	}
-
 	merged := baseData
 	for _, entry := range entries {
 		// Use pre-loaded Body data (filled by fillDeltasBody)
