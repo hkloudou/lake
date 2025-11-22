@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"crypto/md5"
 	"encoding/hex"
 	"testing"
 
@@ -11,33 +12,37 @@ func TestEncodeCatalogPath(t *testing.T) {
 	tests := []struct {
 		catalog   string
 		shardSize int
-		wantPath  string
 	}{
 		// shardSize=4 (default, 65,536 directories)
-		{"users", 4, "7573.657273"},          // hex: 7573657273
-		{"Users", 4, "5573.657273"},          // hex: 5573657273 (different!)
-		{"USERS", 4, "5553.455253"},          // hex: 5553455253 (different!)
-		{"products", 4, "7072.6f6475637473"}, // hex: 70726f6475637473
-		{"a", 4, "61"},                       // hex: 61 (<=4, no shard)
-		{"ab", 4, "6162"},                    // hex: 6162 (<=4, no shard)
-		{"abc", 4, "6162.63"},                // hex: 616263 (>4, sharded)
-		{"abcd", 4, "6162.6364"},             // hex: 61626364 (>4, sharded)
+		{"users", 4},
+		{"Users", 4},
+		{"USERS", 4},
+		{"products", 4},
+		{"a", 4},
+		{"ab", 4},
 
 		// shardSize=6 (overkill, 16M directories)
-		{"users", 6, "757365.7273"},          // hex: 7573657273
-		{"products", 6, "70726f.6475637473"}, // hex: 70726f6475637473
-		{"ab", 6, "6162"},                    // hex: 6162 (<=6, no shard)
+		{"users", 6},
+		{"products", 6},
 	}
 
 	for _, tt := range tests {
 		result := encodeCatalogPath(tt.catalog, tt.shardSize)
-		hexFull := hex.EncodeToString([]byte(tt.catalog))
-		t.Logf("catalog=%q, shardSize=%d -> hex=%q -> path=%q", tt.catalog, tt.shardSize, hexFull, result)
-
-		if result != tt.wantPath {
+		
+		// Calculate expected path: md5[0:shardSize]/hex(catalog)
+		hash := md5.Sum([]byte(tt.catalog))
+		md5Hash := hex.EncodeToString(hash[:])
+		catalogHex := hex.EncodeToString([]byte(tt.catalog))
+		
+		expectedPath := md5Hash[0:tt.shardSize] + "/" + catalogHex
+		
+		if result != expectedPath {
 			t.Errorf("encodeCatalogPath(%q, %d) = %q, want %q",
-				tt.catalog, tt.shardSize, result, tt.wantPath)
+				tt.catalog, tt.shardSize, result, expectedPath)
 		}
+		
+		t.Logf("catalog=%q, shardSize=%d -> md5=%q, catalogHex=%q -> path=%q", 
+			tt.catalog, tt.shardSize, md5Hash, catalogHex, result)
 	}
 }
 
@@ -59,28 +64,33 @@ func TestCaseSensitivity(t *testing.T) {
 }
 
 func TestOSSBestPractice(t *testing.T) {
-	// Test different shard sizes
+	// Test different shard sizes with MD5 prefix + hex suffix
 	catalog := "products"
-	hexFull := hex.EncodeToString([]byte(catalog)) // "70726f6475637473"
+	hash := md5.Sum([]byte(catalog))
+	md5Hash := hex.EncodeToString(hash[:])
+	catalogHex := hex.EncodeToString([]byte(catalog))
 
-	// Test size=4 (recommended)
+	t.Logf("catalog=%q -> MD5=%q, hex=%q", catalog, md5Hash, catalogHex)
+
+	// Test size=4 (recommended, 65,536 dirs)
 	path4 := encodeCatalogPath(catalog, 4)
-	expected4 := hexFull[0:4] + "." + hexFull[4:]
+	expected4 := md5Hash[0:4] + "/" + catalogHex
 	t.Logf("shardSize=4: %q (65,536 dirs) ✅ recommended", path4)
+	t.Logf("  Format: md5[0:4]/hex(catalog)")
 	if path4 != expected4 {
 		t.Errorf("Size=4: got %q, want %q", path4, expected4)
 	}
 
-	// Test size=6 (overkill)
+	// Test size=6 (overkill, 16M dirs)
 	path6 := encodeCatalogPath(catalog, 6)
-	expected6 := hexFull[0:6] + "." + hexFull[6:]
+	expected6 := md5Hash[0:6] + "/" + catalogHex
 	t.Logf("shardSize=6: %q (16M dirs) ⚠️ overkill", path6)
 	if path6 != expected6 {
 		t.Errorf("Size=6: got %q, want %q", path6, expected6)
 	}
 
-	t.Log("✓ Configurable shard size working correctly")
-	t.Log("✓ Recommendation: use shardSize=4 for most applications")
+	t.Log("✓ MD5 prefix + hex suffix working correctly")
+	t.Log("✓ Recommendation: use shardSize=4 (65,536 dirs sufficient)")
 }
 
 func TestMakeDeltaKey(t *testing.T) {
