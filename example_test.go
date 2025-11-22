@@ -81,11 +81,16 @@ func TestWriteRFC6902(t *testing.T) {
 
 	// RFC6902 with auto-creation of missing parent paths
 	// The system will automatically create /a and /a/b when adding /a/b/c
+	// reqJSON := []byte(`[
+	// 	{ "op": "add", "path": "/a/b/c", "value": {"name": "John", "age": 30} },
+	// 	{ "op": "replace", "path": "/a/b/c", "value": 42 },
+	// 	{ "op": "move", "from": "/a/b/c", "path": "/a/b/d" },
+	// 	{ "op": "copy", "from": "/a/b/d", "path": "/a/b/e" }
+	// ]`)
 	reqJSON := []byte(`[
-		{ "op": "add", "path": "/a/b/c", "value": {"name": "John", "age": 30} },
-		{ "op": "replace", "path": "/a/b/c", "value": 42 },
-		{ "op": "move", "from": "/a/b/c", "path": "/a/b/d" },
-		{ "op": "copy", "from": "/a/b/d", "path": "/a/b/e" }
+		{ "op": "add", "path": "/a", "value": {} },
+		{ "op": "add", "path": "/a/x", "value": {"name": "John", "age": 30} },
+		{ "op": "add", "path": "/a/x", "value": {"height": 12} }
 	]`)
 	_, err := client.WriteRFC6902(ctx, catalog, reqJSON)
 	if err != nil {

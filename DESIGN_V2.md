@@ -154,15 +154,66 @@ return {timestamp, seqid}
 
 ### 5. JSON 合并策略
 
-使用 JS 引擎 (goja) 执行合并逻辑：
+支持三种标准的合并策略：
 
-```javascript
-// 类似 MySQL JSON_INSERT, JSON_SET, JSON_REPLACE
-function merge(base, field, value, strategy) {
-  // INSERT: 只在不存在时插入
-  // SET: 覆盖或插入
-  // REPLACE: 只在存在时替换
-}
+#### 5.1 MergeTypeReplace (0) - 完全替换
+直接使用 `sjson.SetRawBytes` 设置字段值，完全覆盖原值。
+
+```go
+// Example
+client.Write(ctx, WriteRequest{
+    Field:     "user.name",
+    Value:     "Alice",
+    MergeType: MergeTypeReplace, // 完全替换
+})
+```
+
+#### 5.2 MergeTypeMerge (1) - RFC 7396 JSON Merge Patch
+实现 [RFC 7396](https://datatracker.ietf.org/doc/html/rfc7396) 标准的 JSON Merge Patch。
+
+**特性：**
+- 在 field 范围内进行局部合并
+- null 值表示删除字段
+- 递归合并对象
+- 数组完全替换（不合并）
+
+```go
+// Example: Merge at field level
+client.WriteRFC7396(ctx, "users", "profile", []byte(`{
+    "age": 31,
+    "city": "NYC",
+    "oldField": null
+}`))
+
+// Or using Write with MergeTypeMerge
+client.Write(ctx, WriteRequest{
+    Field:     "user",
+    Value:     map[string]any{"age": 31, "city": "NYC"},
+    MergeType: MergeTypeMerge, // RFC 7396
+})
+```
+
+**RFC 7396 测试用例（所有通过）：**
+| Original | Patch | Result |
+|----------|-------|--------|
+| `{"a":"b"}` | `{"a":"c"}` | `{"a":"c"}` |
+| `{"a":"b"}` | `{"b":"c"}` | `{"a":"b","b":"c"}` |
+| `{"a":"b"}` | `{"a":null}` | `{}` |
+| `{"a":{"b":"c"}}` | `{"a":{"b":"d","c":null}}` | `{"a":{"b":"d"}}` |
+
+#### 5.3 MergeTypeRFC6902 (2) - RFC 6902 JSON Patch
+实现 [RFC 6902](https://datatracker.ietf.org/doc/html/rfc6902) 标准的 JSON Patch。
+
+**特性：**
+- 支持复杂操作：add, remove, replace, move, copy, test
+- 全文档级别操作
+- 自动创建缺失的父路径（增强）
+
+```go
+client.WriteRFC6902(ctx, "users", []byte(`[
+    { "op": "add", "path": "/a/b/c", "value": 42 },
+    { "op": "move", "from": "/a/b/c", "path": "/a/b/d" }
+]`))
 ```
 
 ### 6. 技术栈

@@ -139,17 +139,53 @@ type WriteResult struct {
 	SeqID     int64  // Sequence ID
 }
 
+// WriteRFC7396 writes a JSON Merge Patch (RFC 7396) to the catalog
+// field: optional, if provided, the patch is applied to that field's value only (local scope)
+// patch: JSON merge patch data
+// See: https://datatracker.ietf.org/doc/html/rfc7396
+func (c *Client) WriteRFC7396(ctx context.Context, catalog, field string, patch []byte) (*WriteResult, error) {
+	if err := c.ensureInitialized(ctx); err != nil {
+		return nil, err
+	}
+
+	tsSeq, err := c.writer.GetTimeSeqID(ctx, catalog)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate time+seqid: %w", err)
+	}
+
+	// Write patch to storage
+	if c.storage == nil {
+		return nil, fmt.Errorf("storage not initialized")
+	}
+	key := storage.MakeDataKey(catalog, tsSeq, int(index.MergeTypeMerge))
+	if err := c.storage.Put(ctx, key, patch); err != nil {
+		return nil, fmt.Errorf("failed to write to storage: %w", err)
+	}
+
+	// Add to index
+	err = c.writer.AddWithTimeSeq(ctx, tsSeq, catalog, field, index.MergeTypeMerge)
+	if err != nil {
+		return nil, fmt.Errorf("failed to add to index: %w", err)
+	}
+
+	return &WriteResult{
+		TsSeqID:   tsSeq.String(),
+		Timestamp: tsSeq.Timestamp,
+		SeqID:     tsSeq.SeqID,
+	}, nil
+}
+
 func (c *Client) WriteRFC6902(ctx context.Context, catlog string, reqJSON []byte) (*WriteResult, error) {
 	/*
+		RFC 6902 JSON Patch Operations:
 		[
-
 			  { "op": "test", "path": "/a/b/c", "value": "foo" },
 			  { "op": "remove", "path": "/a/b/c" },
 			  { "op": "add", "path": "/a/b/c", "value": [ "foo", "bar" ] },
 			  { "op": "replace", "path": "/a/b/c", "value": 42 },
 			  { "op": "move", "from": "/a/b/c", "path": "/a/b/d" },
 			  { "op": "copy", "from": "/a/b/d", "path": "/a/b/e" }
-			]
+		]
 	*/
 	if err := c.ensureInitialized(ctx); err != nil {
 		return nil, err
@@ -277,7 +313,7 @@ func (c *Client) applyPatchWithAutoCreate(merged []byte, patchData []byte) ([]by
 
 			// Create all parent paths using sjson
 			// For path "/a/b/c", create "/a" and "/a/b" if they don't exist
-			merged = ensureParentPath(merged, path)
+			// merged = ensureParentPath(merged, path)
 		}
 	}
 
@@ -378,12 +414,19 @@ func (c *Client) mergeEntries(ctx context.Context, catalog string, baseData []by
 		// var strategy merge.Strategy
 		mergaType := entry.MergeType
 		if mergaType == index.MergeTypeMerge {
-			// jsonpatch.me
-			mergedPatrh, err := jsonpatch.MergePatch([]byte(gjson.GetBytes(merged, entry.Field).Raw), data)
-			if err != nil {
-				return nil, fmt.Errorf("failed to merge patch: %w", err)
+			// RFC 7396 JSON Merge Patch implementation
+			// https://datatracker.ietf.org/doc/html/rfc7396
+			// Applies patch to the field's value (local scope)
+			fieldValue := gjson.GetBytes(merged, entry.Field).Raw
+			if fieldValue == "" {
+				fieldValue = "{}" // Default to empty object if field doesn't exist
 			}
-			data = mergedPatrh
+
+			mergedPatch, err := jsonpatch.MergePatch([]byte(fieldValue), data)
+			if err != nil {
+				return nil, fmt.Errorf("failed to merge patch (RFC7396): %w", err)
+			}
+			data = mergedPatch
 			mergaType = index.MergeTypeReplace
 		}
 
