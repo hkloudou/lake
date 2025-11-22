@@ -4,6 +4,8 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"testing"
+
+	"github.com/hkloudou/lake/v2/internal/encode"
 )
 
 func TestCatalogEncodingTypes(t *testing.T) {
@@ -32,7 +34,7 @@ func TestCatalogEncodingTypes(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result := encodeCatalogName(tt.catalog)
+		result := encode.EncodeOssCatalogName(tt.catalog)
 
 		var gotPrefix string
 		if len(result) > 0 {

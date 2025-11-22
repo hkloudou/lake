@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"strings"
 	"testing"
+
+	"github.com/hkloudou/lake/v2/internal/encode"
 )
 
 // Benchmark different encoding methods

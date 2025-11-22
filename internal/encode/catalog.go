@@ -33,7 +33,7 @@ func EncodeOssCatalogName(catalog string) string {
 func EncodeRedisCatalogName(catalog string) string {
 	// For Redis, if catalog is safe, use as-is; otherwise base64
 	if IsRedisSafe(catalog) {
-		return catalog
+		return "(" + catalog
 	}
 	return base64.URLEncoding.EncodeToString([]byte(catalog))
 }
