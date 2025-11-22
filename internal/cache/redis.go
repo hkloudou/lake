@@ -43,7 +43,7 @@ func (c *RedisCache) Take(namespace, key string, loader func() ([]byte, error)) 
 	// Build cache key with namespace to avoid conflicts
 	// Format: lake_cache:{namespace}:{key}
 	// Example: lake_cache:oss:mylake:users/snap/1700000000_1~1700000100_500.snap
-	cacheKey := "lake_cache:" + base64.URLEncoding.EncodeToString([]byte(namespace+":"+key))
+	cacheKey := "lake_cache:" + base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString([]byte(namespace+":"+key))
 
 	if c.debug {
 		log.Printf("[Cache] Take: namespace=%s, key=%s, cacheKey=%s", namespace, key, cacheKey)

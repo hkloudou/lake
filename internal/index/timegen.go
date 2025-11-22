@@ -75,7 +75,7 @@ return {timestamp, seqid}
 // catalog: catalog name for seqid isolation (will be base64 URL encoded)
 func (g *TimeGenerator) Generate(ctx context.Context, catalog string) (TimeSeqID, error) {
 	// Base64 URL encode the catalog name to avoid special characters
-	encodedCatalog := base64.URLEncoding.EncodeToString([]byte(catalog))
+	encodedCatalog := base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString([]byte(catalog))
 
 	// Pass encoded catalog as KEYS[1]
 	result, err := g.rdb.Eval(ctx, timeGenScript, []string{encodedCatalog}).Result()

@@ -72,14 +72,7 @@ type Storage interface {
 func encodeCatalogPath(catalog string, shardSize int) string {
 	// MD5 hash for uniform shard distribution
 	hash := md5.Sum([]byte(catalog))
-	md5Hex := hex.EncodeToString(hash[:])
-
-	// Encode catalog using optimal method
-	catalogEncoded := encodeCatalogName(catalog)
-
-	// Format: md5[0:shardSize]/catalogEncoded
-	prefix := md5Hex[0:shardSize]
-	return prefix + "/" + catalogEncoded
+	return hex.EncodeToString(hash[:])[0:shardSize] + "/" + encodeCatalogName(catalog)
 }
 
 // encodeCatalogName encodes catalog name with optimal compression
@@ -96,22 +89,21 @@ func encodeCatalogName(catalog string) string {
 
 	if safe {
 		// Use catalog as-is (most efficient)
-		return catalog
+		return "_" + catalog // Prefix with underscore to avoid case-sensitivity conflicts
 	}
 
 	// Use base32 lowercase for unsafe characters
 	// Base32 is ~20% shorter than hex and OSS case-insensitive safe
-	encoder := base32.StdEncoding.WithPadding(base32.NoPadding)
-	encoded := encoder.EncodeToString([]byte(catalog))
+	encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString([]byte(catalog))
 	return strings.ToLower(encoded)
 }
 
 // isSafeChar checks if a rune is safe for OSS paths (case-insensitive filesystems)
 // Only lowercase letters allowed to avoid case-sensitivity conflicts
 func isSafeChar(r rune) bool {
-	return (r >= 'a' && r <= 'z') ||  // Only lowercase (OSS-safe)
-		(r >= '0' && r <= '9') ||     // Numbers
-		r == '-' || r == '_'          // Safe separators
+	return (r >= 'a' && r <= 'z') || // Only lowercase (OSS-safe)
+		(r >= '0' && r <= '9') || // Numbers
+		r == '-' || r == '_' // Safe separators
 	// NOTE: Uppercase letters NOT allowed because:
 	//   "Users" and "users" would both be safe, but conflict on case-insensitive OSS
 }
