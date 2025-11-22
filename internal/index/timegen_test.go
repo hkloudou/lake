@@ -149,7 +149,7 @@ func TestEncodingWithTimeSeq(t *testing.T) {
 		mergeType MergeType
 	}{
 		{"user.name", "1700000000_123", MergeTypeReplace},
-		{"profile.age", "1700000001_456", MergeTypeMerge},
+		{"profile.age", "1700000001_456", MergeTypeRFC7396},
 		{"settings.theme", "1700000002_789", MergeTypeReplace},
 		{"user:profile:special", "1700000003_100", MergeTypeReplace}, // Test special chars
 	}

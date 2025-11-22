@@ -10,9 +10,9 @@ import (
 type MergeType int
 
 const (
-	MergeTypeReplace MergeType = 0 // Replace existing value
-	MergeTypeMerge   MergeType = 1 // Merge with existing value
-	MergeTypeRFC6902 MergeType = 2 // RFC 6902 merge
+	MergeTypeReplace MergeType = 0 // Replace existing value (simple set)
+	MergeTypeRFC7396 MergeType = 1 // RFC 7396 JSON Merge Patch
+	MergeTypeRFC6902 MergeType = 2 // RFC 6902 JSON Patch
 )
 
 // String returns the string representation
@@ -20,8 +20,10 @@ func (m MergeType) String() string {
 	switch m {
 	case MergeTypeReplace:
 		return "replace"
-	case MergeTypeMerge:
-		return "merge"
+	case MergeTypeRFC7396:
+		return "rfc7396"
+	case MergeTypeRFC6902:
+		return "rfc6902"
 	default:
 		return "unknown"
 	}
@@ -29,11 +31,14 @@ func (m MergeType) String() string {
 
 // MergeTypeFromInt converts int to MergeType
 func MergeTypeFromInt(i int) MergeType {
-	if i == 1 {
-		return MergeTypeMerge
+	switch i {
+	case 1:
+		return MergeTypeRFC7396
+	case 2:
+		return MergeTypeRFC6902
+	default:
+		return MergeTypeReplace
 	}
-
-	return MergeType(i)
 }
 
 // EncodeMember encodes field, tsSeqID, and mergeType into Redis ZADD member format

@@ -14,7 +14,7 @@ func ExampleEncodeMember() {
 
 func ExampleEncodeMember_specialCharacters() {
 	// Example 2: Field with special characters (colons, spaces, etc.)
-	member := EncodeMember("user:profile:name with spaces", "1700000000_123", MergeTypeMerge)
+	member := EncodeMember("user:profile:name with spaces", "1700000000_123", MergeTypeRFC7396)
 	fmt.Println(member)
 	// Output: data|dXNlcjpwcm9maWxlOm5hbWUgd2l0aCBzcGFjZXM=|1700000000_123|1
 }
@@ -46,6 +46,6 @@ func ExampleDecodeMember_specialCharacters() {
 	// Output:
 	// Field: user:profile:name with spaces
 	// TsSeqID: 1700000000_123
-	// MergeType: merge
+	// MergeType: rfc7396
 }
 

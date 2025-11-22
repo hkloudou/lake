@@ -24,10 +24,10 @@ func (m ListResult) Dump() string {
 
 	// Snapshot info
 	if m.LatestSnap != nil {
-		output.WriteString(fmt.Sprintf("Latest Snapshot:\n"))
+		output.WriteString("Latest Snapshot:\n")
 		output.WriteString(m.LatestSnap.Dump())
 		if m.HasNextSnap() {
-			output.WriteString(fmt.Sprintf("Next Snapshot:\n"))
+			output.WriteString("Next Snapshot:\n")
 			output.WriteString(m.NextSnap().Dump())
 		}
 	} else {

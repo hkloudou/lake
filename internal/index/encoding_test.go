@@ -12,7 +12,7 @@ func TestEncodeMember(t *testing.T) {
 		// "user.name" in base64 URL encoding = "dXNlci5uYW1l"
 		{"user.name", "1700000000_123", MergeTypeReplace, "data|dXNlci5uYW1l|1700000000_123|0"},
 		// "profile" in base64 URL encoding = "cHJvZmlsZQ=="
-		{"profile", "1700000001_456", MergeTypeMerge, "data|cHJvZmlsZQ==|1700000001_456|1"},
+		{"profile", "1700000001_456", MergeTypeRFC7396, "data|cHJvZmlsZQ==|1700000001_456|1"},
 		// "" in base64 URL encoding = ""
 		{"", "1700000002_789", MergeTypeReplace, "data||1700000002_789|0"},
 		// Test field with special chars: "user:profile" = "dXNlcjpwcm9maWxl"
@@ -37,7 +37,7 @@ func TestDecodeMember(t *testing.T) {
 		expectError     bool
 	}{
 		{"data|dXNlci5uYW1l|1700000000_123|0", "user.name", "1700000000_123", MergeTypeReplace, false},
-		{"data|cHJvZmlsZQ==|1700000001_456|1", "profile", "1700000001_456", MergeTypeMerge, false},
+		{"data|cHJvZmlsZQ==|1700000001_456|1", "profile", "1700000001_456", MergeTypeRFC7396, false},
 		{"data||1700000002_789|0", "", "1700000002_789", MergeTypeReplace, false},
 		{"data|dXNlcjpwcm9maWxl|1700000003_100|0", "user:profile", "1700000003_100", MergeTypeReplace, false},
 		{"invalid", "", "", MergeTypeReplace, true},

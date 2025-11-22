@@ -168,7 +168,7 @@ client.Write(ctx, WriteRequest{
 })
 ```
 
-#### 5.2 MergeTypeMerge (1) - RFC 7396 JSON Merge Patch
+#### 5.2 MergeTypeRFC7396 (1) - RFC 7396 JSON Merge Patch
 实现 [RFC 7396](https://datatracker.ietf.org/doc/html/rfc7396) 标准的 JSON Merge Patch。
 
 **特性：**
@@ -185,11 +185,11 @@ client.WriteRFC7396(ctx, "users", "profile", []byte(`{
     "oldField": null
 }`))
 
-// Or using Write with MergeTypeMerge
+// Or using Write with MergeTypeRFC7396
 client.Write(ctx, WriteRequest{
     Field:     "user",
     Value:     map[string]any{"age": 31, "city": "NYC"},
-    MergeType: MergeTypeMerge, // RFC 7396
+    MergeType: MergeTypeRFC7396, // RFC 7396
 })
 ```
 

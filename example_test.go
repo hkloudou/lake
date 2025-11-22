@@ -10,68 +10,36 @@ import (
 	"github.com/hkloudou/lake/v2/internal/storage"
 )
 
-// func TestBasicUsage(t *testing.T) {
-// 	// For testing, provide storage directly via options
-// 	client := lake.NewLake("redis://localhost:6379", func(opt *lake.Option) {
-// 		opt.Storage = storage.NewMemoryStorage()
-// 	})
-
-// 	ctx := context.Background()
-
-// 	// Write some data
-// 	_, err := client.Write(ctx, lake.WriteRequest{
-// 		Catalog:   "users",
-// 		Field:     "profile.name",
-// 		Value:     map[string]any{"first": "John", "last": "Doe"},
-// 		MergeType: 0, // Replace
-// 	})
-// 	if err != nil {
-// 		t.Fatalf("Write failed: %v", err)
-// 	}
-
-// 	_, err = client.Write(ctx, lake.WriteRequest{
-// 		Catalog:   "users",
-// 		Field:     "profile.age",
-// 		Value:     30,
-// 		MergeType: 0, // Replace
-// 	})
-// 	if err != nil {
-// 		t.Fatalf("Write failed: %v", err)
-// 	}
-
-// 	// Read data
-// 	result, err := client.List(ctx, lake.ReadRequest{
-// 		Catalog:      "users",
-// 		GenerateSnap: true,
-// 	})
-// 	if err != nil {
-// 		t.Fatalf("Read failed: %v", err)
-// 	}
-
-// 	fmt.Printf("Merged data: %+v\n", result.Data)
-// 	fmt.Printf("Number of entries: %d\n", len(result.Entries))
-// 	// if result.Snapshot != nil {
-// 	// 	fmt.Printf("Snapshot UUID: %s\n", result.Snapshot.UUID)
-// 	// }
-// }
-
-func TestWithCustomStorage(t *testing.T) {
-	// Provide custom storage via options
+func TestBasicUsage(t *testing.T) {
+	// For testing, provide storage directly via options
 	client := lake.NewLake("localhost:6379", func(opt *lake.Option) {
 		opt.Storage = storage.NewMemoryStorage()
 	})
 
 	ctx := context.Background()
 
+	// Write some data
 	_, err := client.Write(ctx, lake.WriteRequest{
-		Catalog:   "test",
-		Field:     "data",
-		Value:     "hello",
-		MergeType: 0, // Replace
+		Catalog:   "users",
+		Field:     "profile.name",
+		Value:     "Alice",
+		MergeType: index.MergeTypeReplace,
 	})
 	if err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
+
+	_, err = client.Write(ctx, lake.WriteRequest{
+		Catalog:   "users",
+		Field:     "profile.age",
+		Value:     30,
+		MergeType: index.MergeTypeReplace,
+	})
+	if err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	t.Log("✓ Basic write operations successful")
 }
 
 func TestWriteRFC6902(t *testing.T) {
@@ -79,24 +47,45 @@ func TestWriteRFC6902(t *testing.T) {
 	ctx := context.Background()
 	catalog := "test_rfc6902"
 
-	// RFC6902 with auto-creation of missing parent paths
-	// The system will automatically create /a and /a/b when adding /a/b/c
-	// reqJSON := []byte(`[
-	// 	{ "op": "add", "path": "/a/b/c", "value": {"name": "John", "age": 30} },
-	// 	{ "op": "replace", "path": "/a/b/c", "value": 42 },
-	// 	{ "op": "move", "from": "/a/b/c", "path": "/a/b/d" },
-	// 	{ "op": "copy", "from": "/a/b/d", "path": "/a/b/e" }
-	// ]`)
-	reqJSON := []byte(`[
-		{ "op": "add", "path": "/a", "value": {} },
-		{ "op": "add", "path": "/a/x", "value": {"name": "John", "age": 30} },
-		{ "op": "add", "path": "/a/x", "value": {"height": 12} }
-	]`)
-	_, err := client.WriteRFC6902(ctx, catalog, reqJSON)
-	if err != nil {
-		t.Fatalf("Write failed: %v", err)
-	}
-	t.Log("✓ Wrote RFC6902 (parent paths auto-created)")
+	// Test 1: RFC6902 at root level
+	t.Run("root level patch", func(t *testing.T) {
+		patchOps := []byte(`[
+			{ "op": "add", "path": "/a/b/c", "value": {"name": "John", "age": 30} },
+			{ "op": "replace", "path": "/a/b/c", "value": 42 },
+			{ "op": "move", "from": "/a/b/c", "path": "/a/b/d" },
+			{ "op": "copy", "from": "/a/b/d", "path": "/a/b/e" }
+		]`)
+
+		_, err := client.Write(ctx, lake.WriteRequest{
+			Catalog:   catalog,
+			Field:     "", // Empty field means root document
+			Value:     patchOps,
+			MergeType: index.MergeTypeRFC6902,
+		})
+		if err != nil {
+			t.Fatalf("Write failed: %v", err)
+		}
+		t.Log("✓ RFC6902 patch to root document successful")
+	})
+
+	// Test 2: RFC6902 at field level
+	t.Run("field level patch", func(t *testing.T) {
+		patchOpsField := []byte(`[
+			{ "op": "add", "path": "/x", "value": {"name": "Alice"} },
+			{ "op": "add", "path": "/y", "value": 123 }
+		]`)
+
+		_, err := client.Write(ctx, lake.WriteRequest{
+			Catalog:   catalog,
+			Field:     "profile", // Patch applies to "profile" field only
+			Value:     patchOpsField,
+			MergeType: index.MergeTypeRFC6902,
+		})
+		if err != nil {
+			t.Fatalf("Write failed: %v", err)
+		}
+		t.Log("✓ RFC6902 patch to 'profile' field successful")
+	})
 
 	// Verify the data
 	result, err := client.List(ctx, catalog)
@@ -113,222 +102,59 @@ func TestWriteRFC6902(t *testing.T) {
 }
 
 func TestWriteData(t *testing.T) {
-	// Test writing data with real Redis config
 	client := lake.NewLake("redis://lake-redis-master.cs:6379/2")
-
 	ctx := context.Background()
+	catalog := "test_write"
 
-	catalog := "test"
-	var err error
-
-	// Write test data
-	t.Log("Writing test data...")
-
-	_, err = client.Write(ctx, lake.WriteRequest{
-		Catalog:   catalog,
-		Field:     "user.name",
-		Value:     "Alice3",
-		MergeType: index.MergeTypeReplace, // Replace
+	// Test different merge types
+	t.Run("replace", func(t *testing.T) {
+		_, err := client.Write(ctx, lake.WriteRequest{
+			Catalog:   catalog,
+			Field:     "user.name",
+			Value:     "Alice",
+			MergeType: index.MergeTypeReplace,
+		})
+		if err != nil {
+			t.Fatalf("Write failed: %v", err)
+		}
+		t.Log("✓ Replace successful")
 	})
-	if err != nil {
-		t.Fatalf("Write user.name failed: %v", err)
-	}
-	_, err = client.Write(ctx, lake.WriteRequest{
-		Catalog: catalog,
-		Field:   "user",
-		Value: map[string]any{
-			"xx": "yy",
-		},
-		MergeType: index.MergeTypeMerge, // Replace
+
+	t.Run("rfc7396 merge", func(t *testing.T) {
+		_, err := client.Write(ctx, lake.WriteRequest{
+			Catalog:   catalog,
+			Field:     "user",
+			Value:     map[string]any{"age": 30, "city": "NYC"},
+			MergeType: index.MergeTypeRFC7396,
+		})
+		if err != nil {
+			t.Fatalf("Write failed: %v", err)
+		}
+		t.Log("✓ RFC7396 merge successful")
 	})
-	if err != nil {
-		t.Fatalf("Write user.name failed: %v", err)
-	}
-	t.Log("✓ Wrote user.name")
 
-	// _, err = client.Write(ctx, lake.WriteRequest{
-	// 	Catalog:   catalog,
-	// 	Field:     "user.age",
-	// 	Value:     25,
-	// 	MergeType: 0, // Replace
-	// })
-	// if err != nil {
-	// 	t.Fatalf("Write user.age failed: %v", err)
-	// }
-	// t.Log("✓ Wrote user.age")
-
-	// _, err = client.Write(ctx, lake.WriteRequest{
-	// 	Catalog:   catalog,
-	// 	Field:     "user.email",
-	// 	Value:     "alice@example.com",
-	// 	MergeType: 0, // Replace
-	// })
-	// if err != nil {
-	// 	t.Fatalf("Write user.email failed: %v", err)
-	// }
-	// t.Log("✓ Wrote user.email")
-
-	t.Log("All writes completed successfully!")
+	t.Log("All write operations completed successfully!")
 }
 
-func TestList(t *testing.T) {
-	// Test reading data with real Redis config
-	client := lake.NewLake("redis://lake-redis-master.cs:6379/2")
-
-	ctx := context.Background()
-
-	catalog := "test"
-	// Read the data
-	t.Log("Reading data...")
-	result, err := client.List(ctx, catalog)
-	if err != nil {
-		t.Fatalf("Read failed: %v", err)
-	}
-
-	t.Logf("Read result:")
-	// t.Logf("  Entries count: %d", len(result.Entries))
-	// t.Logf("  Latest Snap: %+v", result.LatestSnap != nil)
-	fmt.Println(result.Dump())
-	// t.Logf("  Snapshot: %v", result.Snapshot != nil)
-	// if result.LatestSnap != nil {
-	// 	// t.Logf("  Snapshot UUID: %s", result.Snapshot.UUID)
-	// 	// t.Logf("  Snapshot Timestamp: %d", result.Snapshot.Timestamp)
-	// 	t.Logf("  Snapshot StartTsSeq: %s", result.LatestSnap.StartTsSeq)
-	// 	t.Logf("  Snapshot StopTsSeq: %s", result.LatestSnap.StopTsSeq)
-	// } else {
-	// 	t.Log("No snapshot found")
-	// }
-
-	// if len(result.Entries) == 0 {
-	// 	t.Log("No entries found - catalog may be empty")
-	// 	return
-	// }
-
-	// if len(result.Data) == 0 {
-	// 	t.Error("Expected data but got empty map")
-	// 	return
-	// }
-
-	// // Verify merged data structure if user data exists
-	// if user, ok := result.Data["user"].(map[string]any); ok {
-	// 	t.Logf("User data found: %+v", user)
-
-	// 	if name, ok := user["name"].(string); ok {
-	// 		t.Logf("  ✓ user.name = %s", name)
-	// 	}
-	// 	if age, ok := user["age"].(float64); ok {
-	// 		t.Logf("  ✓ user.age = %.0f", age)
-	// 	}
-	// 	if email, ok := user["email"].(string); ok {
-	// 		t.Logf("  ✓ user.email = %s", email)
-	// 	}
-	// }
-}
-func TestRead(t *testing.T) {
-	// Test reading data with real Redis config
+func TestListAndRead(t *testing.T) {
 	client := lake.NewLake("redis://lake-redis-master.cs:6379/2")
 	ctx := context.Background()
-	catalog := "test"
-	// Read the data
-	t.Log("Reading data...")
+	catalog := "test_write"
+
+	// List catalog entries
 	result, err := client.List(ctx, catalog)
 	if err != nil {
-		t.Fatalf("Read failed: %v", err)
+		t.Fatalf("List failed: %v", err)
 	}
-	t.Logf("Read result:")
-	// t.Logf("  Entries count: %d", len(result.Entries))
-	// t.Logf("  Latest Snap: %+v", result.LatestSnap != nil)
+
+	t.Log("Catalog entries:")
 	fmt.Println(result.Dump())
-	// t.Log()
+
+	// Read merged data
 	data, err := lake.ReadMap(ctx, result)
 	if err != nil {
-		t.Fatalf("Read failed: %v", err)
+		t.Fatalf("ReadMap failed: %v", err)
 	}
 
-	t.Logf("Read data: %s", data)
-	// t.Logf("  Snapshot: %v", result.Snapshot != nil)
-	// if result.LatestSnap != nil {
-	// 	// t.Logf("  Snapshot UUID: %s", result.Snapshot.UUID)
-	// 	// t.Logf("  Snapshot Timestamp: %d", result.Snapshot.Timestamp)
-	// 	t.Logf("  Snapshot StartTsSeq: %s", result.LatestSnap.StartTsSeq)
-	// 	t.Logf("  Snapshot StopTsSeq: %s", result.LatestSnap.StopTsSeq)
-	// } else {
-	// 	t.Log("No snapshot found")
-	// }
-
-	// if len(result.Entries) == 0 {
-	// 	t.Log("No entries found - catalog may be empty")
-	// 	return
-	// }
-
-	// if len(result.Data) == 0 {
-	// 	t.Error("Expected data but got empty map")
-	// 	return
-	// }
-
-	// // Verify merged data structure if user data exists
-	// if user, ok := result.Data["user"].(map[string]any); ok {
-	// 	t.Logf("User data found: %+v", user)
-
-	// 	if name, ok := user["name"].(string); ok {
-	// 		t.Logf("  ✓ user.name = %s", name)
-	// 	}
-	// 	if age, ok := user["age"].(float64); ok {
-	// 		t.Logf("  ✓ user.age = %.0f", age)
-	// 	}
-	// 	if email, ok := user["email"].(string); ok {
-	// 		t.Logf("  ✓ user.email = %s", email)
-	// 	}
-	// }
+	t.Logf("Merged data: %+v", data)
 }
-
-// func TestConfigRequired(t *testing.T) {
-// 	// This test verifies that client fails without proper config
-// 	client := lake.NewLake("redis://localhost:6379/15") // Empty test DB
-
-// 	ctx := context.Background()
-
-// 	// Try to write without config - should fail
-// 	_, err := client.Write(ctx, lake.WriteRequest{
-// 		Catalog:   "test",
-// 		Field:     "data",
-// 		Value:     "value",
-// 		MergeType: 0, // Replace
-// 	})
-
-// 	if err == nil {
-// 		t.Error("Expected error when config is missing, got nil")
-// 	} else {
-// 		t.Logf("Correctly failed with: %v", err)
-// 	}
-// }
-
-// func TestSetupConfig(t *testing.T) {
-// 	// Helper test to setup config in Redis
-// 	t.Skip("Manual test - run only when needed to setup config")
-
-// 	_ = lake.NewLake("redis://lake-redis-master.cs:6379/2", func(opt *lake.Option) {
-// 		opt.Storage = storage.NewMemoryStorage() // Temporary for setup
-// 	})
-
-// 	_ = context.Background()
-
-// 	cfg := &config.Config{
-// 		Name:      "cs-lake",
-// 		Storage:   "oss",
-// 		Bucket:    "cs-lake",
-// 		Endpoint:  "oss-cn-hangzhou",
-// 		AccessKey: "your-access-key",
-// 		SecretKey: "your-secret-key",
-// 	}
-
-// 	// This would fail because UpdateConfig is commented out
-// 	// err := client.UpdateConfig(ctx, cfg)
-// 	// For now, set manually in Redis:
-// 	// redis-cli SET lake.setting '{"Name":"cs-lake","Storage":"oss","Bucket":"cs-lake",...}'
-
-// 	t.Logf("Config to set: %+v", cfg)
-// 	t.Log("Run manually: redis-cli SET lake.setting '{...}'")
-// }
-
-// func Test

@@ -136,18 +136,23 @@ func TestRFC7396Examples(t *testing.T) {
 	}
 }
 
-// TestWriteRFC7396 tests the WriteRFC7396 method
+// TestWriteRFC7396 tests RFC7396 using Write method
 func TestWriteRFC7396(t *testing.T) {
 	client := lake.NewLake("redis://lake-redis-master.cs:6379/2")
 	ctx := context.Background()
-	catalog := "test_rfc7396"
+	catalog := "test_rfc7396_write"
 
 	// Test 1: Simple merge at root level
 	t.Run("root level merge", func(t *testing.T) {
-		patch := []byte(`{"title":"Hello!","phoneNumber":"+01-123-456-7890"}`)
-		_, err := client.WriteRFC7396(ctx, catalog, "", patch)
+		patch := map[string]interface{}{"title": "Hello!", "phoneNumber": "+01-123-456-7890"}
+		_, err := client.Write(ctx, lake.WriteRequest{
+			Catalog:   catalog,
+			Field:     "", // Empty field means root document
+			Value:     patch,
+			MergeType: index.MergeTypeRFC7396,
+		})
 		if err != nil {
-			t.Fatalf("WriteRFC7396 failed: %v", err)
+			t.Fatalf("Write RFC7396 failed: %v", err)
 		}
 		t.Log("✓ Root level merge successful")
 	})
@@ -165,21 +170,31 @@ func TestWriteRFC7396(t *testing.T) {
 			t.Fatalf("Initial write failed: %v", err)
 		}
 
-		// Apply merge patch to author field only
-		patch := []byte(`{"familyName":null}`)
-		_, err = client.WriteRFC7396(ctx, catalog, "author", patch)
+		// Apply merge patch to author field only (delete familyName with null)
+		patch := map[string]interface{}{"familyName": nil}
+		_, err = client.Write(ctx, lake.WriteRequest{
+			Catalog:   catalog,
+			Field:     "author",
+			Value:     patch,
+			MergeType: index.MergeTypeRFC7396,
+		})
 		if err != nil {
-			t.Fatalf("WriteRFC7396 failed: %v", err)
+			t.Fatalf("Write RFC7396 failed: %v", err)
 		}
 		t.Log("✓ Field level merge successful (deleted familyName)")
 	})
 
-	// Test 3: Delete field with null
+	// Test 3: Delete field with null at root level
 	t.Run("delete with null", func(t *testing.T) {
-		patch := []byte(`{"phoneNumber":null}`)
-		_, err := client.WriteRFC7396(ctx, catalog, "", patch)
+		patch := map[string]interface{}{"phoneNumber": nil}
+		_, err := client.Write(ctx, lake.WriteRequest{
+			Catalog:   catalog,
+			Field:     "",
+			Value:     patch,
+			MergeType: index.MergeTypeRFC7396,
+		})
 		if err != nil {
-			t.Fatalf("WriteRFC7396 failed: %v", err)
+			t.Fatalf("Write RFC7396 failed: %v", err)
 		}
 		t.Log("✓ Delete with null successful")
 	})
@@ -198,8 +213,8 @@ func TestWriteRFC7396(t *testing.T) {
 	t.Logf("Final data: %+v", data)
 }
 
-// TestMergeTypeImplementsRFC7396 verifies that MergeTypeMerge implements RFC 7396
-func TestMergeTypeImplementsRFC7396(t *testing.T) {
+// TestMergeTypeRFC7396 verifies that MergeTypeRFC7396 implements RFC 7396
+func TestMergeTypeRFC7396(t *testing.T) {
 	client := lake.NewLake("redis://lake-redis-master.cs:6379/2")
 	ctx := context.Background()
 	catalog := "test_merge_rfc7396"
@@ -215,12 +230,12 @@ func TestMergeTypeImplementsRFC7396(t *testing.T) {
 		t.Fatalf("Initial write failed: %v", err)
 	}
 
-	// Apply RFC7396 merge patch using MergeTypeMerge
+	// Apply RFC7396 merge patch using MergeTypeRFC7396
 	_, err = client.Write(ctx, lake.WriteRequest{
 		Catalog:   catalog,
 		Field:     "user",
 		Value:     map[string]interface{}{"age": 31, "city": "NYC"},
-		MergeType: index.MergeTypeMerge, // This should use RFC7396
+		MergeType: index.MergeTypeRFC7396, // RFC 7396 JSON Merge Patch
 	})
 	if err != nil {
 		t.Fatalf("Merge write failed: %v", err)
@@ -253,6 +268,5 @@ func TestMergeTypeImplementsRFC7396(t *testing.T) {
 		t.Errorf("city should be 'NYC', got %v", user["city"])
 	}
 
-	t.Logf("✓ MergeTypeMerge correctly implements RFC7396: %+v", user)
+	t.Logf("✓ MergeTypeRFC7396 correctly implements RFC7396: %+v", user)
 }
-
