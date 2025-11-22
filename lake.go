@@ -227,19 +227,39 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 	if err := c.ensureInitialized(ctx); err != nil {
 		return nil, err
 	}
+	
 	var baseData = []byte("{}")
 	if list.LatestSnap != nil {
 		key := storage.MakeSnapKey(list.catalog, list.LatestSnap.StartTsSeq, list.LatestSnap.StopTsSeq)
-		data, err := c.storage.Get(ctx, key)
+		
+		// Use cache to load snapshot
+		obj, err := c.cache.Take(key, func() (any, error) {
+			// Cache miss: load from storage
+			data, err := c.storage.Get(ctx, key)
+			if err != nil {
+				return nil, err
+			}
+			return data, nil
+		})
+		
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to load snapshot: %w", err)
 		}
-		baseData = data
+		
+		// Type assertion to []byte
+		if data, ok := obj.([]byte); ok {
+			baseData = data
+		} else {
+			return nil, fmt.Errorf("snapshot cache returned unexpected type: %T", obj)
+		}
 	}
+	
 	resultData, err := c.mergeEntries(ctx, list.catalog, baseData, list.Entries)
 	if err != nil {
 		return nil, err
 	}
+	
+	// Generate and save new snapshot if there are new entries
 	if len(list.Entries) > 0 {
 		nextSnap := list.NextSnap()
 		_, err := list.client.snapMgr.Save(ctx, list.catalog, nextSnap.StartTsSeq, nextSnap.StopTsSeq, resultData)
@@ -247,6 +267,7 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 			return nil, fmt.Errorf("failed to save snapshot: %w", err)
 		}
 	}
+	
 	return resultData, nil
 }
 
