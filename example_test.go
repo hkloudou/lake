@@ -12,17 +12,17 @@ import (
 
 func TestBasicUsage(t *testing.T) {
 	// For testing, provide storage directly via options
-	client := lake.NewLake("localhost:6379", func(opt *lake.Option) {
+	client := lake.NewLake("redis://lake-redis-master.cs:6379/2", func(opt *lake.Option) {
 		opt.Storage = storage.NewMemoryStorage()
 	})
 
 	ctx := context.Background()
 
-	// Write some data
+	// Write some data (Body is raw JSON)
 	_, err := client.Write(ctx, lake.WriteRequest{
 		Catalog:   "users",
 		Field:     "profile.name",
-		Value:     "Alice",
+		Body:      []byte(`"Alice"`), // JSON string
 		MergeType: index.MergeTypeReplace,
 	})
 	if err != nil {
@@ -32,7 +32,7 @@ func TestBasicUsage(t *testing.T) {
 	_, err = client.Write(ctx, lake.WriteRequest{
 		Catalog:   "users",
 		Field:     "profile.age",
-		Value:     30,
+		Body:      []byte(`30`), // JSON number
 		MergeType: index.MergeTypeReplace,
 	})
 	if err != nil {
@@ -40,6 +40,16 @@ func TestBasicUsage(t *testing.T) {
 	}
 
 	t.Log("✓ Basic write operations successful")
+	result, err := client.List(ctx, "users")
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	t.Logf("List result: %+v", result.Dump())
+	data, err := lake.ReadMap(ctx, result)
+	if err != nil {
+		t.Fatalf("ReadMap failed: %v", err)
+	}
+	t.Logf("Data: %+v", data)
 }
 
 func TestWriteRFC6902(t *testing.T) {
@@ -59,7 +69,7 @@ func TestWriteRFC6902(t *testing.T) {
 		_, err := client.Write(ctx, lake.WriteRequest{
 			Catalog:   catalog,
 			Field:     "", // Empty field means root document
-			Value:     patchOps,
+			Body:      patchOps,
 			MergeType: index.MergeTypeRFC6902,
 		})
 		if err != nil {
@@ -78,7 +88,7 @@ func TestWriteRFC6902(t *testing.T) {
 		_, err := client.Write(ctx, lake.WriteRequest{
 			Catalog:   catalog,
 			Field:     "profile", // Patch applies to "profile" field only
-			Value:     patchOpsField,
+			Body:      patchOpsField,
 			MergeType: index.MergeTypeRFC6902,
 		})
 		if err != nil {
@@ -111,7 +121,7 @@ func TestWriteData(t *testing.T) {
 		_, err := client.Write(ctx, lake.WriteRequest{
 			Catalog:   catalog,
 			Field:     "user.name",
-			Value:     "Alice",
+			Body:      []byte(`"Alice"`), // JSON string
 			MergeType: index.MergeTypeReplace,
 		})
 		if err != nil {
@@ -124,7 +134,7 @@ func TestWriteData(t *testing.T) {
 		_, err := client.Write(ctx, lake.WriteRequest{
 			Catalog:   catalog,
 			Field:     "user",
-			Value:     map[string]any{"age": 30, "city": "NYC"},
+			Body:      []byte(`{"age": 30, "city": "NYC"}`), // JSON object
 			MergeType: index.MergeTypeRFC7396,
 		})
 		if err != nil {

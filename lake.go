@@ -2,7 +2,6 @@ package lake
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 
@@ -133,7 +132,7 @@ func (c *Client) ensureInitialized(ctx context.Context) error {
 type WriteRequest struct {
 	Catalog   string          // Catalog name
 	Field     string          // JSON path (e.g., "user.profile.name")
-	Value     any             // Value to write (will be JSON marshaled if not []byte)
+	Body      []byte          // JSON body to write (raw bytes from network)
 	MergeType index.MergeType // Merge strategy (Replace or Merge)
 }
 
@@ -155,25 +154,20 @@ type WriteResult struct {
 // Field parameter:
 // - For Replace/RFC7396: specifies the target field (empty "" means root document)
 // - For RFC6902: empty "" means operations apply to root, non-empty means operations scope to that field
+//
+// Body parameter:
+// - Raw JSON bytes (typically from HTTP request body)
+// - No additional marshaling/unmarshaling overhead
+// - Examples:
+//   - String value: []byte(`"Alice"`)
+//   - Number value: []byte(`30`)
+//   - Object value: []byte(`{"age":30}`)
+//   - RFC7396 patch: []byte(`{"age":31,"city":null}`)
+//   - RFC6902 patch: []byte(`[{"op":"add","path":"/a","value":1}]`)
 func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, error) {
 	// Ensure initialized before operation
 	if err := c.ensureInitialized(ctx); err != nil {
 		return nil, err
-	}
-
-	// Marshal value to JSON if not already []byte
-	var data []byte
-	switch v := req.Value.(type) {
-	case []byte:
-		data = v
-	case string:
-		data = []byte(v)
-	default:
-		var err error
-		data, err = json.Marshal(req.Value)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal value: %w", err)
-		}
 	}
 
 	tsSeq, err := c.writer.GetTimeSeqID(ctx, req.Catalog)
@@ -186,7 +180,7 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 		return nil, fmt.Errorf("storage not initialized")
 	}
 	key := storage.MakeDataKey(req.Catalog, tsSeq, int(req.MergeType))
-	if err := c.storage.Put(ctx, key, data); err != nil {
+	if err := c.storage.Put(ctx, key, req.Body); err != nil {
 		// Rollback: remove from Redis index (best effort)
 		// TODO: implement proper rollback mechanism
 		return nil, fmt.Errorf("failed to write to storage: %w", err)
