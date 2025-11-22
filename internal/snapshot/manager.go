@@ -2,11 +2,9 @@ package snapshot
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
-	"github.com/hkloudou/lake/v2/internal/cache"
 	"github.com/hkloudou/lake/v2/internal/index"
 	"github.com/hkloudou/lake/v2/internal/storage"
 	"github.com/hkloudou/lake/v2/internal/xsync"
@@ -17,7 +15,6 @@ type Manager struct {
 	storage storage.Storage
 	reader  *index.Reader
 	writer  *index.Writer
-	cache   cache.Cache
 	flight  xsync.SingleFlight[string]
 }
 
@@ -26,13 +23,11 @@ func NewManager(
 	storage storage.Storage,
 	reader *index.Reader,
 	writer *index.Writer,
-	cacheProvider cache.Cache,
 ) *Manager {
 	return &Manager{
 		storage: storage,
 		reader:  reader,
 		writer:  writer,
-		cache:   cacheProvider,
 		flight:  xsync.NewSingleFlight[string](),
 	}
 }
@@ -101,74 +96,25 @@ func (m *Manager) save(ctx context.Context, catalog string, startTsSeq, stopTsSe
 	return snapKey, nil
 }
 
-// GetLatest gets the latest snapshot metadata
-// Returns the snapshot along with its time range information
+// GetLatest gets the latest snapshot metadata from Redis index
+// Returns the snapshot metadata (time range only)
 func (m *Manager) GetLatest(ctx context.Context, catalog string, _ bool) (*Snapshot, error) {
-	// Check for existing snapshot
+	// Check for existing snapshot in Redis index
 	snapInfo, err := m.reader.GetLatestSnap(ctx, catalog)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get latest snapshot: %w", err)
 	}
 
-	// If snapshot exists, load metadata
+	// If snapshot exists, return metadata from Redis
 	if snapInfo != nil {
-		// snap, err := m.loadSnapshot(ctx, catalog, snapInfo.StartTsSeq, snapInfo.StopTsSeq)
-		// if err == nil {
-		// 	return snap, nil
-		// }
-		// If load fails, return the info we have from Redis
 		return &Snapshot{
 			StartTsSeq: snapInfo.StartTsSeq,
 			StopTsSeq:  snapInfo.StopTsSeq,
-			// Score:      snapInfo.Score,
 		}, nil
 	}
 
 	// No snapshot found
 	return nil, nil
-}
-
-// loadSnapshot loads snapshot using time range with cache support
-// filename: catalog/{startTsSeq}~{stopTsSeq}.snap
-func (m *Manager) loadSnapshot(ctx context.Context, catalog string, startTsSeq, stopTsSeq index.TimeSeqID) (*Snapshot, error) {
-	key := storage.MakeSnapKey(catalog, startTsSeq, stopTsSeq)
-
-	// Use cache if available
-	obj, err := m.cache.Take(key, func() (any, error) {
-		// Cache miss: load from storage
-		data, err := m.storage.Get(ctx, key)
-		if err != nil {
-			return nil, err
-		}
-
-		var snap Snapshot
-		if err := json.Unmarshal(data, &snap); err != nil {
-			return nil, err
-		}
-
-		return &snap, nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	snap, ok := obj.(*Snapshot)
-	if !ok {
-		// Type assertion failed, reload from storage
-		data, err := m.storage.Get(ctx, key)
-		if err != nil {
-			return nil, err
-		}
-
-		var snapObj Snapshot
-		if err := json.Unmarshal(data, &snapObj); err != nil {
-			return nil, err
-		}
-		return &snapObj, nil
-	}
-
-	return snap, nil
 }
 
 // ShouldGenerate checks if a snapshot should be generated based on strategy

@@ -63,7 +63,7 @@ func TestWithRedisCache(t *testing.T) {
 	}
 
 	// Create cache with 1 minute TTL
-	redisCache := cache.NewRedisCache(rdb, 1*time.Minute)
+	redisCache := cache.NewRedisCache[[]byte](rdb, 1*time.Minute)
 
 	// Create client with cache
 	client := lake.NewLake(

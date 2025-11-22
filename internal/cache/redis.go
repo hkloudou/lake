@@ -2,7 +2,6 @@ package cache
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"time"
 
@@ -37,7 +36,7 @@ func NewRedisCacheWithURL(metaUrl string, ttl time.Duration) (*RedisCache, error
 }
 
 // Take implements Cache interface
-func (c *RedisCache) Take(key string, loader func() (any, error)) (any, error) {
+func (c *RedisCache) Take(key string, loader func() ([]byte, error)) ([]byte, error) {
 	// Only cache .snap files
 	if !strings.HasSuffix(key, ".snap") {
 		return loader()
@@ -47,31 +46,25 @@ func (c *RedisCache) Take(key string, loader func() (any, error)) (any, error) {
 	cacheKey := "lake_cache:" + key
 
 	// Try to get from Redis
-	data, err := c.client.GetEx(ctx, cacheKey, c.ttl).Result()
+	cachedData, err := c.client.GetEx(ctx, cacheKey, c.ttl).Result()
 	if err == redis.Nil {
 		// Cache miss
 		c.stat.IncrementMiss()
 
-		// Call loader function
-		obj, err := loader()
+		// Call loader function to get []byte
+		data, err := loader()
 		if err != nil {
 			return nil, err
 		}
 
-		// Serialize to JSON
-		jsonData, err := json.Marshal(obj)
-		if err != nil {
-			return nil, err
-		}
-
-		// Write to Redis with TTL
-		err = c.client.Set(ctx, cacheKey, jsonData, c.ttl).Err()
+		// Write to Redis with TTL (data is already []byte, no need to marshal)
+		err = c.client.Set(ctx, cacheKey, data, c.ttl).Err()
 		if err != nil {
 			// Log error but don't fail (cache is optional)
 			// Continue with loaded data
 		}
 
-		return obj, nil
+		return data, nil
 	} else if err != nil {
 		// Redis error, fallback to loader
 		return loader()
@@ -79,17 +72,9 @@ func (c *RedisCache) Take(key string, loader func() (any, error)) (any, error) {
 
 	// Cache hit
 	c.stat.IncrementHit()
-
-	// Deserialize JSON
-	var obj any
-	err = json.Unmarshal([]byte(data), &obj)
-	if err != nil {
-		// Deserialization error, fallback to loader
-		c.stat.IncrementMiss()
-		return loader()
-	}
-
-	return obj, nil
+	
+	// Return cached data as []byte
+	return []byte(cachedData), nil
 }
 
 // countKeys counts keys matching a pattern

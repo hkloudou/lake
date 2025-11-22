@@ -144,9 +144,9 @@ func (c *Client) ensureInitialized(ctx context.Context) error {
 	c.writer.SetPrefix(prefix)
 	c.reader.SetPrefix(prefix)
 
-	// Initialize snapshot manager with cache
+	// Initialize snapshot manager
 	if c.snapMgr == nil {
-		c.snapMgr = snapshot.NewManager(c.storage, c.reader, c.writer, c.cache)
+		c.snapMgr = snapshot.NewManager(c.storage, c.reader, c.writer)
 	}
 
 	return nil
@@ -227,47 +227,42 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 	if err := c.ensureInitialized(ctx); err != nil {
 		return nil, err
 	}
+
+	var baseData []byte
+	var err error
 	
-	var baseData = []byte("{}")
 	if list.LatestSnap != nil {
 		key := storage.MakeSnapKey(list.catalog, list.LatestSnap.StartTsSeq, list.LatestSnap.StopTsSeq)
-		
-		// Use cache to load snapshot
-		obj, err := c.cache.Take(key, func() (any, error) {
+
+		// Use cache to load snapshot data
+		baseData, err = c.cache.Take(key, func() ([]byte, error) {
 			// Cache miss: load from storage
-			data, err := c.storage.Get(ctx, key)
-			if err != nil {
-				return nil, err
-			}
-			return data, nil
+			return c.storage.Get(ctx, key)
 		})
-		
+
 		if err != nil {
 			return nil, fmt.Errorf("failed to load snapshot: %w", err)
 		}
-		
-		// Type assertion to []byte
-		if data, ok := obj.([]byte); ok {
-			baseData = data
-		} else {
-			return nil, fmt.Errorf("snapshot cache returned unexpected type: %T", obj)
-		}
+	} else {
+		baseData = []byte("{}")
 	}
-	
-	resultData, err := c.mergeEntries(ctx, list.catalog, baseData, list.Entries)
+
+	// Merge entries with base data
+	var resultData []byte
+	resultData, err = c.mergeEntries(ctx, list.catalog, baseData, list.Entries)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Generate and save new snapshot if there are new entries
 	if len(list.Entries) > 0 {
 		nextSnap := list.NextSnap()
-		_, err := list.client.snapMgr.Save(ctx, list.catalog, nextSnap.StartTsSeq, nextSnap.StopTsSeq, resultData)
+		_, err = list.client.snapMgr.Save(ctx, list.catalog, nextSnap.StartTsSeq, nextSnap.StopTsSeq, resultData)
 		if err != nil {
 			return nil, fmt.Errorf("failed to save snapshot: %w", err)
 		}
 	}
-	
+
 	return resultData, nil
 }
 
