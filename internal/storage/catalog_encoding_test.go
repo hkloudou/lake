@@ -77,7 +77,7 @@ func TestFullPathExamples(t *testing.T) {
 	}
 
 	for _, ex := range examples {
-		path := encodeCatalogPath(ex.catalog, shardSize)
+		path := encode.EncodeOssCatalogPath(ex.catalog, shardSize)
 
 		// Extract parts
 		hash := md5.Sum([]byte(ex.catalog))

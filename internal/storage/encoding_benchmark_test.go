@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"strings"
 	"testing"
+
+	"github.com/hkloudou/lake/v2/internal/encode"
 )
 
 // Benchmark different encoding methods
@@ -52,7 +54,7 @@ func TestEncodingComparison(t *testing.T) {
 		// b32Result := strings.ToLower(encoder.EncodeToString([]byte(catalog)))
 
 		// 3. Safe chars only (alphanumeric + dash/underscore)
-		safeResult := encodeCatalogName(catalog)
+		safeResult := encode.EncodeOssCatalogName(catalog)
 
 		t.Logf("\nCatalog: %q", catalog)
 		// t.Logf("  Hex:          %s (len=%d)", hexResult, len(hexResult))

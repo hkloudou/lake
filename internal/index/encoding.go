@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strings"
+
+	"github.com/hkloudou/lake/v2/internal/encode"
 )
 
 // MergeType defines how to merge values
@@ -49,7 +51,7 @@ func MergeTypeFromInt(i int) MergeType {
 // Example: "data|dXNlci5uYW1l|1700000000_123|0"
 func EncodeDeltaMember(field, tsSeqID string, mergeType MergeType) string {
 	// Encode field using base64 URL encoding (safe for Redis keys)
-	encodedField := base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString([]byte(field))
+	encodedField := encode.EncodeRedisCatalogName(field)
 	return fmt.Sprintf("delta|%s|%s|%d", encodedField, tsSeqID, mergeType)
 }
 

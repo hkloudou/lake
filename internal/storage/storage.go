@@ -46,17 +46,11 @@ type Storage interface {
 // 	return catalog + "/" + identifier + ".json"
 // }
 
-// encodeCatalogPath encodes catalog name following OSS best practices
-// Delegates to encode.EncodeOssCatalogPath
-func encodeCatalogPath(catalog string, shardSize int) string {
-	return encode.EncodeOssCatalogPath(catalog, shardSize)
-}
-
 // MakeDeltaKey generates storage key for data files with MD5-sharded path
 // Format: {md5[0:4]}/{hex(catalog)}/delta/{ts}_{seqid}_{mergeTypeInt}.json
 // Example: f9aa/5573657273/delta/1700000000_123_1.json (for catalog "Users")
 func MakeDeltaKey(catalog string, tsSeqID index.TimeSeqID, mergeType int) string {
-	shardedPath := encodeCatalogPath(catalog, 4) // Default: 4-char MD5 prefix (65,536 dirs)
+	shardedPath := encode.EncodeOssCatalogPath(catalog, 4) // Default: 4-char MD5 prefix (65,536 dirs)
 	return fmt.Sprintf("%s/delta/%s_%d.json", shardedPath, tsSeqID.String(), mergeType)
 }
 
@@ -64,6 +58,6 @@ func MakeDeltaKey(catalog string, tsSeqID index.TimeSeqID, mergeType int) string
 // Format: {md5[0:4]}/{hex(catalog)}/snap/{startTsSeq}~{stopTsSeq}.snap
 // Example: f9aa/5573657273/snap/1700000000_1~1700000100_500.snap (for catalog "Users")
 func MakeSnapKey(catalog string, startTsSeq, stopTsSeq index.TimeSeqID) string {
-	shardedPath := encodeCatalogPath(catalog, 4) // Default: 4-char MD5 prefix (65,536 dirs)
+	shardedPath := encode.EncodeOssCatalogPath(catalog, 4) // Default: 4-char MD5 prefix (65,536 dirs)
 	return fmt.Sprintf("%s/snap/%s~%s.snap", shardedPath, startTsSeq.String(), stopTsSeq.String())
 }
