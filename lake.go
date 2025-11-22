@@ -281,6 +281,7 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 // fillDeltasBody fills the Body field for all deltas concurrently
 // Uses a worker pool with max 10 concurrent goroutines
 // Idempotent: skips deltas that already have Body loaded (len(Body) > 0)
+// Returns error immediately if any delta fails to load (no partial success)
 func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []index.DeltaInfo) error {
 	if len(deltas) == 0 {
 		return nil
@@ -293,7 +294,7 @@ func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []in
 	}
 
 	jobs := make(chan job, len(deltas))
-	errors := make(chan error, len(deltas))
+	done := make(chan error, 1) // Buffered channel for first error
 
 	// Count deltas that need loading
 	needLoading := 0
@@ -313,6 +314,10 @@ func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []in
 		maxWorkers = needLoading
 	}
 
+	// Context for early cancellation on error
+	workerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	// Start workers
 	var wg sync.WaitGroup
 	for i := 0; i < maxWorkers; i++ {
@@ -320,41 +325,58 @@ func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []in
 		go func() {
 			defer wg.Done()
 			for j := range jobs {
+				// Check if context cancelled (another worker failed)
+				select {
+				case <-workerCtx.Done():
+					return
+				default:
+				}
+
 				// Skip if already loaded
 				if len(j.delta.Body) > 0 {
 					continue
 				}
 
 				key := storage.MakeDeltaKey(catalog, j.delta.TsSeq, int(j.delta.MergeType))
-				data, err := c.storage.Get(ctx, key)
+				data, err := c.storage.Get(workerCtx, key)
 				if err != nil {
-					errors <- fmt.Errorf("failed to load delta %d: %w", j.index, err)
-					continue
+					// Send error and cancel other workers
+					select {
+					case done <- fmt.Errorf("failed to load delta %d (%s): %w", j.index, j.delta.TsSeq, err):
+					default:
+					}
+					cancel()
+					return
 				}
 				j.delta.Body = data
 			}
 		}()
 	}
 
-	// Send jobs (only for deltas that need loading)
-	for i := range deltas {
-		jobs <- job{index: i, delta: &deltas[i]}
-	}
-	close(jobs)
-
-	// Wait for all workers to finish
-	wg.Wait()
-	close(errors)
-
-	// Check for errors (optional: could just skip failed deltas)
-	var firstErr error
-	for err := range errors {
-		if firstErr == nil {
-			firstErr = err
+	// Send jobs in a separate goroutine
+	go func() {
+		for i := range deltas {
+			select {
+			case <-workerCtx.Done():
+				return
+			case jobs <- job{index: i, delta: &deltas[i]}:
+			}
 		}
+		close(jobs)
+	}()
+
+	// Wait for all workers or first error
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	// Return first error or nil
+	if err := <-done; err != nil {
+		return err
 	}
 
-	return firstErr // nil if no errors
+	return nil
 }
 
 // ReadRequest represents a read request
@@ -367,8 +389,9 @@ func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []in
 // This is the single source of truth for data merging
 func (c *Client) mergeEntries(ctx context.Context, catalog string, baseData []byte, entries []index.DeltaInfo) ([]byte, error) {
 	// Fill delta bodies concurrently (idempotent: skips already loaded)
+	// Returns error if any delta fails to load (no partial success allowed)
 	if err := c.fillDeltasBody(ctx, catalog, entries); err != nil {
-		// Log but continue - some deltas may still be loaded
+		return nil, fmt.Errorf("failed to load delta bodies: %w", err)
 	}
 
 	merged := baseData
