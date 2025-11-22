@@ -32,9 +32,9 @@ func EncodeOssCatalogName(catalog string) string {
 // Uses base64 URL encoding without padding (safe for Redis keys)
 func EncodeRedisCatalogName(catalog string) string {
 	// For Redis, if catalog is safe, use as-is with prefix
-	// if IsRedisSafe(catalog) {
-	// 	return "(" + catalog
-	// }
+	if IsRedisSafe(catalog) {
+		return "(" + catalog
+	}
 	// Use base64 URL encoding without padding
 	return base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString([]byte(catalog))
 }
@@ -111,7 +111,7 @@ func IsRedisSafe(catalog string) bool {
 		if !((r >= 'a' && r <= 'z') ||
 			(r >= 'A' && r <= 'Z') ||
 			(r >= '0' && r <= '9') ||
-			r == '-' || r == '_' || r == '.') {
+			r == '-' || r == '_' || r == '/' || r == '.') {
 			return false
 		}
 	}
