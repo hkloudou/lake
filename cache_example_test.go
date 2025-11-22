@@ -24,7 +24,7 @@ func TestWithCacheHelper(t *testing.T) {
 	// _, err := client.Write(ctx, lake.WriteRequest{
 	// 	Catalog:   "users",
 	// 	Field:     "profile",
-	// 	Body:      []byte(`{"name":"Alice","age":30}`),
+	// 	Body:      []byte(`{"name":"Alice2","age":30}`),
 	// 	MergeType: index.MergeTypeReplace,
 	// })
 	// if err != nil {
