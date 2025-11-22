@@ -112,12 +112,12 @@ func TestSnapMember(t *testing.T) {
 		t.Error("IsSnapMember(\"data|dXNlci5uYW1l|1700000000_123|0\") = true, want false")
 	}
 
-	// Test IsDataMember
-	if !IsDeltaMember("data|dXNlci5uYW1l|1700000000_123|0") {
-		t.Error("IsDataMember(\"data|dXNlci5uYW1l|1700000000_123|0\") = false, want true")
+	// Test IsDeltaMember with delta prefix
+	if !IsDeltaMember("delta|dXNlci5uYW1l|1700000000_123|0") {
+		t.Error("IsDeltaMember(\"delta|dXNlci5uYW1l|1700000000_123|0\") = false, want true")
 	}
 	if IsDeltaMember("snap|1700000000_1|1700000100_500") {
-		t.Error("IsDataMember(\"snap|1700000000_1|1700000100_500\") = true, want false")
+		t.Error("IsDeltaMember(\"snap|1700000000_1|1700000100_500\") = true, want false")
 	}
 
 	// Test invalid format
