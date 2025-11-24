@@ -6,6 +6,7 @@ type Cache interface {
 	// namespace: cache namespace to avoid key conflicts (e.g., storage prefix like "oss:mylake")
 	// key: cache key (e.g., "users/snap/1700000000_1~1700000100_500.snap")
 	// If cache miss, calls loader function to load data, cache it, and return.
+	// Uses SingleFlight internally to prevent cache stampede.
 	Take(namespace, key string, loader func() ([]byte, error)) ([]byte, error)
 }
 

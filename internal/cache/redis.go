@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/hkloudou/lake/v2/internal/encode"
+	"github.com/hkloudou/lake/v2/internal/xsync"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -15,6 +16,7 @@ type RedisCache struct {
 	ttl    time.Duration
 	debug  bool
 	stat   *CacheStat
+	flight xsync.SingleFlight[[]byte]
 }
 
 // NewRedisCache creates a new Redis cache instance
@@ -22,6 +24,7 @@ func NewRedisCache(client *redis.Client, ttl time.Duration) *RedisCache {
 	return &RedisCache{
 		client: client,
 		ttl:    ttl,
+		flight: xsync.NewSingleFlight[[]byte](),
 		stat: NewCacheStat("lake", func() int {
 			return countKeys(client, "lake_cache:*")
 		}),
@@ -37,20 +40,20 @@ func NewRedisCacheWithURL(metaUrl string, ttl time.Duration) (*RedisCache, error
 	return NewRedisCache(redis.NewClient(redisOpt), ttl), nil
 }
 
-// Take implements Cache interface
+// Take implements Cache interface with SingleFlight to prevent cache stampede
 func (c *RedisCache) Take(namespace, key string, loader func() ([]byte, error)) ([]byte, error) {
-	ctx := context.Background()
-	// Build cache key with namespace to avoid conflicts
-	// Format: lake_cache:{namespace}:{key}
-	// Example: lake_cache:oss:mylake:users/snap/1700000000_1~1700000100_500.snap
 	cacheKey := "lake_cache:" + encode.EncodeRedisCatalogName(namespace+":"+key)
 
 	if c.debug {
 		log.Printf("[Cache] Take: namespace=%s, key=%s, cacheKey=%s", namespace, key, cacheKey)
 	}
 
-	// Try to get from Redis
-	cachedData, err := c.client.GetEx(ctx, cacheKey, c.ttl).Result()
+	// Use SingleFlight to prevent multiple concurrent requests for same key
+	return c.flight.Do(cacheKey, func() ([]byte, error) {
+		ctx := context.Background()
+		
+		// Try to get from Redis
+		cachedData, err := c.client.GetEx(ctx, cacheKey, c.ttl).Result()
 	if err == redis.Nil {
 		// Cache miss
 		c.stat.IncrementMiss()
@@ -98,8 +101,9 @@ func (c *RedisCache) Take(namespace, key string, loader func() ([]byte, error)) 
 		log.Printf("[Cache] HIT: %s (%d bytes)", cacheKey, len(cachedData))
 	}
 
-	// Return cached data as []byte
-	return []byte(cachedData), nil
+		// Return cached data as []byte
+		return []byte(cachedData), nil
+	})
 }
 
 // countKeys counts keys matching a pattern

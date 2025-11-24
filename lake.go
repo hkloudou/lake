@@ -67,7 +67,7 @@ func NewLake(metaUrl string, opts ...func(*Option)) *Client {
 	// Use provided cache or default to no-op cache
 	cacheProvider := option.CacheProvider
 	if cacheProvider == nil {
-		cacheProvider = cache.NewNoOpCache()
+		cacheProvider = cache.NewNoOpCache(0)
 	}
 
 	client := &Client{
