@@ -52,15 +52,15 @@ func EncodeDeltaMember(field, tsSeqID string, mergeType MergeType) string {
 
 // DecodeMember decodes Redis ZADD member into field, tsSeqID, and mergeType
 // Returns tsSeqID in format "ts_seqid"
-func DecodeDeltaMember(member string) (field, tsSeqID string, mergeType MergeType, err error) {
+func DecodeDeltaMember(member string) (field string, mergeType MergeType, err error) {
 	// Split by "|" delimiter
 	parts := strings.Split(member, "|")
 	if len(parts) != 4 {
-		return "", "", 0, fmt.Errorf("invalid member format (expected 4 parts): %s", member)
+		return "", 0, fmt.Errorf("invalid member format (expected 4 parts): %s", member)
 	}
 
 	if parts[0] != "delta" {
-		return "", "", 0, fmt.Errorf("invalid member prefix (expected 'delta'): %s", parts[0])
+		return "", 0, fmt.Errorf("invalid member prefix (expected 'delta'): %s", parts[0])
 	}
 
 	// Decode base64 field
@@ -74,15 +74,15 @@ func DecodeDeltaMember(member string) (field, tsSeqID string, mergeType MergeTyp
 	var mergeTypeInt int
 	_, err = fmt.Sscanf(parts[1], "%d", &mergeTypeInt)
 	if err != nil {
-		return "", "", 0, fmt.Errorf("invalid merge type: %s", parts[3])
+		return "", 0, fmt.Errorf("invalid merge type: %s", parts[3])
 	}
 
 	field = parts[2]
 
 	// Parse tsSeqID (already in correct format)
-	tsSeqID = parts[3]
+	// tsSeqID = parts[3]
 
-	return field, tsSeqID, MergeTypeFromInt(mergeTypeInt), nil
+	return field, MergeTypeFromInt(mergeTypeInt), nil
 }
 
 // EncodeSnapMember encodes snapshot time range into Redis ZADD member format

@@ -122,24 +122,192 @@ func TestTimeGeneratorCatalogIsolation(t *testing.T) {
 }
 
 func TestTimeSeqIDParsing(t *testing.T) {
-	// Test parsing
-	original := TimeSeqID{Timestamp: 1700000000, SeqID: 123}
-	str := original.String()
+	tests := []struct {
+		name      string
+		input     any
+		expectTS  int64
+		expectSeq int64
+		wantErr   bool
+	}{
+		// String format: "timestamp_seqid"
+		{
+			name:      "string underscore format",
+			input:     "1700000000_123",
+			expectTS:  1700000000,
+			expectSeq: 123,
+			wantErr:   false,
+		},
+		{
+			name:      "string underscore zero seqid",
+			input:     "1700000000_0",
+			expectTS:  1700000000,
+			expectSeq: 0,
+			wantErr:   false,
+		},
+		{
+			name:      "string underscore max seqid",
+			input:     "1700000000_999999",
+			expectTS:  1700000000,
+			expectSeq: 999999,
+			wantErr:   false,
+		},
 
-	parsed, err := ParseTimeSeqID(str)
-	if err != nil {
-		t.Fatalf("Parse failed: %v", err)
+		// String format: "timestamp.seqid" (decimal)
+		{
+			name:      "string decimal format",
+			input:     "1700000000.000123",
+			expectTS:  1700000000,
+			expectSeq: 123,
+			wantErr:   false,
+		},
+		{
+			name:      "string decimal 1 digit",
+			input:     "1700000000.1",
+			expectTS:  1700000000,
+			expectSeq: 100000,
+			wantErr:   false,
+		},
+		{
+			name:      "string decimal 6 digits",
+			input:     "1700000000.123456",
+			expectTS:  1700000000,
+			expectSeq: 123456,
+			wantErr:   false,
+		},
+		{
+			name:      "string decimal no fraction",
+			input:     "1700000000.0",
+			expectTS:  1700000000,
+			expectSeq: 0,
+			wantErr:   false,
+		},
+
+		// Float64 format
+		{
+			name:      "float64 format",
+			input:     1700000000.000123,
+			expectTS:  1700000000,
+			expectSeq: 123,
+			wantErr:   false,
+		},
+		{
+			name:      "float64 1 digit precision",
+			input:     1700000000.1,
+			expectTS:  1700000000,
+			expectSeq: 100000,
+			wantErr:   false,
+		},
+		{
+			name:      "float64 6 digits precision",
+			input:     1700000000.123456,
+			expectTS:  1700000000,
+			expectSeq: 123456,
+			wantErr:   false,
+		},
+		{
+			name:      "float64 no fraction",
+			input:     1700000000.0,
+			expectTS:  1700000000,
+			expectSeq: 0,
+			wantErr:   false,
+		},
+
+		// Error cases
+		{
+			name:    "invalid string format",
+			input:   "invalid",
+			wantErr: true,
+		},
+		{
+			name:    "unsupported type",
+			input:   123,
+			wantErr: true,
+		},
+		{
+			name:      "string decimal min valid - 0.000001",
+			input:     "1700000000.000001",
+			expectTS:  1700000000,
+			expectSeq: 1,
+			wantErr:   false,
+		},
+		{
+			name:    "string decimal too small - 0.0000005",
+			input:   "1700000000.0000005",
+			wantErr: true, // rounds to seqid=0 but fractional > 0
+		},
+		{
+			name:      "string decimal very small - 0.0000001",
+			input:     "1700000000.0000001",
+			expectTS:  1700000000,
+			expectSeq: 0,
+			wantErr:   false, // Due to float64 precision, becomes exactly 0
+		},
+		{
+			name:    "float64 too small - 0.0000005",
+			input:   1700000000.0000005,
+			wantErr: true, // Due to float64 precision, might have fractional > 0 but seqid=0
+		},
 	}
 
-	if parsed != original {
-		t.Errorf("Parsed mismatch: got %+v, want %+v", parsed, original)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parsed, err := ParseTimeSeqID(tt.input)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("ParseTimeSeqID(%v) expected error, got nil", tt.input)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("ParseTimeSeqID(%v) unexpected error: %v", tt.input, err)
+			}
+
+			if parsed.Timestamp != tt.expectTS {
+				t.Errorf("Timestamp mismatch: got %d, want %d", parsed.Timestamp, tt.expectTS)
+			}
+			if parsed.SeqID != tt.expectSeq {
+				t.Errorf("SeqID mismatch: got %d, want %d", parsed.SeqID, tt.expectSeq)
+			}
+
+			// Verify score calculation
+			expectedScore := float64(tt.expectTS) + float64(tt.expectSeq)/1000000.0
+			if parsed.Score() != expectedScore {
+				t.Errorf("Score mismatch: got %f, want %f", parsed.Score(), expectedScore)
+			}
+		})
 	}
 
-	// Test score calculation
-	expectedScore := 1700000000.000123
-	if parsed.Score() != expectedScore {
-		t.Errorf("Score mismatch: got %f, want %f", parsed.Score(), expectedScore)
-	}
+	// Test round-trip: TimeSeqID -> String -> ParseTimeSeqID
+	t.Run("round-trip string format", func(t *testing.T) {
+		original := TimeSeqID{Timestamp: 1700000000, SeqID: 123}
+		str := original.String()
+
+		parsed, err := ParseTimeSeqID(str)
+		if err != nil {
+			t.Fatalf("Parse failed: %v", err)
+		}
+
+		if parsed != original {
+			t.Errorf("Round-trip mismatch: got %+v, want %+v", parsed, original)
+		}
+	})
+
+	// Test round-trip: TimeSeqID -> Score -> ParseTimeSeqID
+	t.Run("round-trip score format", func(t *testing.T) {
+		original := TimeSeqID{Timestamp: 1700000000, SeqID: 123}
+		score := original.Score()
+
+		parsed, err := ParseTimeSeqID(score)
+		if err != nil {
+			t.Fatalf("Parse failed: %v", err)
+		}
+
+		if parsed != original {
+			t.Errorf("Round-trip mismatch: got %+v, want %+v", parsed, original)
+		}
+	})
 }
 
 func TestEncodingWithTimeSeq(t *testing.T) {
@@ -160,7 +328,7 @@ func TestEncodingWithTimeSeq(t *testing.T) {
 		t.Logf("Encoded: field=%q -> member=%s", tt.field, member)
 
 		// Decode
-		field, tsSeqID, mergeType, err := DecodeDeltaMember(member)
+		field, mergeType, err := DecodeDeltaMember(member)
 		if err != nil {
 			t.Errorf("Decode failed for %s: %v", member, err)
 			continue
@@ -170,11 +338,11 @@ func TestEncodingWithTimeSeq(t *testing.T) {
 		if field != tt.field {
 			t.Errorf("Field mismatch: got %s, want %s", field, tt.field)
 		}
-		if tsSeqID != tt.tsSeqID {
-			t.Errorf("TsSeqID mismatch: got %s, want %s", tsSeqID, tt.tsSeqID)
-		}
 		if mergeType != tt.mergeType {
 			t.Errorf("MergeType mismatch: got %d, want %d", mergeType, tt.mergeType)
 		}
+
+		// Note: tsSeqID is no longer returned by DecodeDeltaMember
+		// It can be extracted from the score using ParseTimeSeqID
 	}
 }

@@ -3,6 +3,7 @@ package index
 import (
 	"context"
 	"fmt"
+	"math"
 
 	"github.com/hkloudou/lake/v2/internal/encode"
 	"github.com/redis/go-redis/v9"
@@ -29,13 +30,55 @@ func (t TimeSeqID) String() string {
 }
 
 // ParseTimeSeqID parses a TimeSeqID from string format
-func ParseTimeSeqID(s string) (TimeSeqID, error) {
-	var ts, seqid int64
-	_, err := fmt.Sscanf(s, "%d_%d", &ts, &seqid)
-	if err != nil {
-		return TimeSeqID{}, fmt.Errorf("invalid TimeSeqID format: %s", s)
+func ParseTimeSeqID(s any) (TimeSeqID, error) {
+	switch v := s.(type) {
+	case string:
+		// Try format: "timestamp_seqid"
+		var ts, seqid int64
+		_, err := fmt.Sscanf(v, "%d_%d", &ts, &seqid)
+		if err == nil {
+			return TimeSeqID{Timestamp: ts, SeqID: seqid}, nil
+		}
+
+		// Try format: "timestamp.seqid" (decimal with max 6 digits)
+		var tsFloat float64
+		_, err = fmt.Sscanf(v, "%f", &tsFloat)
+		if err != nil {
+			return TimeSeqID{}, fmt.Errorf("invalid TimeSeqID format: %s", v)
+		}
+
+		// Extract timestamp and seqid from float
+		ts = int64(tsFloat)
+		// Get fractional part and convert to seqid (max 6 digits)
+		fractional := tsFloat - float64(ts)
+		seqid = int64(math.Round(fractional * 1000000))
+
+		// Validate: if seqid = 0 but fractional > 0, precision is insufficient
+		// Min valid fractional is 0.000001 (seqid=1)
+		if seqid == 0 && fractional > 0 {
+			return TimeSeqID{}, fmt.Errorf("fractional part too small (< 0.000001, min is 0.000001): %f", fractional)
+		}
+
+		return TimeSeqID{Timestamp: ts, SeqID: seqid}, nil
+
+	case float64:
+		// Extract timestamp and seqid from float
+		ts := int64(v)
+		// Get fractional part and convert to seqid (max 6 digits)
+		fractional := v - float64(ts)
+		seqid := int64(math.Round(fractional * 1000000))
+
+		// Validate: if seqid = 0 but fractional > 0, precision is insufficient
+		// Min valid fractional is 0.000001 (seqid=1)
+		if seqid == 0 && fractional > 0 {
+			return TimeSeqID{}, fmt.Errorf("fractional part too small (< 0.000001, min is 0.000001): %f", fractional)
+		}
+
+		return TimeSeqID{Timestamp: ts, SeqID: seqid}, nil
+
+	default:
+		return TimeSeqID{}, fmt.Errorf("unsupported type for TimeSeqID: %T", s)
 	}
-	return TimeSeqID{Timestamp: ts, SeqID: seqid}, nil
 }
 
 // TimeGenerator generates unique timestamp + sequence ID pairs using Redis

@@ -118,7 +118,7 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) *ReadIndex
 	}
 
 	var entries []DeltaInfo
-	var lastCommittedTimestamp int64
+	var lastCommittedTimestamp float64
 
 	// First pass: collect committed entries and find latest timestamp
 	for _, z := range results {
@@ -139,21 +139,19 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) *ReadIndex
 			continue
 		}
 
-		field, tsSeqString, mergeType, err := DecodeDeltaMember(member)
+		field, mergeType, err := DecodeDeltaMember(member)
 		if err != nil {
 			continue // Skip invalid members
 		}
 
-		tsSeq, err := ParseTimeSeqID(tsSeqString)
+		// Parse TimeSeqID from score (float64 format)
+		tsSeq, err := ParseTimeSeqID(z.Score)
 		if err != nil {
-			return &ReadIndexResult{Err: fmt.Errorf("failed to parse tsSeqID: %w", err)}
-		}
-		if tsSeq.Score() != z.Score {
-			return &ReadIndexResult{Err: fmt.Errorf("score mismatch: got %f, expected %f", tsSeq.Score(), z.Score)}
+			continue // Skip invalid score
 		}
 
-		if tsSeq.Timestamp > lastCommittedTimestamp {
-			lastCommittedTimestamp = tsSeq.Timestamp
+		if z.Score > lastCommittedTimestamp {
+			lastCommittedTimestamp = z.Score
 		}
 
 		entries = append(entries, DeltaInfo{
@@ -180,9 +178,10 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) *ReadIndex
 		}
 
 		// Calculate age relative to last committed entry
-		ageSeconds := lastCommittedTimestamp - tsSeq.Timestamp
+		ageSeconds := int64(lastCommittedTimestamp) - tsSeq.Timestamp
 
-		if ageSeconds > timeoutThreshold {
+		// lastCommittedTimestamp = 0 means there are pending entries
+		if lastCommittedTimestamp != 0 && ageSeconds > timeoutThreshold {
 			// Timeout > 1 minute: ignore (abandoned write, continue)
 			continue
 		}

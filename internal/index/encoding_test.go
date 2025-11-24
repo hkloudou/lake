@@ -29,23 +29,22 @@ func TestDecodeMember(t *testing.T) {
 	tests := []struct {
 		member          string
 		expectField     string
-		expectTsSeqID   string
 		expectMergeType MergeType
 		expectError     bool
 	}{
 		// Format: delta|{mergeType}|{field}|{tsSeqID}
-		{"delta|1|/user/name|1700000000_123", "/user/name", "1700000000_123", MergeTypeReplace, false},
-		{"delta|2|/profile|1700000001_456", "/profile", "1700000001_456", MergeTypeRFC7396, false},
-		{"delta|3|/|1700000002_789", "/", "1700000002_789", MergeTypeRFC6902, false},
-		{"delta|1|/user.info|1700000003_100", "/user.info", "1700000003_100", MergeTypeReplace, false},
+		{"delta|1|/user/name|1700000000_123", "/user/name", MergeTypeReplace, false},
+		{"delta|2|/profile|1700000001_456", "/profile", MergeTypeRFC7396, false},
+		{"delta|3|/|1700000002_789", "/", MergeTypeRFC6902, false},
+		{"delta|1|/user.info|1700000003_100", "/user.info", MergeTypeReplace, false},
 		// Invalid formats
-		{"invalid", "", "", MergeTypeUnknown, true},
-		{"delta|only|two", "", "", MergeTypeUnknown, true},
-		{"data|1|field|ts", "", "", MergeTypeUnknown, true}, // Wrong prefix
+		{"invalid", "", MergeTypeUnknown, true},
+		{"delta|only|two", "", MergeTypeUnknown, true},
+		{"data|1|field|ts", "", MergeTypeUnknown, true}, // Wrong prefix
 	}
 
 	for _, tt := range tests {
-		field, tsSeqID, mergeType, err := DecodeDeltaMember(tt.member)
+		field, mergeType, err := DecodeDeltaMember(tt.member)
 		if tt.expectError {
 			if err == nil {
 				t.Errorf("DecodeMember(%q) expected error, got nil", tt.member)
@@ -54,10 +53,10 @@ func TestDecodeMember(t *testing.T) {
 			if err != nil {
 				t.Errorf("DecodeMember(%q) unexpected error: %v", tt.member, err)
 			}
-			if field != tt.expectField || tsSeqID != tt.expectTsSeqID || mergeType != tt.expectMergeType {
-				t.Errorf("DecodeMember(%q) = (%q, %q, %d), want (%q, %q, %d)",
-					tt.member, field, tsSeqID, mergeType,
-					tt.expectField, tt.expectTsSeqID, tt.expectMergeType)
+			if field != tt.expectField || mergeType != tt.expectMergeType {
+				t.Errorf("DecodeMember(%q) = (%q, %d), want (%q, %d)",
+					tt.member, field, mergeType,
+					tt.expectField, tt.expectMergeType)
 			}
 		}
 	}
