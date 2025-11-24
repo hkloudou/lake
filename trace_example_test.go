@@ -33,12 +33,6 @@ func TestWriteWithTrace(t *testing.T) {
 	tr := trace.FromContext(ctx)
 	fmt.Println(tr.Dump())
 
-	// Access individual spans
-	spans := tr.GetSpans()
-	for _, span := range spans {
-		t.Logf("Span: %s -> %v %+v", span.Name, span.Duration, span.Details)
-	}
-
 	t.Logf("Total time: %v", tr.Total())
 }
 
