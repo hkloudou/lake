@@ -257,9 +257,19 @@ After v2.2.0 (async snapshot):
 ```
 Redis Index:
   {prefix}:delta:base64(catalog) -> ZADD
-    score: timestamp.seqid
-    member: delta|base64(field)|ts_seqid|mergetype
-    pending: pending|delta|... (uncommitted writes)
+    score: timestamp.seqid (float: timestamp + seqid/1000000.0)
+    
+  Delta member format:
+    delta|{mergeType}|{field}|{ts_seqid}
+    Example: delta|1|/user/name|1700000000_123
+    
+  Pending member format (uncommitted writes):
+    pending|delta|{field}|{ts_seqid}|{mergeType}
+    Example: pending|delta|/user/name|1700000000_123|1
+    
+  Snapshot member format:
+    snap|{startTsSeq}|{stopTsSeq}
+    Example: snap|1700000000_1|1700000100_500
 
 OSS Storage:
   {md5[0:4]}/{encoded}/delta/{ts}_{seqid}_{type}.json

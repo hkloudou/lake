@@ -9,14 +9,11 @@ func TestEncodeMember(t *testing.T) {
 		mergeType MergeType
 		expected  string
 	}{
-		// "user.name" in base64 URL encoding = "dXNlci5uYW1l"
-		{"user.name", "1700000000_123", MergeTypeReplace, "delta|(user.name|1700000000_123|1"},
-		// "profile" in base64 URL encoding (no padding) = "cHJvZmlsZQ"
-		{"profile", "1700000001_456", MergeTypeRFC7396, "delta|(profile|1700000001_456|2"},
-		// "" in base64 URL encoding = ""
-		{"", "1700000002_789", MergeTypeRFC6902, "delta||1700000002_789|3"},
-		// Test field with special chars: "user:profile"
-		{"user:profile", "1700000003_100", MergeTypeReplace, "delta|dXNlcjpwcm9maWxl|1700000003_100|1"},
+		// Format: delta|{mergeType}|{field}|{tsSeqID}
+		{"/user/name", "1700000000_123", MergeTypeReplace, "delta|1|/user/name|1700000000_123"},
+		{"/profile", "1700000001_456", MergeTypeRFC7396, "delta|2|/profile|1700000001_456"},
+		{"/", "1700000002_789", MergeTypeRFC6902, "delta|3|/|1700000002_789"},
+		{"/user.info", "1700000003_100", MergeTypeReplace, "delta|1|/user.info|1700000003_100"},
 	}
 
 	for _, tt := range tests {
@@ -36,13 +33,15 @@ func TestDecodeMember(t *testing.T) {
 		expectMergeType MergeType
 		expectError     bool
 	}{
-		{"delta|dXNlci5uYW1l|1700000000_123|1", "user.name", "1700000000_123", MergeTypeReplace, false},
-		{"delta|cHJvZmlsZQ|1700000001_456|2", "profile", "1700000001_456", MergeTypeRFC7396, false},
-		{"delta||1700000002_789|3", "", "1700000002_789", MergeTypeRFC6902, false},
-		{"delta|dXNlcjpwcm9maWxl|1700000003_100|1", "user:profile", "1700000003_100", MergeTypeReplace, false},
-		{"invalid", "", "", MergeTypeReplace, true},
-		{"data:user.name:1700000000_123_0", "", "", MergeTypeReplace, true},      // Old format, should fail
-		{"data|invalid-base64|1700000000_123|0", "", "", MergeTypeReplace, true}, // Invalid base64
+		// Format: delta|{mergeType}|{field}|{tsSeqID}
+		{"delta|1|/user/name|1700000000_123", "/user/name", "1700000000_123", MergeTypeReplace, false},
+		{"delta|2|/profile|1700000001_456", "/profile", "1700000001_456", MergeTypeRFC7396, false},
+		{"delta|3|/|1700000002_789", "/", "1700000002_789", MergeTypeRFC6902, false},
+		{"delta|1|/user.info|1700000003_100", "/user.info", "1700000003_100", MergeTypeReplace, false},
+		// Invalid formats
+		{"invalid", "", "", MergeTypeUnknown, true},
+		{"delta|only|two", "", "", MergeTypeUnknown, true},
+		{"data|1|field|ts", "", "", MergeTypeUnknown, true}, // Wrong prefix
 	}
 
 	for _, tt := range tests {
@@ -108,13 +107,13 @@ func TestSnapMember(t *testing.T) {
 	}
 
 	// Test non-snap member
-	if IsSnapMember("data|dXNlci5uYW1l|1700000000_123|0") {
-		t.Error("IsSnapMember(\"data|dXNlci5uYW1l|1700000000_123|0\") = true, want false")
+	if IsSnapMember("delta|1|/user/name|1700000000_123") {
+		t.Error("IsSnapMember(\"delta|1|/user/name|1700000000_123\") = true, want false")
 	}
 
 	// Test IsDeltaMember with delta prefix
-	if !IsDeltaMember("delta|dXNlci5uYW1l|1700000000_123|0") {
-		t.Error("IsDeltaMember(\"delta|dXNlci5uYW1l|1700000000_123|0\") = false, want true")
+	if !IsDeltaMember("delta|1|/user/name|1700000000_123") {
+		t.Error("IsDeltaMember(\"delta|1|/user/name|1700000000_123\") = false, want true")
 	}
 	if IsDeltaMember("snap|1700000000_1|1700000100_500") {
 		t.Error("IsDeltaMember(\"snap|1700000000_1|1700000100_500\") = true, want false")
