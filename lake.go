@@ -555,52 +555,6 @@ func (c *Client) List(ctx context.Context, catalog string) *ListResult {
 	}
 }
 
-	// Merge data from all entries (rebuild from scratch)
-	// baseData := make(map[string]any)
-	// entries := allEntries
-
-	// Merge data (single source of truth)
-	// merged, err := c.mergeEntries(ctx, catalog, snap, allEntries)
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	// result := &ReadResult{
-	// 	Data:       merged,
-	// 	LatestSnap: snap,
-	// 	Entries:    allEntries, // Return all entries for debugging
-	// }
-
-	// Generate snapshot if requested
-	// if req.GenerateSnap && len(allEntries) > 0 {
-	// 	// Determine startTsSeq and stopTsSeq
-	// 	var startTsSeq index.TimeSeqID
-	// 	if snap != nil {
-	// 		// Continue from previous snapshot
-	// 		startTsSeq = snap.StopTsSeq
-	// 	}
-
-	// 	// Use the last entry's TsSeqID as stop point
-	// 	lastEntry := allEntries[len(allEntries)-1]
-	// 	// stopTsSeq, err := index.ParseTimeSeqID()
-	// 	// if err != nil {
-	// 	// 	return nil, fmt.Errorf("failed to parse last entry TsSeqID: %w", err)
-	// 	// }
-
-	// 	// score := tsSeq.Score()
-
-	// 	// Save snapshot metadata (time range only, no data)
-	// 	newSnap, err := c.snapMgr.Save(ctx, req.Catalog, startTsSeq, lastEntry.TsSeq, lastEntry.TsSeq.Score())
-	// 	if err == nil {
-	// 		result.LatestSnap = &index.SnapInfo{
-	// 			StartTsSeq: newSnap.StartTsSeq,
-	// 			StopTsSeq:  newSnap.StopTsSeq,
-	// 			Score:      lastEntry.TsSeq.Score(),
-	// 		}
-	// 	}
-	// }
-
-	// return result, nil
 }
 
 // GetConfig returns the current config (loads from Redis if needed)
