@@ -22,7 +22,7 @@ func TestWithCacheHelper(t *testing.T) {
 	// Write some data
 	_, writeErr := client.Write(ctx, lake.WriteRequest{
 		Catalog:   "users",
-		Field:     "profile",
+		Field:     "/profile",
 		Body:      []byte(`{"name":"Alice2","age":30}`),
 		MergeType: lake.MergeTypeReplace,
 	})
@@ -83,7 +83,7 @@ func TestWithRedisCache(t *testing.T) {
 	// Write some data
 	_, writeErr := client.Write(ctx, lake.WriteRequest{
 		Catalog:   catalog,
-		Field:     "user",
+		Field:     "/user",
 		Body:      []byte(`{"name":"Bob","age":25}`),
 		MergeType: lake.MergeTypeReplace,
 	})
@@ -128,7 +128,7 @@ func TestWithNoOpCache(t *testing.T) {
 
 	_, writeErr := client.Write(ctx, lake.WriteRequest{
 		Catalog:   "test_nocache",
-		Field:     "data",
+		Field:     "/data",
 		Body:      []byte(`"test"`),
 		MergeType: lake.MergeTypeReplace,
 	})

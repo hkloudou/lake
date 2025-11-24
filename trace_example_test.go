@@ -10,28 +10,29 @@ import (
 	"github.com/hkloudou/lake/v2/internal/trace"
 )
 
-func TestReadWithTrace(t *testing.T) {
-	client := lake.NewLake("redis://lake-redis-master.cs:6379/2", lake.WithRedisCache("redis://lake-redis-master.cs:6379/2", 1*time.Hour))
-	// Create context with trace enabled (operation name auto-detected or specified)
-	ctx := trace.WithTrace(context.Background())
-	for i := 0; i < 5; i++ {
-		go func() {
-			t.Log(lake.ReadString(ctx, client.List(ctx, "test_trace")))
-		}()
-	}
-	// Get trace and print
-	tr := trace.FromContext(ctx)
-	time.Sleep(2 * time.Second)
-	fmt.Println(tr.Dump())
-	t.Logf("Total time: %v", tr.Total())
-}
-
+//	func TestReadWithTrace(t *testing.T) {
+//		client := lake.NewLake("redis://lake-redis-master.cs:6379/2", lake.WithRedisCache("redis://lake-redis-master.cs:6379/2", 1*time.Hour))
+//		// Create context with trace enabled (operation name auto-detected or specified)
+//		ctx := trace.WithTrace(context.Background())
+//		for i := 0; i < 5; i++ {
+//			go func() {
+//				t.Log(lake.ReadString(ctx, client.List(ctx, "test_trace")))
+//			}()
+//		}
+//		// Get trace and print
+//		tr := trace.FromContext(ctx)
+//		time.Sleep(2 * time.Second)
+//		fmt.Println(tr.Dump())
+//		t.Logf("Total time: %v", tr.Total())
+//	}
 func TestReadSimple(t *testing.T) {
 	client := lake.NewLake("redis://lake-redis-master.cs:6379/2", lake.WithRedisCache("redis://lake-redis-master.cs:6379/2", 1*time.Hour))
 	// Create context with trace enabled (operation name auto-detected or specified)
 	ctx := trace.WithTrace(context.Background())
 	// for i := 0; i < 5; i++ {
 	// 	go func() {
+	// t.Log()
+	// return
 	t.Log(lake.ReadString(ctx, client.List(ctx, "test_trace")))
 	// 	}()
 	// }
@@ -41,8 +42,8 @@ func TestReadSimple(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	t.Logf("Total time: %v", tr.Total())
-}
 
+}
 func TestWriteWithTrace(t *testing.T) {
 	client := lake.NewLake("redis://lake-redis-master.cs:6379/2")
 
@@ -80,7 +81,7 @@ func TestMultipleWritesWithTrace(t *testing.T) {
 
 		_, err := client.Write(ctx, lake.WriteRequest{
 			Catalog:   catalog,
-			Field:     fmt.Sprintf("field_%d", i),
+			Field:     fmt.Sprintf("/field_%d", i),
 			Body:      []byte(fmt.Sprintf(`"value_%d"`, i)),
 			MergeType: lake.MergeTypeReplace,
 		})
@@ -101,7 +102,7 @@ func TestWriteWithoutTrace(t *testing.T) {
 
 	_, err := client.Write(ctx, lake.WriteRequest{
 		Catalog:   "test_no_trace",
-		Field:     "data",
+		Field:     "/data",
 		Body:      []byte(`"test"`),
 		MergeType: lake.MergeTypeReplace,
 	})

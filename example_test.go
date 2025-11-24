@@ -20,7 +20,7 @@ func TestBasicUsage(t *testing.T) {
 	// Write some data (Body is raw JSON)
 	_, err := client.Write(ctx, lake.WriteRequest{
 		Catalog:   "users",
-		Field:     "profile.name",
+		Field:     "/profile/name",
 		Body:      []byte(`"Alice"`), // JSON string
 		MergeType: lake.MergeTypeReplace,
 	})
@@ -30,7 +30,7 @@ func TestBasicUsage(t *testing.T) {
 
 	_, err = client.Write(ctx, lake.WriteRequest{
 		Catalog:   "users",
-		Field:     "profile.age",
+		Field:     "/profile/age",
 		Body:      []byte(`30`), // JSON number
 		MergeType: lake.MergeTypeReplace,
 	})
@@ -68,7 +68,7 @@ func TestWriteRFC6902(t *testing.T) {
 
 		_, err := client.Write(ctx, lake.WriteRequest{
 			Catalog:   catalog,
-			Field:     "", // Empty field means root document
+			Field:     "/", // Root document
 			Body:      patchOps,
 			MergeType: lake.MergeTypeRFC6902,
 		})
@@ -87,7 +87,7 @@ func TestWriteRFC6902(t *testing.T) {
 
 		_, err := client.Write(ctx, lake.WriteRequest{
 			Catalog:   catalog,
-			Field:     "profile", // Patch applies to "profile" field only
+			Field:     "/profile", // Patch applies to "profile" field only
 			Body:      patchOpsField,
 			MergeType: lake.MergeTypeRFC6902,
 		})
@@ -120,7 +120,7 @@ func TestWriteData(t *testing.T) {
 	t.Run("replace", func(t *testing.T) {
 		_, err := client.Write(ctx, lake.WriteRequest{
 			Catalog:   catalog,
-			Field:     "user.name",
+			Field:     "/user/name",
 			Body:      []byte(`"Alice"`), // JSON string
 			MergeType: lake.MergeTypeReplace,
 		})
@@ -133,7 +133,7 @@ func TestWriteData(t *testing.T) {
 	t.Run("rfc7396 merge", func(t *testing.T) {
 		_, err := client.Write(ctx, lake.WriteRequest{
 			Catalog:   catalog,
-			Field:     "user",
+			Field:     "/user",
 			Body:      []byte(`{"age": 31, "city": "NYC2"}`), // JSON object
 			MergeType: lake.MergeTypeRFC7396,
 		})
