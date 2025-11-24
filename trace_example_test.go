@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/hkloudou/lake/v2"
-	"github.com/hkloudou/lake/v2/internal/index"
 	"github.com/hkloudou/lake/v2/internal/trace"
 )
 

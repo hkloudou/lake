@@ -7,7 +7,6 @@ import (
 
 	"github.com/hkloudou/lake/v2"
 	"github.com/hkloudou/lake/v2/internal/cache"
-	"github.com/hkloudou/lake/v2/internal/index"
 	"github.com/redis/go-redis/v9"
 )
 
