@@ -26,4 +26,3 @@ func (m *RFC7396Merger) Merge(original, patch []byte) ([]byte, error) {
 	}
 	return result, nil
 }
-

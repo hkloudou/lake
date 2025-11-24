@@ -266,6 +266,11 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 		return nil, list.Err
 	}
 
+	// If pending writes detected, return error
+	if list.HasPending {
+		return nil, fmt.Errorf("pending writes detected: %w", list.Err)
+	}
+
 	// Ensure initialized before operation
 	if err := c.ensureInitialized(ctx); err != nil {
 		return nil, err

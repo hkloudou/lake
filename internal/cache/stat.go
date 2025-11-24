@@ -58,4 +58,3 @@ func (cs *CacheStat) statLoop() {
 			cs.name, total, percent, size, hit, miss)
 	}
 }
-

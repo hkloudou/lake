@@ -145,4 +145,3 @@ func TestRFC6902FieldScope(t *testing.T) {
 
 	t.Logf("✓ Field-level RFC6902 successful: %+v", resultData)
 }
-

@@ -63,4 +63,3 @@ func (g *flightGroup[T]) makeCall(c *call[T], key string, fn func() (T, error)) 
 
 	c.val, c.err = fn()
 }
-
