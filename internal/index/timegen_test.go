@@ -152,9 +152,9 @@ func TestTimeSeqIDParsing(t *testing.T) {
 			wantErr:   false,
 		},
 
-		// String format: "timestamp.seqid" (decimal)
+		// String format: "timestamp.seqid" (decimal with 1-6 digits, seqid > 0)
 		{
-			name:      "string decimal format",
+			name:      "string decimal 6 digits",
 			input:     "1700000000.000123",
 			expectTS:  1700000000,
 			expectSeq: 123,
@@ -164,52 +164,65 @@ func TestTimeSeqIDParsing(t *testing.T) {
 			name:      "string decimal 1 digit",
 			input:     "1700000000.1",
 			expectTS:  1700000000,
-			expectSeq: 100000,
+			expectSeq: 100000, // Auto-padded to 6 digits
 			wantErr:   false,
 		},
 		{
-			name:      "string decimal 6 digits",
+			name:      "string decimal 2 digits",
+			input:     "1700000000.12",
+			expectTS:  1700000000,
+			expectSeq: 120000,
+			wantErr:   false,
+		},
+		{
+			name:      "string decimal 6 digits - max",
 			input:     "1700000000.123456",
 			expectTS:  1700000000,
 			expectSeq: 123456,
 			wantErr:   false,
 		},
 		{
-			name:      "string decimal no fraction",
-			input:     "1700000000.0",
-			expectTS:  1700000000,
-			expectSeq: 0,
-			wantErr:   false,
+			name:    "string decimal all zeros - invalid",
+			input:   "1700000000.000000",
+			wantErr: true, // seqid cannot be 0
+		},
+		{
+			name:    "string decimal 1 digit zero - invalid",
+			input:   "1700000000.0",
+			wantErr: true, // seqid cannot be 0
+		},
+		{
+			name:    "string no decimal - invalid",
+			input:   "1700000000",
+			wantErr: true, // Must have decimal point
 		},
 
-		// Float64 format
+		// Float64 format (seqid > 0)
 		{
-			name:      "float64 format",
+			name:      "float64 format - 6 digits",
 			input:     1700000000.000123,
 			expectTS:  1700000000,
 			expectSeq: 123,
 			wantErr:   false,
 		},
 		{
-			name:      "float64 1 digit precision",
+			name:      "float64 1 digit",
 			input:     1700000000.1,
 			expectTS:  1700000000,
 			expectSeq: 100000,
 			wantErr:   false,
 		},
 		{
-			name:      "float64 6 digits precision",
+			name:      "float64 6 digits precision - max",
 			input:     1700000000.123456,
 			expectTS:  1700000000,
 			expectSeq: 123456,
 			wantErr:   false,
 		},
 		{
-			name:      "float64 no fraction",
-			input:     1700000000.0,
-			expectTS:  1700000000,
-			expectSeq: 0,
-			wantErr:   false,
+			name:    "float64 all zeros - invalid",
+			input:   1700000000.000000,
+			wantErr: true, // seqid cannot be 0
 		},
 
 		// Error cases
@@ -231,21 +244,26 @@ func TestTimeSeqIDParsing(t *testing.T) {
 			wantErr:   false,
 		},
 		{
-			name:    "string decimal too small - 0.0000005",
-			input:   "1700000000.0000005",
-			wantErr: true, // rounds to seqid=0 but fractional > 0
-		},
-		{
-			name:      "string decimal very small - 0.0000001",
-			input:     "1700000000.0000001",
+			name:      "string decimal 5 digits",
+			input:     "1700000000.00001",
 			expectTS:  1700000000,
-			expectSeq: 0,
-			wantErr:   false, // Due to float64 precision, becomes exactly 0
+			expectSeq: 10,
+			wantErr:   false,
 		},
 		{
-			name:    "float64 too small - 0.0000005",
+			name:    "string decimal 7 digits - invalid",
+			input:   "1700000000.0000005",
+			wantErr: true, // More than 6 digits
+		},
+		{
+			name:    "string decimal 8 digits - invalid",
+			input:   "1700000000.00000001",
+			wantErr: true, // More than 6 digits
+		},
+		{
+			name:    "float64 intermediate value - invalid",
 			input:   1700000000.0000005,
-			wantErr: true, // Due to float64 precision, might have fractional > 0 but seqid=0
+			wantErr: true, // seqid would be 0 after rounding
 		},
 	}
 

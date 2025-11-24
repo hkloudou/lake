@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/hkloudou/lake/v2/internal/encode"
 	"github.com/redis/go-redis/v9"
@@ -40,7 +41,20 @@ func ParseTimeSeqID(s any) (TimeSeqID, error) {
 			return TimeSeqID{Timestamp: ts, SeqID: seqid}, nil
 		}
 
-		// Try format: "timestamp.seqid" (decimal with max 6 digits)
+		// Try format: "timestamp.seqid" (decimal with 1-6 digits, auto-padded to 6)
+		// Check decimal point exists
+		dotIndex := strings.Index(v, ".")
+		if dotIndex == -1 {
+			return TimeSeqID{}, fmt.Errorf("invalid format: score must have decimal point (format: timestamp.x to timestamp.xxxxxx)")
+		}
+
+		// Get decimal part and check length (1-6 digits allowed)
+		decimalPart := v[dotIndex+1:]
+		if len(decimalPart) < 1 || len(decimalPart) > 6 {
+			return TimeSeqID{}, fmt.Errorf("invalid precision: score must have 1-6 decimal places, got %d decimal places", len(decimalPart))
+		}
+
+		// Parse the float
 		var tsFloat float64
 		_, err = fmt.Sscanf(v, "%f", &tsFloat)
 		if err != nil {
@@ -49,14 +63,12 @@ func ParseTimeSeqID(s any) (TimeSeqID, error) {
 
 		// Extract timestamp and seqid from float
 		ts = int64(tsFloat)
-		// Get fractional part and convert to seqid (max 6 digits)
 		fractional := tsFloat - float64(ts)
 		seqid = int64(math.Round(fractional * 1000000))
 
-		// Validate: if seqid = 0 but fractional > 0, precision is insufficient
-		// Min valid fractional is 0.000001 (seqid=1)
-		if seqid == 0 && fractional > 0 {
-			return TimeSeqID{}, fmt.Errorf("fractional part too small (< 0.000001, min is 0.000001): %f", fractional)
+		// Validate: seqid cannot be 0 (fractional part must be non-zero)
+		if seqid == 0 {
+			return TimeSeqID{}, fmt.Errorf("invalid score: seqid cannot be 0 (fractional part must be non-zero)")
 		}
 
 		return TimeSeqID{Timestamp: ts, SeqID: seqid}, nil
@@ -64,14 +76,17 @@ func ParseTimeSeqID(s any) (TimeSeqID, error) {
 	case float64:
 		// Extract timestamp and seqid from float
 		ts := int64(v)
-		// Get fractional part and convert to seqid (max 6 digits)
 		fractional := v - float64(ts)
 		seqid := int64(math.Round(fractional * 1000000))
 
-		// Validate: if seqid = 0 but fractional > 0, precision is insufficient
-		// Min valid fractional is 0.000001 (seqid=1)
-		if seqid == 0 && fractional > 0 {
-			return TimeSeqID{}, fmt.Errorf("fractional part too small (< 0.000001, min is 0.000001): %f", fractional)
+		// Validate: seqid cannot be 0 (fractional part must be non-zero)
+		if seqid == 0 {
+			return TimeSeqID{}, fmt.Errorf("invalid score: seqid cannot be 0 (fractional part must be non-zero)")
+		}
+
+		// Validate: seqid must be valid (0 < seqid < 1000000)
+		if seqid < 0 || seqid >= 1000000 {
+			return TimeSeqID{}, fmt.Errorf("invalid score: seqid out of range (must be 0 < seqid < 1000000), got %d", seqid)
 		}
 
 		return TimeSeqID{Timestamp: ts, SeqID: seqid}, nil
