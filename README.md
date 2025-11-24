@@ -244,6 +244,62 @@ go test -v -run TestWriteWithTrace
 go test -v ./internal/merge
 ```
 
+## 💡 Design Philosophy & Known Behaviors
+
+### Pending Write Detection
+
+**Problem**: Concurrent writes with slow OSS may cause data loss during snapshots.
+
+**Solution**: Two-phase commit with pending state
+- Phase 1: Mark as `pending|` in Redis (atomic)
+- Phase 2: Write to OSS
+- Phase 3: Commit to `delta|` (atomic)
+
+**Read Behavior**:
+- Pending < 60s: **Error returned** (write in progress, client should retry)
+- Pending > 60s: **Ignored** (abandoned write)
+- Error stored in `ListResult.Err` (non-fatal, can be checked before Read)
+
+```go
+list, _ := client.List(ctx, catalog)
+if list.Err != nil {
+    // Pending writes detected, retry later
+    time.Sleep(100 * time.Millisecond)
+    list, _ = client.List(ctx, catalog)
+}
+data, _ := lake.ReadMap(ctx, list)
+```
+
+### Snapshot Save Failures
+
+**Philosophy**: Snapshot is an optimization, not critical data.
+
+**Behavior**:
+- Snapshot save failure **does not fail Read operation**
+- Error recorded in trace for debugging
+- Next read will regenerate snapshot
+- Data consistency maintained (snapshots can be rebuilt)
+
+### Pending Cleanup Strategy
+
+**Current**: No automatic cleanup of old pending records.
+
+**Rationale**:
+- Pending records are rare (only during write failures)
+- Manual cleanup through bulk data deletion (planned for future versions)
+- Simplicity over complexity
+- Avoiding background tasks and their overhead
+
+**Future**: Unified cleanup when deleting data older than N days.
+
+### Error Handling
+
+**Panic Locations** (defensive programming):
+1. `WithRedisCache()` - Invalid Redis URL at initialization
+2. `makeCatalogKey()` - Prefix not set (internal invariant violation)
+
+**Rationale**: These represent programming errors, not runtime errors. Fail-fast to catch bugs early.
+
 ## 📚 Examples
 
 - [Basic Examples](./example_test.go) - Write, Read, RFC patches

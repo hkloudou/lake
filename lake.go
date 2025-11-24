@@ -259,10 +259,18 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 }
 
 func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error) {
+	tr := trace.FromContext(ctx)
+	
+	// Check for pending writes error from List
+	if list.Err != nil {
+		return nil, list.Err
+	}
+	
 	// Ensure initialized before operation
 	if err := c.ensureInitialized(ctx); err != nil {
 		return nil, err
 	}
+	tr.RecordSpan("ReadInit")
 
 	// Parallel execution: load snapshot base data and delta bodies concurrently
 	var baseData []byte
@@ -307,18 +315,27 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 		return nil, fmt.Errorf("failed to load deltas: %w", deltasErr)
 	}
 
+	tr.RecordSpan("LoadData")
+
 	// Merge entries with base data (pure CPU operation, all data loaded)
 	resultData, err := c.mergeEntries(ctx, list.catalog, baseData, list.Entries)
 	if err != nil {
 		return nil, err
 	}
+	tr.RecordSpan("MergeData")
 
 	// Generate and save new snapshot if there are new entries
 	if len(list.Entries) > 0 {
 		nextSnap := list.NextSnap()
 		_, err = list.client.snapMgr.Save(ctx, list.catalog, nextSnap.StartTsSeq, nextSnap.StopTsSeq, resultData)
 		if err != nil {
-			return nil, fmt.Errorf("failed to save snapshot: %w", err)
+			// Snapshot save failure should not fail the read
+			// Record in trace for debugging
+			tr.RecordSpan("SnapshotSave_Failed", map[string]interface{}{
+				"error": err.Error(),
+			})
+		} else {
+			tr.RecordSpan("SnapshotSave_Success")
 		}
 	}
 
@@ -506,16 +523,21 @@ func (c *Client) List(ctx context.Context, catalog string) (*ListResult, error) 
 
 	var deltas []index.DeltaInfo
 
+	var pendingErr error
+	
 	if snap != nil {
 		deltas, err = c.reader.ReadSince(ctx, catalog, snap.StopTsSeq.Score())
 		if err != nil {
-			return nil, fmt.Errorf("failed to read delta index: %w", err)
+			// Check if error is due to pending writes
+			pendingErr = err
+			err = nil // Don't fail List, store error in result
 		}
 	} else {
 		// No snapshot, read all
 		deltas, err = c.reader.ReadAll(ctx, catalog)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read all delta index: %w", err)
+			pendingErr = err
+			err = nil
 		}
 	}
 
@@ -524,6 +546,7 @@ func (c *Client) List(ctx context.Context, catalog string) (*ListResult, error) 
 		catalog:    catalog,
 		LatestSnap: snap,
 		Entries:    deltas,
+		Err:        pendingErr, // Store pending error here
 	}, nil
 
 	// Merge data from all entries (rebuild from scratch)
