@@ -26,27 +26,27 @@ func TestGetParentPaths(t *testing.T) {
 		{
 			name:     "two levels",
 			field:    "/base/child",
-			expected: []string{"/base", "/"},
+			expected: []string{"/", "/base"},
 		},
 		{
 			name:     "three levels",
 			field:    "/base/child/item",
-			expected: []string{"/base", "/base/child", "/"},
+			expected: []string{"/", "/base", "/base/child"},
 		},
 		{
 			name:     "four levels",
 			field:    "/a/b/c/d",
-			expected: []string{"/a", "/a/b", "/a/b/c", "/"},
+			expected: []string{"/", "/a", "/a/b", "/a/b/c"},
 		},
 		{
 			name:     "with dots",
 			field:    "/base.info/child.data",
-			expected: []string{"/base.info", "/"},
+			expected: []string{"/", "/base.info"},
 		},
 		{
 			name:     "deep nesting",
 			field:    "/a/b/c/d/e/f",
-			expected: []string{"/a", "/a/b", "/a/b/c", "/a/b/c/d", "/a/b/c/d/e", "/"},
+			expected: []string{"/", "/a", "/a/b", "/a/b/c", "/a/b/c/d", "/a/b/c/d/e"},
 		},
 	}
 
@@ -165,7 +165,7 @@ func TestHierarchicalUpdateMapComplex(t *testing.T) {
 	if all["/a/b/c"] != expected {
 		t.Errorf("/a/b/c: got %v, want %v", all["/a/b/c"], expected)
 	}
-	
+
 	// / (root) should be ts4 (newest of all)
 	if all["/"] != expected {
 		t.Errorf("/: got %v, want %v", all["/"], expected)
@@ -202,7 +202,7 @@ func TestHierarchicalUpdateMapWithDots(t *testing.T) {
 	if all["/user.info/settings.prefs"] != ts2 {
 		t.Errorf("/user.info/settings.prefs: got %v, want %v", all["/user.info/settings.prefs"], ts2)
 	}
-	
+
 	// / (root) should be ts2 (newest)
 	if all["/"] != ts2 {
 		t.Errorf("/: got %v, want %v", all["/"], ts2)
