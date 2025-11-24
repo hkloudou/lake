@@ -15,7 +15,6 @@ import (
 type RedisCache struct {
 	client *redis.Client
 	ttl    time.Duration
-	debug  bool
 	stat   *CacheStat
 	flight xsync.SingleFlight[[]byte]
 }
@@ -46,8 +45,7 @@ func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader fun
 	tr := trace.FromContext(ctx)
 	cacheKey := "lake_cache:" + encode.EncodeRedisCatalogName(namespace+":"+key)
 
-	if c.debug {
-		log.Printf("[Cache] Take: namespace=%s, key=%s, cacheKey=%s", namespace, key, cacheKey)
+	// Trace only, no debug logs
 	}
 
 	// Use SingleFlight to prevent multiple concurrent requests for same key
@@ -59,8 +57,7 @@ func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader fun
 			// Cache miss
 			c.stat.IncrementMiss()
 			tr.RecordSpan("RedisCache.Miss")
-			if c.debug {
-				log.Printf("[Cache] MISS: %s (loading from storage)", cacheKey)
+			// Trace only, no debug logs
 			}
 
 			// Call loader function to get []byte
@@ -69,8 +66,7 @@ func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader fun
 				tr.RecordSpan("RedisCache.LoaderFailed", map[string]any{
 					"error": err.Error(),
 				})
-				if c.debug {
-					log.Printf("[Cache] Loader failed for %s: %v", cacheKey, err)
+				// Trace only, no debug logs
 				}
 				return nil, err
 			}
@@ -78,27 +74,23 @@ func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader fun
 			tr.RecordSpan("RedisCache.Loaded", map[string]any{
 				"size": len(data),
 			})
-			if c.debug {
-				log.Printf("[Cache] Loaded %d bytes from storage for %s", len(data), cacheKey)
+			// Trace only, no debug logs
 			}
 
 			// Write to Redis with TTL (data is already []byte, no need to marshal)
 			err = c.client.Set(ctx, cacheKey, data, c.ttl).Err()
 			if err != nil {
-				if c.debug {
-					log.Printf("[Cache] Failed to cache %s: %v (continuing with data)", cacheKey, err)
+				// Trace only, no debug logs
 				}
 			} else {
-				if c.debug {
-					log.Printf("[Cache] Cached %d bytes for %s (TTL: %v)", len(data), cacheKey, c.ttl)
+				// Trace only, no debug logs
 				}
 			}
 
 			return data, nil
 		} else if err != nil {
 			// Redis error, fallback to loader
-			if c.debug {
-				log.Printf("[Cache] Redis error for %s: %v (fallback to loader)", cacheKey, err)
+			// Trace only, no debug logs
 			}
 			return loader()
 		}
@@ -109,8 +101,7 @@ func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader fun
 			"key":  cacheKey,
 			"size": len(cachedData),
 		})
-		if c.debug {
-			log.Printf("[Cache] HIT: %s (%d bytes)", cacheKey, len(cachedData))
+		// Trace only, no debug logs
 		}
 
 		// Return cached data as []byte

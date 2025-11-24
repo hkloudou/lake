@@ -40,7 +40,7 @@ func NewMemoryCache(ttl time.Duration) *MemoryCache {
 func (c *MemoryCache) Take(ctx context.Context, namespace, key string, loader func() ([]byte, error)) ([]byte, error) {
 	tr := trace.FromContext(ctx)
 	cacheKey := namespace + ":" + key
-	
+
 	// Use SingleFlight to prevent cache stampede
 	return c.flight.Do(cacheKey, func() ([]byte, error) {
 		// Check cache first
@@ -50,16 +50,16 @@ func (c *MemoryCache) Take(ctx context.Context, namespace, key string, loader fu
 				// Cache hit
 				c.mu.RUnlock()
 				tr.RecordSpan("MemoryCache.Hit", map[string]any{
-					"key": cacheKey,
+					"key":  cacheKey,
 					"size": len(entry.value),
 				})
 				return entry.value, nil
 			}
 		}
 		c.mu.RUnlock()
-		
+
 		tr.RecordSpan("MemoryCache.Miss")
-		
+
 		// Cache miss, call loader
 		data, err := loader()
 		if err != nil {
@@ -68,7 +68,7 @@ func (c *MemoryCache) Take(ctx context.Context, namespace, key string, loader fu
 			})
 			return nil, err
 		}
-		
+
 		// Store in cache with TTL
 		c.mu.Lock()
 		c.data[cacheKey] = &cacheEntry{
@@ -76,11 +76,11 @@ func (c *MemoryCache) Take(ctx context.Context, namespace, key string, loader fu
 			expireTime: time.Now().Add(c.ttl),
 		}
 		c.mu.Unlock()
-		
+
 		tr.RecordSpan("MemoryCache.Loaded", map[string]any{
 			"size": len(data),
 		})
-		
+
 		return data, nil
 	})
 }
