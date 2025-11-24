@@ -115,6 +115,7 @@ func TestWriteData(t *testing.T) {
 	client := lake.NewLake("redis://lake-redis-master.cs:6379/2")
 	ctx := context.Background()
 	catalog := "test_write"
+
 	// Test different merge types
 	t.Run("replace", func(t *testing.T) {
 		_, err := client.Write(ctx, lake.WriteRequest{

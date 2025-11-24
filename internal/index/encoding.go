@@ -140,7 +140,7 @@ func ParsePendingMemberTimestamp(member string) (TimeSeqID, error) {
 	if len(parts) < 4 {
 		return TimeSeqID{}, fmt.Errorf("invalid pending member format")
 	}
-	
+
 	// parts[3] is tsSeqID
 	return ParseTimeSeqID(parts[3])
 }

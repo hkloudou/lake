@@ -182,7 +182,7 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) ([]DeltaIn
 		}
 
 		// Still within timeout window: ERROR (write in progress, cannot proceed)
-		return nil, fmt.Errorf("pending write detected: %s (age: %ds < 60s, write in progress)", 
+		return nil, fmt.Errorf("pending write detected: %s (age: %ds < 60s, write in progress)",
 			member, ageSeconds)
 	}
 

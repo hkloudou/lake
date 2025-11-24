@@ -3,6 +3,7 @@ package lake
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -200,28 +201,37 @@ type WriteResult struct {
 //   - RFC7396 patch: []byte(`{"age":31,"city":null}`)
 //   - RFC6902 patch: []byte(`[{"op":"add","path":"/a","value":1}]`)
 func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, error) {
+	startTime := time.Now()
+
 	if req.MergeType == 0 {
 		return nil, fmt.Errorf("merge type unknown is not supported")
 	}
 	if len(req.Body) == 0 {
 		return nil, fmt.Errorf("body is empty")
 	}
+
 	// Ensure initialized before operation
+	initStart := time.Now()
 	if err := c.ensureInitialized(ctx); err != nil {
 		return nil, err
 	}
+	log.Printf("[Write Timing] Init: %v", time.Since(initStart))
 
 	// Step 1: Atomically get TimeSeqID and pre-commit to Redis (pending state)
+	step1Start := time.Now()
 	tsSeq, pendingMember, err := c.writer.GetTimeSeqIDAndPreCommit(ctx, req.Catalog, req.Field, req.MergeType)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate timeseq and precommit: %w", err)
 	}
+	step1Duration := time.Since(step1Start)
+	log.Printf("[Write Timing] Step1 (GetTimeSeqID+PreCommit): %v", step1Duration)
 
 	if tsSeq.SeqID > 999999 {
 		return nil, fmt.Errorf("seqid too large: %d (max 999,999)", tsSeq.SeqID)
 	}
 
 	// Step 2: Write to storage
+	step2Start := time.Now()
 	if c.storage == nil {
 		return nil, fmt.Errorf("storage not initialized")
 	}
@@ -232,13 +242,23 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 		c.rdb.ZRem(ctx, catalogKey, pendingMember)
 		return nil, fmt.Errorf("failed to write to storage: %w", err)
 	}
+	step2Duration := time.Since(step2Start)
+	log.Printf("[Write Timing] Step2 (Storage.Put): %v, key=%s, size=%d bytes",
+		step2Duration, key, len(req.Body))
 
 	// Step 3: Atomically commit (remove pending, add committed)
+	step3Start := time.Now()
 	committedMember := index.EncodeDeltaMember(req.Field, tsSeq.String(), req.MergeType)
 	err = c.writer.Commit(ctx, req.Catalog, pendingMember, committedMember, tsSeq.Score())
 	if err != nil {
 		return nil, fmt.Errorf("failed to commit: %w", err)
 	}
+	step3Duration := time.Since(step3Start)
+	log.Printf("[Write Timing] Step3 (Commit): %v", step3Duration)
+
+	totalDuration := time.Since(startTime)
+	log.Printf("[Write Timing] TOTAL: %v (Step1=%v, Step2=%v, Step3=%v)",
+		totalDuration, step1Duration, step2Duration, step3Duration)
 
 	return &WriteResult{
 		TsSeqID:   tsSeq.String(),
