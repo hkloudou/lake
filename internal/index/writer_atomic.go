@@ -33,6 +33,11 @@ end
 
 local seqid = redis.call("INCR", seqKey)
 
+-- Check seqid limit (max 999,999 for %.6f precision)
+if seqid > 999999 then
+    return redis.error_reply("seqid overflow: " .. seqid .. " > 999999 (max writes per second reached)")
+end
+
 -- Build pending member
 local tsSeq = timestamp .. "_" .. seqid
 local member = "pending|delta|" .. field .. "|" .. tsSeq .. "|" .. mergeType

@@ -224,11 +224,10 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 		return nil, fmt.Errorf("failed to generate timeseq and precommit: %w", err)
 	}
 	step1Duration := time.Since(step1Start)
-	log.Printf("[Write Timing] Step1 (GetTimeSeqID+PreCommit): %v", step1Duration)
+	log.Printf("[Write Timing] Step1 (GetTimeSeqID+PreCommit): %v, tsSeq=%s, seqID=%d", 
+		step1Duration, tsSeq.String(), tsSeq.SeqID)
 
-	if tsSeq.SeqID > 999999 {
-		return nil, fmt.Errorf("seqid too large: %d (max 999,999)", tsSeq.SeqID)
-	}
+	// Note: seqid limit now checked in Lua script (no need to check here)
 
 	// Step 2: Write to storage
 	step2Start := time.Now()
