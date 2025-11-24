@@ -224,7 +224,7 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 		return nil, fmt.Errorf("failed to generate timeseq and precommit: %w", err)
 	}
 	step1Duration := time.Since(step1Start)
-	log.Printf("[Write Timing] Step1 (GetTimeSeqID+PreCommit): %v, tsSeq=%s, seqID=%d", 
+	log.Printf("[Write Timing] Step1 (GetTimeSeqID+PreCommit): %v, tsSeq=%s, seqID=%d",
 		step1Duration, tsSeq.String(), tsSeq.SeqID)
 
 	// Note: seqid limit now checked in Lua script (no need to check here)
