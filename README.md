@@ -299,6 +299,10 @@ Read (Parallel + Async):
 ### What's New in v2.2.0
 
 - **Async Snapshot Save**: Read operations no longer wait for snapshot saves (2x faster!)
+- **Unified Merge Interface**: Single `Merger` interface for all merge strategies (Replace, RFC7396, RFC6902)
+- **Path Validation**: Strict path format with `/` prefix, network-safe for HTTP transmission
+- **Enhanced Score Parsing**: Support multiple formats (underscore/decimal/float64) with 6-decimal precision validation
+- **Optimized Storage**: Simplified delta member format, ~30% space saving in Redis
 - **File Structure**: Code organized into write.go, read.go, snapshot.go, helpers.go
 - **SingleFlight Snapshots**: Prevents duplicate concurrent snapshot generation
 - **Simplified Architecture**: Removed snapMgr dependency, cleaner code
