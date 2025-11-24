@@ -1,0 +1,81 @@
+package merge
+
+import (
+	"strings"
+
+	"github.com/hkloudou/lake/v2/internal/index"
+)
+
+// HierarchicalUpdateMap manages hierarchical field updates
+// Each field update propagates to all parent paths
+type HierarchicalUpdateMap struct {
+	updates map[string]index.TimeSeqID
+}
+
+// NewHierarchicalUpdateMap creates a new hierarchical update map
+func NewHierarchicalUpdateMap() *HierarchicalUpdateMap {
+	return &HierarchicalUpdateMap{
+		updates: make(map[string]index.TimeSeqID),
+	}
+}
+
+// Update records a field update and propagates to all parent paths
+// field must start with / and not end with /
+// Example: Update("/base/child/item", ts) will update:
+//   - /base/child/item
+//   - /base/child
+//   - /base
+func (h *HierarchicalUpdateMap) Update(field string, ts index.TimeSeqID) {
+	// Update the field itself
+	h.updateIfNewer(field, ts)
+
+	// Update all parent paths
+	parents := getParentPaths(field)
+	for _, parent := range parents {
+		h.updateIfNewer(parent, ts)
+	}
+}
+
+// updateIfNewer updates the timestamp only if it's newer than existing
+func (h *HierarchicalUpdateMap) updateIfNewer(field string, ts index.TimeSeqID) {
+	existing, exists := h.updates[field]
+	if !exists || ts.Score() > existing.Score() {
+		h.updates[field] = ts
+	}
+}
+
+// GetAll returns all updates
+func (h *HierarchicalUpdateMap) GetAll() map[string]index.TimeSeqID {
+	return h.updates
+}
+
+// getParentPaths returns all parent paths for a given field
+// Example: "/base/child/item" → ["/base/child", "/base"]
+// Example: "/base" → []
+// Example: "/" → []
+func getParentPaths(field string) []string {
+	if field == "/" || field == "" {
+		return []string{}
+	}
+
+	// Remove leading /
+	if len(field) > 0 && field[0] == '/' {
+		field = field[1:]
+	}
+
+	// Split by /
+	parts := strings.Split(field, "/")
+	if len(parts) <= 1 {
+		return []string{} // No parents
+	}
+
+	// Build parent paths
+	parents := make([]string, 0, len(parts)-1)
+	for i := 1; i < len(parts); i++ {
+		// Join first i parts
+		parentPath := "/" + strings.Join(parts[:i], "/")
+		parents = append(parents, parentPath)
+	}
+
+	return parents
+}

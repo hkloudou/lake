@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	jsonpatch "github.com/evanphx/json-patch/v5"
+	"github.com/hkloudou/lake/v2/internal/index"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -62,4 +63,15 @@ func (m *RFC7396Merger) mergeField(original, patchData []byte, field string) ([]
 	}
 
 	return result, nil
+}
+
+// UpdatedMap builds a hierarchical update map from delta entries
+// For each field update, also updates all parent paths with the latest timestamp
+// Example: /base/gsxx update → also updates /base (if newer)
+func (m *RFC7396Merger) UpdatedMap(entries []index.DeltaInfo) map[string]index.TimeSeqID {
+	hm := NewHierarchicalUpdateMap()
+	for _, entry := range entries {
+		hm.Update(entry.Field, entry.TsSeq)
+	}
+	return hm.GetAll()
 }
