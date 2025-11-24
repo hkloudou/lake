@@ -24,7 +24,7 @@ func TestBasicUsage(t *testing.T) {
 		Body:      []byte(`"Alice"`), // JSON string
 		MergeType: lake.MergeTypeReplace,
 	})
-	if err != nil {
+	if result.Err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
 
@@ -34,18 +34,18 @@ func TestBasicUsage(t *testing.T) {
 		Body:      []byte(`30`), // JSON number
 		MergeType: lake.MergeTypeReplace,
 	})
-	if err != nil {
+	if result.Err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
 
 	t.Log("✓ Basic write operations successful")
-	result, err := client.List(ctx, "users")
-	if err != nil {
-		t.Fatalf("List failed: %v", err)
+	result := client.List(ctx, "users")
+	if result.Err != nil {
+		t.Fatalf("List error: %v", result.Err)
 	}
 	t.Logf("List result: %+v", result.Dump())
 	data, err := lake.ReadMap(ctx, result)
-	if err != nil {
+	if result.Err != nil {
 		t.Fatalf("ReadMap failed: %v", err)
 	}
 	t.Logf("Data: %+v", data)
@@ -71,7 +71,7 @@ func TestWriteRFC6902(t *testing.T) {
 			Body:      patchOps,
 			MergeType: lake.MergeTypeRFC6902,
 		})
-		if err != nil {
+		if result.Err != nil {
 			t.Fatalf("Write failed: %v", err)
 		}
 		t.Log("✓ RFC6902 patch to root document successful")
@@ -90,20 +90,20 @@ func TestWriteRFC6902(t *testing.T) {
 			Body:      patchOpsField,
 			MergeType: lake.MergeTypeRFC6902,
 		})
-		if err != nil {
+		if result.Err != nil {
 			t.Fatalf("Write failed: %v", err)
 		}
 		t.Log("✓ RFC6902 patch to 'profile' field successful")
 	})
 
 	// Verify the data
-	result, err := client.List(ctx, catalog)
-	if err != nil {
-		t.Fatalf("List failed: %v", err)
+	result := client.List(ctx, catalog)
+	if result.Err != nil {
+		t.Fatalf("List error: %v", result.Err)
 	}
 
 	data, err := lake.ReadMap(ctx, result)
-	if err != nil {
+	if result.Err != nil {
 		t.Fatalf("ReadMap failed: %v", err)
 	}
 
@@ -123,7 +123,7 @@ func TestWriteData(t *testing.T) {
 			Body:      []byte(`"Alice"`), // JSON string
 			MergeType: lake.MergeTypeReplace,
 		})
-		if err != nil {
+		if result.Err != nil {
 			t.Fatalf("Write failed: %v", err)
 		}
 		t.Log("✓ Replace successful")
@@ -136,7 +136,7 @@ func TestWriteData(t *testing.T) {
 			Body:      []byte(`{"age": 30, "city": "NYC"}`), // JSON object
 			MergeType: lake.MergeTypeRFC7396,
 		})
-		if err != nil {
+		if result.Err != nil {
 			t.Fatalf("Write failed: %v", err)
 		}
 		t.Log("✓ RFC7396 merge successful")
@@ -150,9 +150,9 @@ func TestListAndRead(t *testing.T) {
 	ctx := context.Background()
 	catalog := "test_write"
 	// List catalog entries
-	result, err := client.List(ctx, catalog)
-	if err != nil {
-		t.Fatalf("List failed: %v", err)
+	result := client.List(ctx, catalog)
+	if result.Err != nil {
+		t.Fatalf("List error: %v", result.Err)
 	}
 
 	t.Log("Catalog entries:")
@@ -160,7 +160,7 @@ func TestListAndRead(t *testing.T) {
 
 	// Read merged data
 	data, err := lake.ReadMap(ctx, result)
-	if err != nil {
+	if result.Err != nil {
 		t.Fatalf("ReadMap failed: %v", err)
 	}
 

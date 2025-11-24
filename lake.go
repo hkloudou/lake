@@ -260,12 +260,12 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 
 func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error) {
 	tr := trace.FromContext(ctx)
-	
+
 	// Check for pending writes error from List
 	if list.Err != nil {
 		return nil, list.Err
 	}
-	
+
 	// Ensure initialized before operation
 	if err := c.ensureInitialized(ctx); err != nil {
 		return nil, err
@@ -508,36 +508,41 @@ func (c *Client) mergeEntries(ctx context.Context, catalog string, baseData []by
 	return merged, nil
 }
 
-// Read reads and merges data from the catalog
-func (c *Client) List(ctx context.Context, catalog string) (*ListResult, error) {
+// List reads catalog metadata and returns ListResult
+// Errors (including pending writes) are stored in ListResult.Err
+func (c *Client) List(ctx context.Context, catalog string) *ListResult {
 	// Ensure initialized before operation
 	if err := c.ensureInitialized(ctx); err != nil {
-		return nil, err
+		return &ListResult{
+			client:  c,
+			catalog: catalog,
+			Err:     err,
+		}
 	}
 
 	// Try to get existing snapshot
 	snap, err := c.reader.GetLatestSnap(ctx, catalog)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get snapshot: %w", err)
+		return &ListResult{
+			client:  c,
+			catalog: catalog,
+			Err:     fmt.Errorf("failed to get snapshot: %w", err),
+		}
 	}
 
 	var deltas []index.DeltaInfo
-
 	var pendingErr error
-	
+
 	if snap != nil {
 		deltas, err = c.reader.ReadSince(ctx, catalog, snap.StopTsSeq.Score())
 		if err != nil {
-			// Check if error is due to pending writes
-			pendingErr = err
-			err = nil // Don't fail List, store error in result
+			pendingErr = err // Pending writes or read errors
 		}
 	} else {
 		// No snapshot, read all
 		deltas, err = c.reader.ReadAll(ctx, catalog)
 		if err != nil {
 			pendingErr = err
-			err = nil
 		}
 	}
 
@@ -546,8 +551,9 @@ func (c *Client) List(ctx context.Context, catalog string) (*ListResult, error) 
 		catalog:    catalog,
 		LatestSnap: snap,
 		Entries:    deltas,
-		Err:        pendingErr, // Store pending error here
-	}, nil
+		Err:        pendingErr,
+	}
+}
 
 	// Merge data from all entries (rebuild from scratch)
 	// baseData := make(map[string]any)
