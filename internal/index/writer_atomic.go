@@ -40,13 +40,13 @@ end
 
 -- Build pending member
 local tsSeq = timestamp .. "_" .. seqid
-local member = "pending|delta|" .. field .. "|" .. tsSeq .. "|" .. mergeType
+local member = "pending|delta|" .. mergeType .. "|" .. field
 local score = tonumber(timestamp) + (tonumber(seqid) / 1000000.0)
 
 -- Pre-commit to Redis (pending state)
 redis.call("ZADD", zaddKey, score, member)
 
-return {timestamp, seqid}
+return {timestamp, seqid, member}
 `
 
 // Lua script to commit: remove pending, add committed
@@ -89,12 +89,13 @@ func (w *Writer) GetTimeSeqIDAndPreCommit(ctx context.Context, catalog, field st
 
 	// Parse result
 	arr, ok := result.([]interface{})
-	if !ok || len(arr) != 2 {
+	if !ok || len(arr) != 3 {
 		return TimeSeqID{}, "", fmt.Errorf("unexpected result format: %v", result)
 	}
 
 	tsStr := arr[0].(string)
 	seqid := arr[1].(int64)
+	pendingMember := arr[2].(string)
 
 	var timestamp int64
 	fmt.Sscanf(tsStr, "%d", &timestamp)
@@ -103,9 +104,6 @@ func (w *Writer) GetTimeSeqIDAndPreCommit(ctx context.Context, catalog, field st
 		Timestamp: timestamp,
 		SeqID:     seqid,
 	}
-
-	// Build pending member string
-	pendingMember := fmt.Sprintf("pending|delta|%s|%s|%d", encodedField, tsSeq.String(), mergeType)
 
 	return tsSeq, pendingMember, nil
 }

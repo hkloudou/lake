@@ -39,7 +39,7 @@ func TestDecodeMember(t *testing.T) {
 		// Invalid formats
 		{"invalid", "", MergeTypeUnknown, true},
 		{"delta|only", "", MergeTypeUnknown, true},
-		{"data|1|field", "", MergeTypeUnknown, true}, // Wrong prefix
+		{"data|1|field", "", MergeTypeUnknown, true},        // Wrong prefix
 		{"delta|1|field|extra", "", MergeTypeUnknown, true}, // Too many parts
 	}
 

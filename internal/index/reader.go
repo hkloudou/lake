@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/hkloudou/lake/v2/internal/trace"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -108,6 +109,7 @@ func (m SnapInfo) Dump() string {
 }
 
 func (r *Reader) readRange(ctx context.Context, key, min, max string) *ReadIndexResult {
+	tr := trace.FromContext(ctx)
 	results, err := r.rdb.ZRangeByScoreWithScores(ctx, key, &redis.ZRangeBy{
 		Min: min,
 		Max: max,
@@ -161,6 +163,11 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) *ReadIndex
 			Score:     z.Score,
 		})
 	}
+	tr.RecordSpan("Read.ReadRange", map[string]interface{}{
+		"lastCommittedTimestamp": fmt.Sprintf("%.6f", lastCommittedTimestamp),
+		"entriesCount":           len(entries),
+		"resultsCount":           len(results),
+	})
 
 	// Second pass: check pending members for timeout
 	const timeoutThreshold = 60 // 1 minute in seconds
@@ -172,16 +179,19 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) *ReadIndex
 		}
 
 		// Parse pending member to get timestamp
-		tsSeq, err := ParsePendingMemberTimestamp(member)
-		if err != nil {
-			continue // Skip invalid pending members
-		}
+		// tsSeq, err := ParsePendingMemberTimestamp(member)
+		// if err != nil {
+		// 	return &ReadIndexResult{Err: err}
+		// 	continue // Skip invalid pending members
+		// }
 
 		// Calculate age relative to last committed entry
-		ageSeconds := int64(lastCommittedTimestamp) - tsSeq.Timestamp
-
-		// lastCommittedTimestamp = 0 means there are pending entries
-		if lastCommittedTimestamp != 0 && ageSeconds > timeoutThreshold {
+		ageSeconds := int64(lastCommittedTimestamp) - int64(z.Score)
+		tr.RecordSpan("Read.CheckPending", map[string]interface{}{
+			"member":     member,
+			"ageSeconds": ageSeconds,
+		})
+		if ageSeconds > timeoutThreshold {
 			// Timeout > 1 minute: ignore (abandoned write, continue)
 			continue
 		}
