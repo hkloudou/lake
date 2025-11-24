@@ -26,6 +26,7 @@ import (
 //		t.Logf("Total time: %v", tr.Total())
 //	}
 func TestReadSimple(t *testing.T) {
+
 	client := lake.NewLake("redis://lake-redis-master.cs:6379/2", lake.WithRedisCache("redis://lake-redis-master.cs:6379/2", 1*time.Hour))
 	// Create context with trace enabled (operation name auto-detected or specified)
 	ctx := trace.WithTrace(context.Background())
@@ -33,6 +34,7 @@ func TestReadSimple(t *testing.T) {
 	// 	go func() {
 	// t.Log()
 	// return
+	// client.List(ctx, "test_trace")
 	t.Log(lake.ReadString(ctx, client.List(ctx, "test_trace")))
 	// 	}()
 	// }

@@ -107,12 +107,12 @@ func (w *Writer) AddSnap(ctx context.Context, catalog string, startTsSeq, stopTs
 // }
 
 // Entry represents an index entry (legacy)
-type Entry struct {
-	Field     string
-	UUID      string
-	Timestamp int64
-	MergeType MergeType
-}
+// type Entry struct {
+// 	Field     string
+// 	UUID      string
+// 	Timestamp int64
+// 	MergeType MergeType
+// }
 
 // MakeCatalogKey returns the Redis ZADD key for catalog (public accessor)
 // func (w *Writer) MakeCatalogKey(catalog string) string {

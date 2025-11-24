@@ -46,7 +46,7 @@ local score = tonumber(timestamp) + (tonumber(seqid) / 1000000.0)
 -- Pre-commit to Redis (pending state)
 redis.call("ZADD", zaddKey, score, member)
 
-return {timestamp, seqid, member}
+return {tonumber(timestamp), seqid, member}
 `
 
 // Lua script to commit: remove pending, add committed
@@ -68,6 +68,28 @@ redis.call("ZADD", key, score, committedMember)
 
 return "OK"
 `
+
+// func (w *Writer) GetTimeUnix(ctx context.Context) (int64, error) {
+// 	// encodedCatalog := encode.EncodeRedisCatalogName(catalog)
+// 	// Execute Lua script
+// 	result, err := w.rdb.Eval(ctx, `
+// local timeResult = redis.call("TIME")
+// local timestamp = timeResult[1]
+// return tonumber(timestamp)`,
+// 		[]string{},
+// 	).Result()
+
+// 	if err != nil {
+// 		return 0, fmt.Errorf("failed to get timeseq and precommit: %w", err)
+// 	}
+
+// 	// Parse result
+// 	timestamp, ok := result.(int64)
+// 	if !ok {
+// 		return 0, fmt.Errorf("invalid timestamp type: %T", result)
+// 	}
+// 	return timestamp, nil
+// }
 
 // GetTimeSeqIDAndPreCommit atomically generates TimeSeqID and pre-commits to Redis
 // Returns TimeSeqID and pending member string
@@ -93,12 +115,21 @@ func (w *Writer) GetTimeSeqIDAndPreCommit(ctx context.Context, catalog, field st
 		return TimeSeqID{}, "", fmt.Errorf("unexpected result format: %v", result)
 	}
 
-	tsStr := arr[0].(string)
-	seqid := arr[1].(int64)
-	pendingMember := arr[2].(string)
+	timestamp, ok := arr[0].(int64)
+	if !ok {
+		return TimeSeqID{}, "", fmt.Errorf("invalid timestamp type: %T", arr[0])
+	}
+	seqid, ok := arr[1].(int64)
+	if !ok {
+		return TimeSeqID{}, "", fmt.Errorf("invalid seqid type: %T", arr[1])
+	}
+	pendingMember, ok := arr[2].(string)
+	if !ok {
+		return TimeSeqID{}, "", fmt.Errorf("invalid pending member type: %T", arr[2])
+	}
 
-	var timestamp int64
-	fmt.Sscanf(tsStr, "%d", &timestamp)
+	// var timestamp int64
+	// fmt.Sscanf(tsStr, "%d", &timestamp)
 
 	tsSeq := TimeSeqID{
 		Timestamp: timestamp,

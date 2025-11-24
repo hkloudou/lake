@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/hkloudou/lake/v2/internal/trace"
 	"github.com/redis/go-redis/v9"
@@ -13,17 +14,20 @@ import (
 type Reader struct {
 	rdb *redis.Client
 	// prefix string
+	redisTimeUnix int64
 	indexKey
 }
 
 // NewReader creates a new index reader
 func NewReader(rdb *redis.Client) *Reader {
-	return &Reader{
+	reader := &Reader{
 		rdb: rdb,
 		indexKey: indexKey{
 			prefix: "lake",
 		}, // Will be set later via SetPrefix
 	}
+	reader.startRedisTimeUnixUpdater()
+	return reader
 }
 
 // DeltaInfo represents delta information (with optional body data)
@@ -120,9 +124,12 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) *ReadIndex
 	}
 
 	var entries []DeltaInfo
-	var lastCommittedTimestamp float64
-
-	// First pass: collect committed entries and find latest timestamp
+	// var lastCommittedTimestamp float64
+	// // First pass: collect committed entries and find latest timestamp
+	var timeoutThreshold = int64(120) // 1 minute in seconds
+	// ts := time.Now().Unix()
+	var lastError error
+	var hasPending bool
 	for _, z := range results {
 		member := z.Member.(string)
 
@@ -133,7 +140,13 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) *ReadIndex
 
 		// Skip pending members (will check in second pass)
 		if IsPendingMember(member) {
-			continue
+			ageSeconds := int64(r.redisTimeUnix) - int64(z.Score)
+			if ageSeconds > timeoutThreshold {
+				// Timeout > timeoutThreshold minute: ignore (abandoned write, continue)
+				continue
+			}
+			lastError = fmt.Errorf("pending write detected: %s (age: %ds < %ds)", member, ageSeconds, timeoutThreshold)
+			hasPending = true
 		}
 
 		// Skip non-delta members
@@ -152,10 +165,6 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) *ReadIndex
 			continue // Skip invalid score
 		}
 
-		if z.Score > lastCommittedTimestamp {
-			lastCommittedTimestamp = z.Score
-		}
-
 		entries = append(entries, DeltaInfo{
 			Field:     field,
 			TsSeq:     tsSeq,
@@ -163,50 +172,51 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) *ReadIndex
 			Score:     z.Score,
 		})
 	}
+
 	tr.RecordSpan("Read.ReadRange", map[string]interface{}{
-		"lastCommittedTimestamp": fmt.Sprintf("%.6f", lastCommittedTimestamp),
-		"entriesCount":           len(entries),
-		"resultsCount":           len(results),
+		"count":      fmt.Sprintf("%d/%d", len(entries), len(results)),
+		"hasPending": hasPending,
+		"error":      lastError,
 	})
-
-	// Second pass: check pending members for timeout
-	const timeoutThreshold = 60 // 1 minute in seconds
-	for _, z := range results {
-		member := z.Member.(string)
-
-		if !IsPendingMember(member) {
-			continue
-		}
-
-		// Parse pending member to get timestamp
-		// tsSeq, err := ParsePendingMemberTimestamp(member)
-		// if err != nil {
-		// 	return &ReadIndexResult{Err: err}
-		// 	continue // Skip invalid pending members
-		// }
-
-		// Calculate age relative to last committed entry
-		ageSeconds := int64(lastCommittedTimestamp) - int64(z.Score)
-		tr.RecordSpan("Read.CheckPending", map[string]interface{}{
-			"member":     member,
-			"ageSeconds": ageSeconds,
-		})
-		if ageSeconds > timeoutThreshold {
-			// Timeout > 1 minute: ignore (abandoned write, continue)
-			continue
-		}
-
-		// Still within timeout window: set HasPending and error
-		return &ReadIndexResult{
-			Deltas:     entries,
-			HasPending: true,
-			Err:        fmt.Errorf("pending write detected: %s (age: %ds < 60s)", member, ageSeconds),
-		}
-	}
-
 	return &ReadIndexResult{
 		Deltas:     entries,
-		HasPending: false,
-		Err:        nil,
+		HasPending: hasPending,
+		Err:        lastError,
 	}
+}
+
+func (c *Reader) startRedisTimeUnixUpdater() {
+	go func() {
+		for {
+			timestamp, err := c.getTimeUnix(context.Background())
+			if err != nil {
+				time.Sleep(5 * time.Second)
+				return
+			}
+			c.redisTimeUnix = timestamp
+			time.Sleep(5 * time.Second)
+		}
+	}()
+}
+
+func (w *Reader) getTimeUnix(ctx context.Context) (int64, error) {
+	// encodedCatalog := encode.EncodeRedisCatalogName(catalog)
+	// Execute Lua script
+	result, err := w.rdb.Eval(ctx, `
+local timeResult = redis.call("TIME")
+local timestamp = timeResult[1]
+return tonumber(timestamp)`,
+		[]string{},
+	).Result()
+
+	if err != nil {
+		return 0, fmt.Errorf("failed to get timeseq and precommit: %w", err)
+	}
+
+	// Parse result
+	timestamp, ok := result.(int64)
+	if !ok {
+		return 0, fmt.Errorf("invalid timestamp type: %T", result)
+	}
+	return timestamp, nil
 }

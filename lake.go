@@ -29,6 +29,7 @@ type Client struct {
 	mu      sync.RWMutex
 	storage storage.Storage
 	config  *config.Config
+	// redisTimeUnix int64
 
 	snapFlight xsync.SingleFlight[string]
 }
@@ -83,7 +84,7 @@ func NewLake(metaUrl string, opts ...func(*Option)) *Client {
 		deltaCache: deltaCache,     // Delta cache (Memory, 10min)
 		snapFlight: xsync.NewSingleFlight[string](),
 	}
-
+	// client.startRedisTimeUnixUpdater()
 	return client
 }
 
