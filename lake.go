@@ -10,18 +10,9 @@ import (
 	"github.com/hkloudou/lake/v2/internal/config"
 	"github.com/hkloudou/lake/v2/internal/index"
 	"github.com/hkloudou/lake/v2/internal/merge"
-	"github.com/hkloudou/lake/v2/internal/snapshot"
 	"github.com/hkloudou/lake/v2/internal/storage"
 	"github.com/hkloudou/lake/v2/internal/trace"
 	"github.com/redis/go-redis/v9"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
-)
-
-// Global merger instances (stateless, safe to share)
-var (
-	rfc7396Merger = merge.NewRFC7396Merger()
-	rfc6902Merger = merge.NewRFC6902Merger()
 )
 
 // Client is the main interface for Lake v2
@@ -36,8 +27,8 @@ type Client struct {
 	// Lazy-loaded components
 	mu      sync.RWMutex
 	storage storage.Storage
-	snapMgr *snapshot.Manager
-	config  *config.Config
+	// snapMgr *snapshot.Manager
+	config *config.Config
 }
 
 // Option is a function that configures the client
@@ -118,7 +109,7 @@ func WithStorage(storage storage.Storage) func(*Option) {
 // Loads config from Redis if not already loaded
 func (c *Client) ensureInitialized(ctx context.Context) error {
 	c.mu.RLock()
-	if c.storage != nil && c.snapMgr != nil {
+	if c.storage != nil {
 		c.mu.RUnlock()
 		return nil
 	}
@@ -128,7 +119,7 @@ func (c *Client) ensureInitialized(ctx context.Context) error {
 	defer c.mu.Unlock()
 
 	// Double-check after acquiring write lock
-	if c.storage != nil && c.snapMgr != nil {
+	if c.storage != nil {
 		return nil
 	}
 
@@ -157,9 +148,9 @@ func (c *Client) ensureInitialized(ctx context.Context) error {
 	c.reader.SetPrefix(prefix)
 
 	// Initialize snapshot manager
-	if c.snapMgr == nil {
-		c.snapMgr = snapshot.NewManager(c.storage, c.reader, c.writer)
-	}
+	// if c.snapMgr == nil {
+	// 	c.snapMgr = snapshot.NewManager(c.storage, c.reader, c.writer)
+	// }
 
 	return nil
 }
@@ -231,7 +222,7 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 	if c.storage == nil {
 		return nil, fmt.Errorf("storage not initialized")
 	}
-	storageKey := storage.MakeDeltaKey(req.Catalog, tsSeq, int(req.MergeType))
+	storageKey := c.storage.MakeDeltaKey(req.Catalog, tsSeq, int(req.MergeType))
 	if err := c.storage.Put(ctx, storageKey, req.Body); err != nil {
 		// Rollback: remove pending member from Redis
 		// catalogKey := c.writer.MakeCatalogKey(req.Catalog)
@@ -290,7 +281,7 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 	go func() {
 		defer wg.Done()
 		if list.LatestSnap != nil {
-			key := storage.MakeSnapKey(list.catalog, list.LatestSnap.StartTsSeq, list.LatestSnap.StopTsSeq)
+			key := c.storage.MakeSnapKey(list.catalog, list.LatestSnap.StartTsSeq, list.LatestSnap.StopTsSeq)
 			namespace := c.storage.RedisPrefix()
 
 			// Use cache to load snapshot data with namespace
@@ -324,16 +315,15 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 	tr.RecordSpan("Read.LoadData")
 
 	// Merge entries with base data (pure CPU operation, all data loaded)
-	resultData, err := c.mergeEntries(ctx, list.catalog, baseData, list.Entries)
+	resultData, err := c.merger.Merge(list.catalog, baseData, list.Entries)
 	if err != nil {
 		return nil, err
 	}
 	tr.RecordSpan("Read.Merge")
 
 	// Generate and save new snapshot if there are new entries
-	if len(list.Entries) > 0 {
-		nextSnap := list.NextSnap()
-		_, err = list.client.snapMgr.Save(ctx, list.catalog, nextSnap.StartTsSeq, nextSnap.StopTsSeq, resultData)
+	if nextSnap := list.NextSnap(); nextSnap != nil {
+		_, err = c.saveSnapshot(ctx, list.catalog, nextSnap.StartTsSeq, nextSnap.StopTsSeq, resultData)
 		if err != nil {
 			// Snapshot save failure should not fail the read
 			// Record in trace for debugging
@@ -410,7 +400,7 @@ func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []in
 					continue
 				}
 
-				key := storage.MakeDeltaKey(catalog, j.delta.TsSeq, int(j.delta.MergeType))
+				key := c.storage.MakeDeltaKey(catalog, j.delta.TsSeq, int(j.delta.MergeType))
 				data, err := c.storage.Get(workerCtx, key)
 				if err != nil {
 					// Send error and cancel other workers
@@ -451,114 +441,3 @@ func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []in
 
 	return nil
 }
-
-// ReadRequest represents a read request
-// type ReadRequest struct {
-// 	Catalog      string // Catalog name
-// 	GenerateSnap bool   // Whether to generate snapshot automatically
-// }
-
-// mergeEntries merges entries into baseData
-// This is the single source of truth for data merging
-// Assumes all entry.Body fields are already loaded (by fillDeltasBody)
-func (c *Client) mergeEntries(ctx context.Context, catalog string, baseData []byte, entries []index.DeltaInfo) ([]byte, error) {
-	merged := baseData
-	for _, entry := range entries {
-		// Use pre-loaded Body data (filled by fillDeltasBody)
-		if len(entry.Body) == 0 {
-			continue // Skip entries without body data
-		}
-
-		data := entry.Body
-		var err error
-
-		// Merge using the strategy from entry
-		switch entry.MergeType {
-		case MergeTypeReplace:
-			// Simple replace: set the field value directly
-			merged, err = sjson.SetRawBytes(merged, entry.Field, data)
-			if err != nil {
-				return nil, fmt.Errorf("failed to set field: %w", err)
-			}
-
-		case MergeTypeRFC7396:
-			// RFC 7396 JSON Merge Patch
-			// https://datatracker.ietf.org/doc/html/rfc7396
-			// Applies patch to the field's value (local scope)
-			fieldValue := gjson.GetBytes(merged, entry.Field).Raw
-			if fieldValue == "" {
-				fieldValue = "{}" // Default to empty object if field doesn't exist
-			}
-
-			mergedData, err := rfc7396Merger.Merge([]byte(fieldValue), data)
-			if err != nil {
-				return nil, fmt.Errorf("RFC7396 merge failed: %w", err)
-			}
-
-			// Set the merged result back to the field
-			merged, err = sjson.SetRawBytes(merged, entry.Field, mergedData)
-			if err != nil {
-				return nil, fmt.Errorf("failed to set merged field: %w", err)
-			}
-
-		case MergeTypeRFC6902:
-			// RFC 6902 JSON Patch
-			// https://datatracker.ietf.org/doc/html/rfc6902
-			// If field is empty, patches entire document; otherwise patches that field's value
-			merged, err = rfc6902Merger.Merge(merged, data, entry.Field)
-			if err != nil {
-				return nil, fmt.Errorf("RFC6902 patch failed: %w", err)
-			}
-
-		default:
-			return nil, fmt.Errorf("unknown merge type: %d", entry.MergeType)
-		}
-	}
-	return merged, nil
-}
-
-// GetConfig returns the current config (loads from Redis if needed)
-// DEPRECATED: Temporarily disabled. DO NOT DELETE this code.
-// Will be re-enabled after API stabilization.
-/*
-func (c *Client) GetConfig(ctx context.Context) (*config.Config, error) {
-	c.mu.RLock()
-	if c.config != nil {
-		cfg := c.config
-		c.mu.RUnlock()
-		return cfg, nil
-	}
-	c.mu.RUnlock()
-
-	// Load config
-	cfg, err := c.configMgr.Load(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	c.mu.Lock()
-	c.config = cfg
-	c.mu.Unlock()
-
-	return cfg, nil
-}
-*/
-
-// UpdateConfig updates the config in Redis
-// DEPRECATED: Temporarily disabled. DO NOT DELETE this code.
-// Will be re-enabled after storage reinitialization logic is implemented.
-/*
-func (c *Client) UpdateConfig(ctx context.Context, cfg *config.Config) error {
-	if err := c.configMgr.Save(ctx, cfg); err != nil {
-		return err
-	}
-
-	// Update cached config
-	c.mu.Lock()
-	c.config = cfg
-	// TODO: Reinitialize storage based on new config
-	c.mu.Unlock()
-
-	return nil
-}
-*/

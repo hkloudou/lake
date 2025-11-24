@@ -3,6 +3,9 @@ package storage
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
+	"encoding/base32"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"strings"
@@ -10,6 +13,7 @@ import (
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/hkloudou/lake/v2/internal/encrypt"
+	"github.com/hkloudou/lake/v2/internal/index"
 )
 
 // OSSStorage implements Storage interface for Aliyun OSS
@@ -171,20 +175,79 @@ func (s *ossStorage) RedisPrefix() string {
 	return fmt.Sprintf("%s:%s", "oss", s.name)
 }
 
-// PutStream stores data from a reader
-// func (s *OSSStorage) PutStream(ctx context.Context, key string, reader io.Reader, size int64) error {
-// 	s.mu.RLock()
-// 	bucket := s.bucket
-// 	s.mu.RUnlock()
+// MakeDeltaKey generates storage key for data files with MD5-sharded path
+// Format: {md5[0:4]}/{hex(catalog)}/delta/{ts}_{seqid}_{mergeTypeInt}.json
+// Example: f9aa/5573657273/delta/1700000000_123_1.json (for catalog "Users")
+func (s *ossStorage) MakeDeltaKey(catalog string, tsSeqID index.TimeSeqID, mergeType int) string {
+	shardedPath := encodeOssCatalogPath(catalog, 4) // Default: 4-char MD5 prefix (65,536 dirs)
+	return fmt.Sprintf("%s/delta/%s_%d.json", shardedPath, tsSeqID.String(), mergeType)
+}
 
-// 	return bucket.PutObject(key, reader)
-// }
+// MakeSnapKey generates storage key for snapshot files with MD5-sharded path
+// Format: {md5[0:4]}/{hex(catalog)}/snap/{startTsSeq}~{stopTsSeq}.snap
+// Example: f9aa/5573657273/snap/1700000000_1~1700000100_500.snap (for catalog "Users")
+func (s *ossStorage) MakeSnapKey(catalog string, startTsSeq, stopTsSeq index.TimeSeqID) string {
+	shardedPath := encodeOssCatalogPath(catalog, 4) // Default: 4-char MD5 prefix (65,536 dirs)
+	return fmt.Sprintf("%s/snap/%s~%s.snap", shardedPath, startTsSeq.String(), stopTsSeq.String())
+}
 
-// // GetStream retrieves data as a reader
-// func (s *OSSStorage) GetStream(ctx context.Context, key string) (io.ReadCloser, error) {
-// 	s.mu.RLock()
-// 	bucket := s.bucket
-// 	s.mu.RUnlock()
+// encodeOssCatalogPath generates OSS path with MD5 sharding
+// Format: md5(catalog)[0:shardSize]/EncodeOssCatalogName(catalog)
+func encodeOssCatalogPath(catalog string, shardSize int) string {
+	hash := md5.Sum([]byte(catalog))
+	md5Prefix := hex.EncodeToString(hash[:])[0:shardSize]
+	catalogEncoded := encodeOssCatalogName(catalog)
+	return md5Prefix + "/" + catalogEncoded
+}
 
-// 	return bucket.GetObject(key)
-// }
+// IsOssLowerSafe checks if catalog contains only lowercase safe characters
+// Allows: a-z, 0-9, -, _, /, .
+func isOssLowerSafe(catalog string) bool {
+	if len(catalog) == 0 {
+		return false
+	}
+	for _, r := range catalog {
+		if !((r >= 'a' && r <= 'z') ||
+			(r >= '0' && r <= '9') ||
+			r == '-' || r == '_' || r == '/' || r == '.') {
+			return false
+		}
+	}
+	return true
+}
+
+// IsOssUpperSafe checks if catalog contains only uppercase safe characters
+// Allows: A-Z, 0-9, -, _, /, .
+func isOssUpperSafe(catalog string) bool {
+	if len(catalog) == 0 {
+		return false
+	}
+	for _, r := range catalog {
+		if !((r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') ||
+			r == '-' || r == '_' || r == '/' || r == '.') {
+			return false
+		}
+	}
+	return true
+}
+
+// encodeOssCatalogName encodes catalog name for OSS paths
+// Returns the encoded name with prefix for type identification
+func encodeOssCatalogName(catalog string) string {
+	// Check if all lowercase safe
+	if isOssLowerSafe(catalog) {
+		// Prefix: ( for lowercase
+		return "(" + catalog
+	}
+
+	// Check if all uppercase safe
+	if isOssUpperSafe(catalog) {
+		// Prefix: ) for uppercase
+		return ")" + catalog
+	}
+
+	// Mixed case or unsafe characters: use base32 lowercase
+	encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString([]byte(catalog))
+	return strings.ToLower(encoded)
+}

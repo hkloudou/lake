@@ -31,15 +31,6 @@ func NewManager(
 	}
 }
 
-// Snapshot represents a snapshot (time range only, no data)
-// type Snapshot struct {
-// 	// UUID       string          `json:"uuid"`
-// 	Catalog    string          `json:"catalog"`
-// 	StartTsSeq index.TimeSeqID `json:"start_ts_seq"` // Start time sequence
-// 	StopTsSeq  index.TimeSeqID `json:"stop_ts_seq"`  // Stop time sequence
-// 	Score      float64         `json:"score"`        // For backward compatibility (score)
-// }
-
 // Save saves a snapshot metadata with the given time range
 // This is the single entry point for saving snapshots
 // Snapshot only stores time range information, actual data can be rebuilt from entries
@@ -53,36 +44,7 @@ func (m *Manager) Save(ctx context.Context, catalog string, startTsSeq, stopTsSe
 }
 
 func (m *Manager) save(ctx context.Context, catalog string, startTsSeq, stopTsSeq index.TimeSeqID, snapData []byte) (string, error) {
-	// Validate: stopTsSeq and score must match
-	// tsSeq, err := index.ParseTimeSeqID(stopTsSeq)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("invalid stopTsSeq format: %w", err)
-	// }
-	// expectedScore := stopTsSeq.Score()
-	// if score != expectedScore {
-	// 	return nil, fmt.Errorf("score mismatch: got %f, expected %f from stopTsSeq %s",
-	// 		score, expectedScore, stopTsSeq)
-	// }
-
-	// Create snapshot metadata (no data stored)
-	// snapUUID := uuid.New().String()
-
-	// snap := &Snapshot{
-	// 	// UUID:       snapUUID,
-	// 	Catalog:    catalog,
-	// 	StartTsSeq: startTsSeq,
-	// 	StopTsSeq:  stopTsSeq,
-	// 	Score:      score, // For backward compatibility
-	// }
-
-	// Save snapshot metadata to storage
-	// Filename: catalog/snap/startTsSeq~stopTsSeq.snap
-	// snapData, err := json.Marshal(snap)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("failed to marshal snapshot: %w", err)
-	// }
-
-	snapKey := storage.MakeSnapKey(catalog, startTsSeq, stopTsSeq)
+	snapKey := m.storage.MakeSnapKey(catalog, startTsSeq, stopTsSeq)
 	if err := m.storage.Put(ctx, snapKey, snapData); err != nil {
 		return "", fmt.Errorf("failed to save snapshot: %w", err)
 	}
@@ -91,57 +53,5 @@ func (m *Manager) save(ctx context.Context, catalog string, startTsSeq, stopTsSe
 	if err := m.writer.AddSnap(ctx, catalog, startTsSeq, stopTsSeq); err != nil {
 		return "", fmt.Errorf("failed to add snapshot to index: %w", err)
 	}
-
 	return snapKey, nil
 }
-
-// GetLatest gets the latest snapshot metadata from Redis index
-// Returns the snapshot metadata (time range only)
-// func (m *Manager) GetLatest(ctx context.Context, catalog string, _ bool) (*Snapshot, error) {
-// 	// Check for existing snapshot in Redis index
-// 	snapInfo, err := m.reader.GetLatestSnap(ctx, catalog)
-// 	if err != nil {
-// 		return nil, fmt.Errorf("failed to get latest snapshot: %w", err)
-// 	}
-
-// 	// If snapshot exists, return metadata from Redis
-// 	if snapInfo != nil {
-// 		return &Snapshot{
-// 			StartTsSeq: snapInfo.StartTsSeq,
-// 			StopTsSeq:  snapInfo.StopTsSeq,
-// 		}, nil
-// 	}
-
-// 	// No snapshot found
-// 	return nil, nil
-// }
-
-// ShouldGenerate checks if a snapshot should be generated based on strategy
-// func ShouldGenerate(lastSnapTime time.Time, entryCount int, strategy GenerationStrategy) bool {
-// 	switch strategy {
-// 	case StrategyAlways:
-// 		return true
-// 	case StrategyNever:
-// 		return false
-// 	case StrategyAuto:
-// 		// Generate if:
-// 		// 1. No snapshot exists (lastSnapTime is zero)
-// 		// 2. Last snapshot is older than 1 hour and has more than 100 entries
-// 		if lastSnapTime.IsZero() {
-// 			return entryCount > 10
-// 		}
-// 		age := time.Since(lastSnapTime)
-// 		return age > time.Hour && entryCount > 100
-// 	default:
-// 		return false
-// 	}
-// }
-
-// GenerationStrategy defines when to generate snapshots
-// type GenerationStrategy int
-
-// const (
-// 	StrategyAuto   GenerationStrategy = iota // Auto-generate based on heuristics
-// 	StrategyAlways                           // Always generate
-// 	StrategyNever                            // Never generate
-// )

@@ -62,16 +62,19 @@ func (m ListResult) HasNextSnap() bool {
 	return len(m.Entries) > 0
 }
 
-func (m ListResult) NextSnap() index.SnapInfo {
+func (m ListResult) NextSnap() *index.SnapInfo {
+	if len(m.Entries) == 0 {
+		return nil
+	}
 	if m.LatestSnap == nil {
-		return index.SnapInfo{
+		return &index.SnapInfo{
 			StartTsSeq: index.TimeSeqID{Timestamp: 0, SeqID: 0},
 			StopTsSeq:  m.Entries[len(m.Entries)-1].TsSeq,
 			// Score:      m.Entries[len(m.Entries)-1].TsSeq.Score(),
 		}
 	}
 
-	return index.SnapInfo{
+	return &index.SnapInfo{
 		StartTsSeq: m.LatestSnap.StopTsSeq,
 		StopTsSeq:  m.Entries[len(m.Entries)-1].TsSeq,
 		// Score:      m.Entries[len(m.Entries)-1].TsSeq.Score(),

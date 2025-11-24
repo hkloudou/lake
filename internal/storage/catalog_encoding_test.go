@@ -4,8 +4,6 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"testing"
-
-	"github.com/hkloudou/lake/v2/internal/encode"
 )
 
 func TestCatalogEncodingTypes(t *testing.T) {
@@ -34,7 +32,7 @@ func TestCatalogEncodingTypes(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result := encode.EncodeOssCatalogName(tt.catalog)
+		result := encodeOssCatalogName(tt.catalog)
 
 		var gotPrefix string
 		if len(result) > 0 {
@@ -77,7 +75,7 @@ func TestFullPathExamples(t *testing.T) {
 	}
 
 	for _, ex := range examples {
-		path := encode.EncodeOssCatalogPath(ex.catalog, shardSize)
+		path := encodeOssCatalogPath(ex.catalog, shardSize)
 
 		// Extract parts
 		hash := md5.Sum([]byte(ex.catalog))

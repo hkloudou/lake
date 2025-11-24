@@ -59,6 +59,7 @@ func TestWriteRFC6902(t *testing.T) {
 	// Test 1: RFC6902 at root level
 	t.Run("root level patch", func(t *testing.T) {
 		patchOps := []byte(`[
+			{ "op": "add", "path": "/a/b/h", "value": {"b": {"c": {"name": "John", "age": 30}}} },
 			{ "op": "add", "path": "/a/b/c", "value": {"name": "John", "age": 30} },
 			{ "op": "replace", "path": "/a/b/c", "value": 42 },
 			{ "op": "move", "from": "/a/b/c", "path": "/a/b/d" },
