@@ -530,28 +530,22 @@ func (c *Client) List(ctx context.Context, catalog string) *ListResult {
 		}
 	}
 
-	var deltas []index.DeltaInfo
-	var pendingErr error
+	var readResult *index.ReadAllResult
 
 	if snap != nil {
-		deltas, err = c.reader.ReadSince(ctx, catalog, snap.StopTsSeq.Score())
-		if err != nil {
-			pendingErr = err // Pending writes or read errors
-		}
+		readResult = c.reader.ReadSince(ctx, catalog, snap.StopTsSeq.Score())
 	} else {
 		// No snapshot, read all
-		deltas, err = c.reader.ReadAll(ctx, catalog)
-		if err != nil {
-			pendingErr = err
-		}
+		readResult = c.reader.ReadAll(ctx, catalog)
 	}
 
 	return &ListResult{
 		client:     c,
 		catalog:    catalog,
 		LatestSnap: snap,
-		Entries:    deltas,
-		Err:        pendingErr,
+		Entries:    readResult.Deltas,
+		HasPending: readResult.HasPending,
+		Err:        readResult.Err,
 	}
 }
 
