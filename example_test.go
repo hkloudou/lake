@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/hkloudou/lake/v2"
-	"github.com/hkloudou/lake/v2/internal/index"
 	"github.com/hkloudou/lake/v2/internal/storage"
 )
 
@@ -23,7 +22,7 @@ func TestBasicUsage(t *testing.T) {
 		Catalog:   "users",
 		Field:     "profile.name",
 		Body:      []byte(`"Alice"`), // JSON string
-		MergeType: index.MergeTypeReplace,
+		MergeType: lake.MergeTypeReplace,
 	})
 	if err != nil {
 		t.Fatalf("Write failed: %v", err)
@@ -33,7 +32,7 @@ func TestBasicUsage(t *testing.T) {
 		Catalog:   "users",
 		Field:     "profile.age",
 		Body:      []byte(`30`), // JSON number
-		MergeType: index.MergeTypeReplace,
+		MergeType: lake.MergeTypeReplace,
 	})
 	if err != nil {
 		t.Fatalf("Write failed: %v", err)
@@ -70,7 +69,7 @@ func TestWriteRFC6902(t *testing.T) {
 			Catalog:   catalog,
 			Field:     "", // Empty field means root document
 			Body:      patchOps,
-			MergeType: index.MergeTypeRFC6902,
+			MergeType: lake.MergeTypeRFC6902,
 		})
 		if err != nil {
 			t.Fatalf("Write failed: %v", err)
@@ -89,7 +88,7 @@ func TestWriteRFC6902(t *testing.T) {
 			Catalog:   catalog,
 			Field:     "profile", // Patch applies to "profile" field only
 			Body:      patchOpsField,
-			MergeType: index.MergeTypeRFC6902,
+			MergeType: lake.MergeTypeRFC6902,
 		})
 		if err != nil {
 			t.Fatalf("Write failed: %v", err)
@@ -122,7 +121,7 @@ func TestWriteData(t *testing.T) {
 			Catalog:   catalog,
 			Field:     "user.name",
 			Body:      []byte(`"Alice"`), // JSON string
-			MergeType: index.MergeTypeReplace,
+			MergeType: lake.MergeTypeReplace,
 		})
 		if err != nil {
 			t.Fatalf("Write failed: %v", err)
@@ -135,7 +134,7 @@ func TestWriteData(t *testing.T) {
 			Catalog:   catalog,
 			Field:     "user",
 			Body:      []byte(`{"age": 30, "city": "NYC"}`), // JSON object
-			MergeType: index.MergeTypeRFC7396,
+			MergeType: lake.MergeTypeRFC7396,
 		})
 		if err != nil {
 			t.Fatalf("Write failed: %v", err)

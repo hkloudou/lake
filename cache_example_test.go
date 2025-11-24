@@ -25,7 +25,7 @@ func TestWithCacheHelper(t *testing.T) {
 		Catalog:   "users",
 		Field:     "profile",
 		Body:      []byte(`{"name":"Alice2","age":30}`),
-		MergeType: index.MergeTypeReplace,
+		MergeType: lake.MergeTypeReplace,
 	})
 	if err != nil {
 		t.Fatalf("Write failed: %v", err)
@@ -86,7 +86,7 @@ func TestWithRedisCache(t *testing.T) {
 		Catalog:   catalog,
 		Field:     "user",
 		Body:      []byte(`{"name":"Bob","age":25}`),
-		MergeType: index.MergeTypeReplace,
+		MergeType: lake.MergeTypeReplace,
 	})
 	if err != nil {
 		t.Fatalf("Write failed: %v", err)
@@ -131,7 +131,7 @@ func TestWithNoOpCache(t *testing.T) {
 		Catalog:   "test_nocache",
 		Field:     "data",
 		Body:      []byte(`"test"`),
-		MergeType: index.MergeTypeReplace,
+		MergeType: lake.MergeTypeReplace,
 	})
 	if err != nil {
 		t.Logf("Write failed (Redis not available): %v", err)

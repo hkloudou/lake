@@ -23,7 +23,7 @@ func TestWriteWithTrace(t *testing.T) {
 		Catalog:   catalog,
 		Field:     "user.name",
 		Body:      []byte(`"Bob"`),
-		MergeType: index.MergeTypeReplace,
+		MergeType: lake.MergeTypeReplace,
 	})
 	if err != nil {
 		t.Fatalf("Write failed: %v", err)
@@ -48,7 +48,7 @@ func TestMultipleWritesWithTrace(t *testing.T) {
 			Catalog:   catalog,
 			Field:     fmt.Sprintf("field_%d", i),
 			Body:      []byte(fmt.Sprintf(`"value_%d"`, i)),
-			MergeType: index.MergeTypeReplace,
+			MergeType: lake.MergeTypeReplace,
 		})
 		if err != nil {
 			t.Fatalf("Write %d failed: %v", i, err)
@@ -69,7 +69,7 @@ func TestWriteWithoutTrace(t *testing.T) {
 		Catalog:   "test_no_trace",
 		Field:     "data",
 		Body:      []byte(`"test"`),
-		MergeType: index.MergeTypeReplace,
+		MergeType: lake.MergeTypeReplace,
 	})
 	if err != nil {
 		t.Fatalf("Write failed: %v", err)

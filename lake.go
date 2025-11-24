@@ -166,10 +166,10 @@ func (c *Client) ensureInitialized(ctx context.Context) error {
 
 // WriteRequest represents a write request
 type WriteRequest struct {
-	Catalog   string          // Catalog name
-	Field     string          // JSON path (e.g., "user.profile.name")
-	Body      []byte          // JSON body to write (raw bytes from network)
-	MergeType index.MergeType // Merge strategy (Replace or Merge)
+	Catalog   string    // Catalog name
+	Field     string    // JSON path (e.g., "user.profile.name")
+	Body      []byte    // JSON body to write (raw bytes from network)
+	MergeType MergeType // Merge strategy (Replace, RFC7396, or RFC6902)
 }
 
 // WriteResult represents the write result
@@ -448,14 +448,14 @@ func (c *Client) mergeEntries(ctx context.Context, catalog string, baseData []by
 
 		// Merge using the strategy from entry
 		switch entry.MergeType {
-		case index.MergeTypeReplace:
+		case MergeTypeReplace:
 			// Simple replace: set the field value directly
 			merged, err = sjson.SetRawBytes(merged, entry.Field, data)
 			if err != nil {
 				return nil, fmt.Errorf("failed to set field: %w", err)
 			}
 
-		case index.MergeTypeRFC7396:
+		case MergeTypeRFC7396:
 			// RFC 7396 JSON Merge Patch
 			// https://datatracker.ietf.org/doc/html/rfc7396
 			// Applies patch to the field's value (local scope)
@@ -475,7 +475,7 @@ func (c *Client) mergeEntries(ctx context.Context, catalog string, baseData []by
 				return nil, fmt.Errorf("failed to set merged field: %w", err)
 			}
 
-		case index.MergeTypeRFC6902:
+		case MergeTypeRFC6902:
 			// RFC 6902 JSON Patch
 			// https://datatracker.ietf.org/doc/html/rfc6902
 			// If field is empty, patches entire document; otherwise patches that field's value
