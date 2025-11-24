@@ -100,7 +100,7 @@ Lake V2 supports three merge strategies:
 client.Write(ctx, lake.WriteRequest{
     Field:     "user.name",
     Body:      []byte(`"Alice"`),
-    MergeType: index.MergeTypeReplace,
+    MergeType: lake.MergeTypeReplace,
 })
 ```
 
@@ -112,7 +112,7 @@ client.Write(ctx, lake.WriteRequest{
 client.Write(ctx, lake.WriteRequest{
     Field:     "user",
     Body:      []byte(`{"city":"NYC","age":null}`),
-    MergeType: index.MergeTypeRFC7396,
+    MergeType: lake.MergeTypeRFC7396,
 })
 ```
 
@@ -126,7 +126,7 @@ client.Write(ctx, lake.WriteRequest{
         {"op":"add","path":"/a/b/c","value":42},
         {"op":"move","from":"/a/b/c","path":"/x/y/z"}
     ]`),
-    MergeType: index.MergeTypeRFC6902,
+    MergeType: lake.MergeTypeRFC6902,
 })
 ```
 
@@ -244,11 +244,11 @@ go test -v -run TestWriteWithTrace
 go test -v ./internal/merge
 ```
 
-## 📚 Documentation
+## 📚 Examples
 
-- [Architecture Design](./DESIGN_V2.md) - Detailed technical design
-- [Examples](./example_test.go) - Usage examples
-- [Trace Examples](./trace_example_test.go) - Performance tracing
+- [Basic Examples](./example_test.go) - Write, Read, RFC patches
+- [Trace Examples](./trace_example_test.go) - Performance monitoring
+- [Cache Examples](./cache_example_test.go) - Redis caching setup
 
 ## 🤝 Contributing
 
