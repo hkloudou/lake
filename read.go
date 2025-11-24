@@ -44,7 +44,7 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 			namespace := c.storage.RedisPrefix()
 
 			// Use cache to load snapshot data with namespace
-			baseData, baseDataErr = c.cache.Take(namespace, key, func() ([]byte, error) {
+			baseData, baseDataErr = c.cache.Take(ctx, namespace, key, func() ([]byte, error) {
 				// Cache miss: load from storage
 				return c.storage.Get(ctx, key)
 			})

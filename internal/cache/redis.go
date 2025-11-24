@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/hkloudou/lake/v2/internal/encode"
+	"github.com/hkloudou/lake/v2/internal/trace"
 	"github.com/hkloudou/lake/v2/internal/xsync"
 	"github.com/redis/go-redis/v9"
 )
@@ -41,7 +42,8 @@ func NewRedisCacheWithURL(metaUrl string, ttl time.Duration) (*RedisCache, error
 }
 
 // Take implements Cache interface with SingleFlight to prevent cache stampede
-func (c *RedisCache) Take(namespace, key string, loader func() ([]byte, error)) ([]byte, error) {
+func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader func() ([]byte, error)) ([]byte, error) {
+	tr := trace.FromContext(ctx)
 	cacheKey := "lake_cache:" + encode.EncodeRedisCatalogName(namespace+":"+key)
 
 	if c.debug {
@@ -50,56 +52,66 @@ func (c *RedisCache) Take(namespace, key string, loader func() ([]byte, error)) 
 
 	// Use SingleFlight to prevent multiple concurrent requests for same key
 	return c.flight.Do(cacheKey, func() ([]byte, error) {
-		ctx := context.Background()
-		
+
 		// Try to get from Redis
 		cachedData, err := c.client.GetEx(ctx, cacheKey, c.ttl).Result()
-	if err == redis.Nil {
-		// Cache miss
-		c.stat.IncrementMiss()
-		if c.debug {
-			log.Printf("[Cache] MISS: %s (loading from storage)", cacheKey)
-		}
-
-		// Call loader function to get []byte
-		data, err := loader()
-		if err != nil {
+		if err == redis.Nil {
+			// Cache miss
+			c.stat.IncrementMiss()
+			tr.RecordSpan("RedisCache.Miss")
 			if c.debug {
-				log.Printf("[Cache] Loader failed for %s: %v", cacheKey, err)
+				log.Printf("[Cache] MISS: %s (loading from storage)", cacheKey)
 			}
-			return nil, err
-		}
 
-		if c.debug {
-			log.Printf("[Cache] Loaded %d bytes from storage for %s", len(data), cacheKey)
-		}
+			// Call loader function to get []byte
+			data, err := loader()
+			if err != nil {
+				tr.RecordSpan("RedisCache.LoaderFailed", map[string]any{
+					"error": err.Error(),
+				})
+				if c.debug {
+					log.Printf("[Cache] Loader failed for %s: %v", cacheKey, err)
+				}
+				return nil, err
+			}
 
-		// Write to Redis with TTL (data is already []byte, no need to marshal)
-		err = c.client.Set(ctx, cacheKey, data, c.ttl).Err()
-		if err != nil {
+			tr.RecordSpan("RedisCache.Loaded", map[string]any{
+				"size": len(data),
+			})
 			if c.debug {
-				log.Printf("[Cache] Failed to cache %s: %v (continuing with data)", cacheKey, err)
+				log.Printf("[Cache] Loaded %d bytes from storage for %s", len(data), cacheKey)
 			}
-		} else {
+
+			// Write to Redis with TTL (data is already []byte, no need to marshal)
+			err = c.client.Set(ctx, cacheKey, data, c.ttl).Err()
+			if err != nil {
+				if c.debug {
+					log.Printf("[Cache] Failed to cache %s: %v (continuing with data)", cacheKey, err)
+				}
+			} else {
+				if c.debug {
+					log.Printf("[Cache] Cached %d bytes for %s (TTL: %v)", len(data), cacheKey, c.ttl)
+				}
+			}
+
+			return data, nil
+		} else if err != nil {
+			// Redis error, fallback to loader
 			if c.debug {
-				log.Printf("[Cache] Cached %d bytes for %s (TTL: %v)", len(data), cacheKey, c.ttl)
+				log.Printf("[Cache] Redis error for %s: %v (fallback to loader)", cacheKey, err)
 			}
+			return loader()
 		}
 
-		return data, nil
-	} else if err != nil {
-		// Redis error, fallback to loader
+		// Cache hit
+		c.stat.IncrementHit()
+		tr.RecordSpan("RedisCache.Hit", map[string]any{
+			"key":  cacheKey,
+			"size": len(cachedData),
+		})
 		if c.debug {
-			log.Printf("[Cache] Redis error for %s: %v (fallback to loader)", cacheKey, err)
+			log.Printf("[Cache] HIT: %s (%d bytes)", cacheKey, len(cachedData))
 		}
-		return loader()
-	}
-
-	// Cache hit
-	c.stat.IncrementHit()
-	if c.debug {
-		log.Printf("[Cache] HIT: %s (%d bytes)", cacheKey, len(cachedData))
-	}
 
 		// Return cached data as []byte
 		return []byte(cachedData), nil
