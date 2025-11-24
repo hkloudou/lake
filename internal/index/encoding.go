@@ -3,8 +3,6 @@ package index
 import (
 	"fmt"
 	"strings"
-
-	"github.com/hkloudou/lake/v2/internal/encode"
 )
 
 // MergeType defines how to merge values
@@ -50,8 +48,8 @@ func MergeTypeFromInt(i int) MergeType {
 // Example: "data|dXNlci5uYW1l|1700000000_123|0"
 func EncodeDeltaMember(field, tsSeqID string, mergeType MergeType) string {
 	// Encode field using base64 URL encoding (safe for Redis keys)
-	encodedField := encode.EncodeRedisCatalogName(field)
-	return fmt.Sprintf("delta|%s|%s|%d", encodedField, tsSeqID, mergeType)
+	// encodedField := encode.EncodeRedisCatalogName(field)
+	return fmt.Sprintf("delta|%d|%s|%s", mergeType, field, tsSeqID)
 }
 
 // DecodeMember decodes Redis ZADD member into field, tsSeqID, and mergeType
@@ -68,21 +66,23 @@ func DecodeDeltaMember(member string) (field, tsSeqID string, mergeType MergeTyp
 	}
 
 	// Decode base64 field
-	fieldBytes, err := encode.DecodeRedisCatalogName(parts[1])
-	if err != nil {
-		return "", "", 0, fmt.Errorf("failed to decode field: %w", err)
-	}
-	field = string(fieldBytes)
-
-	// Parse tsSeqID (already in correct format)
-	tsSeqID = parts[2]
+	// fieldBytes, err := encode.DecodeRedisCatalogName(parts[1])
+	// if err != nil {
+	// 	return "", "", 0, fmt.Errorf("failed to decode field: %w", err)
+	// }
+	// field = string(fieldBytes)
 
 	// Parse merge type
 	var mergeTypeInt int
-	_, err = fmt.Sscanf(parts[3], "%d", &mergeTypeInt)
+	_, err = fmt.Sscanf(parts[1], "%d", &mergeTypeInt)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("invalid merge type: %s", parts[3])
 	}
+
+	field = parts[2]
+
+	// Parse tsSeqID (already in correct format)
+	tsSeqID = parts[3]
 
 	return field, tsSeqID, MergeTypeFromInt(mergeTypeInt), nil
 }
@@ -134,13 +134,13 @@ func IsPendingMember(member string) bool {
 }
 
 // ParsePendingMemberTimestamp extracts TimeSeqID from a pending member
-// Format: "pending|delta|field|ts_seqid|mergetype"
+// Format: "pending|delta|mergetype|field|ts_seqid"
 func ParsePendingMemberTimestamp(member string) (TimeSeqID, error) {
 	parts := strings.Split(member, "|")
-	if len(parts) < 4 {
+	if len(parts) < 5 {
 		return TimeSeqID{}, fmt.Errorf("invalid pending member format")
 	}
 
 	// parts[3] is tsSeqID
-	return ParseTimeSeqID(parts[3])
+	return ParseTimeSeqID(parts[4])
 }

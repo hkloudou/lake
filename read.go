@@ -40,15 +40,21 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 	go func() {
 		defer wg.Done()
 		if list.LatestSnap != nil {
-			key := c.storage.MakeSnapKey(list.catalog, list.LatestSnap.StartTsSeq, list.LatestSnap.StopTsSeq)
+			storageKey := c.storage.MakeSnapKey(list.catalog, list.LatestSnap.StartTsSeq, list.LatestSnap.StopTsSeq)
+			tr.RecordSpan("Read.LoadSnapshot_Cache", map[string]interface{}{
+				"startTsSeq": list.LatestSnap.StartTsSeq,
+				"stopTsSeq":  list.LatestSnap.StopTsSeq,
+				"storageKey": storageKey,
+			})
 			namespace := c.storage.RedisPrefix()
 
 			// Use cache to load snapshot data with namespace
-			baseData, baseDataErr = c.cache.Take(ctx, namespace, key, func() ([]byte, error) {
+			baseData, baseDataErr = c.snapCache.Take(ctx, namespace, storageKey, func() ([]byte, error) {
 				// Cache miss: load from storage
-				return c.storage.Get(ctx, key)
+				return c.storage.Get(ctx, storageKey)
 			})
 		} else {
+			tr.RecordSpan("Read.LoadSnapshot_Empty")
 			baseData = []byte("{}")
 		}
 	}()
@@ -83,6 +89,12 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 	// Generate and save new snapshot asynchronously (non-blocking)
 	if nextSnap := list.NextSnap(); nextSnap != nil {
 		// Async snapshot save with SingleFlight (prevents duplicate saves)
+		tr.RecordSpan("Read.SnapshotSave_Async", map[string]interface{}{
+			"startTsSeq": nextSnap.StartTsSeq,
+			"stopTsSeq":  nextSnap.StopTsSeq,
+			"size":       len(resultData),
+			"hasNext":    nextSnap != nil,
+		})
 		go func() {
 			// Use background context (don't cancel with original context)
 			bgCtx := context.Background()
@@ -166,13 +178,13 @@ func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []in
 
 				key := c.storage.MakeDeltaKey(catalog, j.delta.TsSeq, int(j.delta.MergeType))
 				namespace := c.storage.RedisPrefix()
-				
+
 				// Use deltaCache (memory cache) for delta files
 				data, err := c.deltaCache.Take(workerCtx, namespace, key, func() ([]byte, error) {
 					// Cache miss: load from storage
 					return c.storage.Get(workerCtx, key)
 				})
-				
+
 				if err != nil {
 					// Send error and cancel other workers
 					select {

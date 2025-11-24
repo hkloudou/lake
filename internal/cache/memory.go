@@ -40,7 +40,10 @@ func NewMemoryCache(ttl time.Duration) *MemoryCache {
 func (c *MemoryCache) Take(ctx context.Context, namespace, key string, loader func() ([]byte, error)) ([]byte, error) {
 	tr := trace.FromContext(ctx)
 	cacheKey := namespace + ":" + key
-
+	tr.RecordSpan("MemoryCache.Take", map[string]any{
+		"namespace": namespace,
+		"key":       key,
+	})
 	// Use SingleFlight to prevent cache stampede
 	return c.flight.Do(cacheKey, func() ([]byte, error) {
 		// Check cache first

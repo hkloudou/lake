@@ -42,11 +42,15 @@ func NewRedisCacheWithURL(metaUrl string, ttl time.Duration) (*RedisCache, error
 // Take implements Cache interface with SingleFlight to prevent cache stampede
 func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader func() ([]byte, error)) ([]byte, error) {
 	tr := trace.FromContext(ctx)
+	tr.RecordSpan("RedisCache.Take", map[string]any{
+		"namespace": namespace,
+		"key":       key,
+	})
 	cacheKey := "lake_cache:" + encode.EncodeRedisCatalogName(namespace+":"+key)
 
 	// Use SingleFlight to prevent multiple concurrent requests for same key
 	return c.flight.Do(cacheKey, func() ([]byte, error) {
-
+		// time.Sleep(1 * time.Second) // for flight test to see if it works
 		// Try to get from Redis
 		cachedData, err := c.client.GetEx(ctx, cacheKey, c.ttl).Result()
 		if err == redis.Nil {
@@ -76,7 +80,17 @@ func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader fun
 			return data, nil
 		} else if err != nil {
 			// Redis error, fallback to loader
-			return loader()
+			tr.RecordSpan("RedisCache.ErrorAndLoad", map[string]any{
+				"error": err.Error(),
+			})
+			data, err := loader()
+			if err != nil {
+				tr.RecordSpan("RedisCache.LoaderFailed", map[string]any{
+					"error": err.Error(),
+				})
+				return nil, err
+			}
+			return data, nil
 		}
 
 		// Cache hit

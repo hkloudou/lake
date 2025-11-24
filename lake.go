@@ -22,7 +22,7 @@ type Client struct {
 	reader     *index.Reader
 	merger     *merge.Engine // Legacy (deprecated)
 	configMgr  *config.Manager
-	cache      cache.Cache // Snapshot cache (Redis or NoOp)
+	snapCache  cache.Cache // Snapshot cache (Redis or NoOp)
 	deltaCache cache.Cache // Delta file cache (Memory, 10min TTL)
 
 	// Lazy-loaded components
@@ -67,9 +67,8 @@ func NewLake(metaUrl string, opts ...func(*Option)) *Client {
 	// Use provided cache or default to no-op cache
 	cacheProvider := option.CacheProvider
 	if cacheProvider == nil {
-		cacheProvider = cache.NewNoOpCache()
+		cacheProvider = cache.NewMemoryCache(1 * time.Hour)
 	}
-
 	// Delta cache: in-memory with 10 minute TTL for delta files
 	deltaCache := cache.NewMemoryCache(10 * time.Minute)
 
@@ -80,7 +79,7 @@ func NewLake(metaUrl string, opts ...func(*Option)) *Client {
 		merger:     merger,
 		configMgr:  configMgr,
 		storage:    option.Storage, // May be nil, will be loaded lazily
-		cache:      cacheProvider,  // Snapshot cache (Redis or NoOp)
+		snapCache:  cacheProvider,  // Snapshot cache (Redis or NoOp)
 		deltaCache: deltaCache,     // Delta cache (Memory, 10min)
 		snapFlight: xsync.NewSingleFlight[string](),
 	}
