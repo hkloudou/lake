@@ -20,33 +20,33 @@ func TestWithCacheHelper(t *testing.T) {
 
 	ctx := context.Background()
 	// Write some data
-	_, err := client.Write(ctx, lake.WriteRequest{
+	_, writeErr := client.Write(ctx, lake.WriteRequest{
 		Catalog:   "users",
 		Field:     "profile",
 		Body:      []byte(`{"name":"Alice2","age":30}`),
 		MergeType: lake.MergeTypeReplace,
 	})
-	if result.Err != nil {
-		t.Fatalf("Write failed: %v", err)
+	if writeErr != nil {
+		t.Fatalf("Write failed: %v", writeErr)
 	}
 	// First read: cache miss, loads from OSS
 	list1, err := client.List(ctx, "users")
-	if result.Err != nil {
+	if writeErr != nil {
 		t.Fatalf("List error: %v", result.Err)
 	}
 	data1, err := lake.ReadMap(ctx, list1)
-	if result.Err != nil {
+	if writeErr != nil {
 		t.Fatalf("ReadMap failed: %v", err)
 	}
 	t.Logf("First read (cache miss): %+v", data1)
 
 	// Second read: cache hit, loads from Redis
 	list2, err := client.List(ctx, "users")
-	if result.Err != nil {
+	if writeErr != nil {
 		t.Fatalf("List error: %v", result.Err)
 	}
 	data2, err := lake.ReadMap(ctx, list2)
-	if result.Err != nil {
+	if writeErr != nil {
 		t.Fatalf("ReadMap failed: %v", err)
 	}
 	t.Logf("Second read (cache hit): %+v", data2)
@@ -81,36 +81,36 @@ func TestWithRedisCache(t *testing.T) {
 	catalog := "test_cache"
 
 	// Write some data
-	_, err := client.Write(ctx, lake.WriteRequest{
+	_, writeErr := client.Write(ctx, lake.WriteRequest{
 		Catalog:   catalog,
 		Field:     "user",
 		Body:      []byte(`{"name":"Bob","age":25}`),
 		MergeType: lake.MergeTypeReplace,
 	})
-	if result.Err != nil {
-		t.Fatalf("Write failed: %v", err)
+	if writeErr != nil {
+		t.Fatalf("Write failed: %v", writeErr)
 	}
 
 	// First read - cache miss
 	list1, err := client.List(ctx, catalog)
-	if result.Err != nil {
+	if writeErr != nil {
 		t.Fatalf("List error: %v", result.Err)
 	}
 
 	data1, err := lake.ReadMap(ctx, list1)
-	if result.Err != nil {
+	if writeErr != nil {
 		t.Fatalf("ReadMap failed: %v", err)
 	}
 	t.Logf("First read (cache miss): %+v", data1)
 
 	// Second read - should hit cache
 	list2, err := client.List(ctx, catalog)
-	if result.Err != nil {
+	if writeErr != nil {
 		t.Fatalf("List error: %v", result.Err)
 	}
 
 	data2, err := lake.ReadMap(ctx, list2)
-	if result.Err != nil {
+	if writeErr != nil {
 		t.Fatalf("ReadMap failed: %v", err)
 	}
 	t.Logf("Second read (cache hit): %+v", data2)
@@ -126,13 +126,13 @@ func TestWithNoOpCache(t *testing.T) {
 	// This client uses NoOpCache by default (always loads from storage)
 	ctx := context.Background()
 
-	_, err := client.Write(ctx, lake.WriteRequest{
+	_, writeErr := client.Write(ctx, lake.WriteRequest{
 		Catalog:   "test_nocache",
 		Field:     "data",
 		Body:      []byte(`"test"`),
 		MergeType: lake.MergeTypeReplace,
 	})
-	if result.Err != nil {
+	if writeErr != nil {
 		t.Logf("Write failed (Redis not available): %v", err)
 		t.Skip("Skipping test")
 	}

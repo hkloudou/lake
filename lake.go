@@ -555,8 +555,6 @@ func (c *Client) List(ctx context.Context, catalog string) *ListResult {
 	}
 }
 
-}
-
 // GetConfig returns the current config (loads from Redis if needed)
 // DEPRECATED: Temporarily disabled. DO NOT DELETE this code.
 // Will be re-enabled after API stabilization.

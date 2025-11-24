@@ -24,7 +24,7 @@ func TestBasicUsage(t *testing.T) {
 		Body:      []byte(`"Alice"`), // JSON string
 		MergeType: lake.MergeTypeReplace,
 	})
-	if result.Err != nil {
+	if err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
 
@@ -34,7 +34,7 @@ func TestBasicUsage(t *testing.T) {
 		Body:      []byte(`30`), // JSON number
 		MergeType: lake.MergeTypeReplace,
 	})
-	if result.Err != nil {
+	if err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
 
@@ -45,7 +45,7 @@ func TestBasicUsage(t *testing.T) {
 	}
 	t.Logf("List result: %+v", result.Dump())
 	data, err := lake.ReadMap(ctx, result)
-	if result.Err != nil {
+	if err != nil {
 		t.Fatalf("ReadMap failed: %v", err)
 	}
 	t.Logf("Data: %+v", data)
@@ -71,7 +71,7 @@ func TestWriteRFC6902(t *testing.T) {
 			Body:      patchOps,
 			MergeType: lake.MergeTypeRFC6902,
 		})
-		if result.Err != nil {
+		if err != nil {
 			t.Fatalf("Write failed: %v", err)
 		}
 		t.Log("✓ RFC6902 patch to root document successful")
@@ -90,7 +90,7 @@ func TestWriteRFC6902(t *testing.T) {
 			Body:      patchOpsField,
 			MergeType: lake.MergeTypeRFC6902,
 		})
-		if result.Err != nil {
+		if err != nil {
 			t.Fatalf("Write failed: %v", err)
 		}
 		t.Log("✓ RFC6902 patch to 'profile' field successful")
@@ -103,7 +103,7 @@ func TestWriteRFC6902(t *testing.T) {
 	}
 
 	data, err := lake.ReadMap(ctx, result)
-	if result.Err != nil {
+	if err != nil {
 		t.Fatalf("ReadMap failed: %v", err)
 	}
 
@@ -123,7 +123,7 @@ func TestWriteData(t *testing.T) {
 			Body:      []byte(`"Alice"`), // JSON string
 			MergeType: lake.MergeTypeReplace,
 		})
-		if result.Err != nil {
+		if err != nil {
 			t.Fatalf("Write failed: %v", err)
 		}
 		t.Log("✓ Replace successful")
@@ -136,7 +136,7 @@ func TestWriteData(t *testing.T) {
 			Body:      []byte(`{"age": 30, "city": "NYC"}`), // JSON object
 			MergeType: lake.MergeTypeRFC7396,
 		})
-		if result.Err != nil {
+		if err != nil {
 			t.Fatalf("Write failed: %v", err)
 		}
 		t.Log("✓ RFC7396 merge successful")
@@ -160,7 +160,7 @@ func TestListAndRead(t *testing.T) {
 
 	// Read merged data
 	data, err := lake.ReadMap(ctx, result)
-	if result.Err != nil {
+	if err != nil {
 		t.Fatalf("ReadMap failed: %v", err)
 	}
 
