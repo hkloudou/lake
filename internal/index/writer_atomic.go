@@ -71,7 +71,9 @@ local updatedMap = cjson.decode(ARGV[4])
 redis.call("ZREM", key, pendingMember)
 redis.call("ZADD", key, score, committedMember)
 
+return "OK"
 
+--------------------------------
 -- Update meta map with updatedMap
 local meta = redis.call("GET", metaKey)
 local metaMap = {}
@@ -177,7 +179,7 @@ func (w *Writer) Commit(ctx context.Context, catalog, pendingMember, committedMe
 		"metaKey":         metaKey,
 		"pendingMember":   pendingMember,
 		"committedMember": committedMember,
-		"score":           score,
+		"score":           fmt.Sprintf("%.6f", score),
 		"updatedMapJSON":  string(updatedMapJSON),
 	})
 	_, err = w.rdb.Eval(ctx, commitScript,

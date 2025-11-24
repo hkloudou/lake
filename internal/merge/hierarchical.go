@@ -49,6 +49,15 @@ func (h *HierarchicalUpdateMap) GetAll() map[string]index.TimeSeqID {
 	return h.updates
 }
 
+// GetAll returns all updates
+func (h *HierarchicalUpdateMap) GetAllInt64() map[string]int64 {
+	updatedMap := make(map[string]int64, 0)
+	for key, value := range h.updates {
+		updatedMap[key] = value.Timestamp
+	}
+	return updatedMap
+}
+
 // getParentPaths returns all parent paths for a given field, including root "/"
 // Example: "/base/child/item" → ["/", "/base", "/base/child"]
 // Example: "/base" → ["/"]

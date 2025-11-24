@@ -86,9 +86,14 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 		"size": len(req.Body),
 	})
 
-	// Step 3: Atomically commit (remove pending, add committed)
+	// Step 3: Get hierarchical Updated Map
+	hm := merge.NewHierarchicalUpdateMap()
+	hm.Update(req.Field, tsSeq)
+	updatedMap := hm.GetAllInt64()
+
+	// Step 4: Atomically commit (remove pending, add committed)
 	committedMember := index.EncodeDeltaMember(req.Field, req.MergeType)
-	err = c.writer.Commit(ctx, req.Catalog, pendingMember, committedMember, tsSeq.Score())
+	err = c.writer.Commit(ctx, req.Catalog, pendingMember, committedMember, tsSeq.Score(), updatedMap)
 	if err != nil {
 		return nil, fmt.Errorf("failed to commit: %w", err)
 	}
