@@ -261,9 +261,19 @@ func TestTimeSeqIDParsing(t *testing.T) {
 			wantErr: true, // More than 6 digits
 		},
 		{
-			name:    "float64 intermediate value - invalid",
+			name:    "float64 7 decimals - 0.0000001 - invalid",
+			input:   1700000000.0000001,
+			wantErr: true, // More than 6 decimal places
+		},
+		{
+			name:    "float64 7 decimals - 0.0000005 - invalid",
 			input:   1700000000.0000005,
-			wantErr: true, // seqid would be 0 after rounding
+			wantErr: true, // More than 6 decimal places
+		},
+		{
+			name:    "float64 7 decimals - 0.1234567 - invalid",
+			input:   1700000000.1234567,
+			wantErr: true, // More than 6 decimal places
 		},
 	}
 

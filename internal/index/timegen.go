@@ -89,6 +89,16 @@ func ParseTimeSeqID(s any) (TimeSeqID, error) {
 			return TimeSeqID{}, fmt.Errorf("invalid score: seqid out of range (must be 0 < seqid < 1000000), got %d", seqid)
 		}
 
+		// Validate: score must be exactly representable in 6 decimal places
+		// Reconstruct the score and check if it matches the original
+		reconstructed := float64(ts) + float64(seqid)/1000000.0
+		diff := math.Abs(v - reconstructed)
+		// Allow tiny floating point error (< 1e-10), but reject anything larger
+		// which indicates more than 6 decimal places
+		if diff > 1e-10 {
+			return TimeSeqID{}, fmt.Errorf("invalid precision: score has more than 6 decimal places (got %f, reconstructed %f, diff %e)", v, reconstructed, diff)
+		}
+
 		return TimeSeqID{Timestamp: ts, SeqID: seqid}, nil
 
 	default:
