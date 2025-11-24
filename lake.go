@@ -516,55 +516,6 @@ func (c *Client) mergeEntries(ctx context.Context, catalog string, baseData []by
 	return merged, nil
 }
 
-// List reads catalog metadata and returns ListResult
-// Errors (including pending writes) are stored in ListResult.Err
-func (c *Client) List(ctx context.Context, catalog string) *ListResult {
-	tr := trace.FromContext(ctx)
-
-	// Ensure initialized before operation
-	if err := c.ensureInitialized(ctx); err != nil {
-		return &ListResult{
-			client:  c,
-			catalog: catalog,
-			Err:     err,
-		}
-	}
-	tr.RecordSpan("List.Init")
-
-	// Try to get existing snapshot
-	snap, err := c.reader.GetLatestSnap(ctx, catalog)
-	if err != nil {
-		return &ListResult{
-			client:  c,
-			catalog: catalog,
-			Err:     fmt.Errorf("failed to get snapshot: %w", err),
-		}
-	}
-	tr.RecordSpan("List.GetLatestSnap")
-
-	var readResult *index.ReadAllResult
-
-	if snap != nil {
-		readResult = c.reader.ReadSince(ctx, catalog, snap.StopTsSeq.Score())
-	} else {
-		// No snapshot, read all
-		readResult = c.reader.ReadAll(ctx, catalog)
-	}
-	tr.RecordSpan("List.ReadIndex", map[string]interface{}{
-		"count":      len(readResult.Deltas),
-		"hasPending": readResult.HasPending,
-	})
-
-	return &ListResult{
-		client:     c,
-		catalog:    catalog,
-		LatestSnap: snap,
-		Entries:    readResult.Deltas,
-		HasPending: readResult.HasPending,
-		Err:        readResult.Err,
-	}
-}
-
 // GetConfig returns the current config (loads from Redis if needed)
 // DEPRECATED: Temporarily disabled. DO NOT DELETE this code.
 // Will be re-enabled after API stabilization.

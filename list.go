@@ -1,10 +1,12 @@
 package lake
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/hkloudou/lake/v2/internal/index"
+	"github.com/hkloudou/lake/v2/internal/trace"
 )
 
 // ListResult represents the read result
@@ -73,5 +75,54 @@ func (m ListResult) NextSnap() index.SnapInfo {
 		StartTsSeq: m.LatestSnap.StopTsSeq,
 		StopTsSeq:  m.Entries[len(m.Entries)-1].TsSeq,
 		// Score:      m.Entries[len(m.Entries)-1].TsSeq.Score(),
+	}
+}
+
+// List reads catalog metadata and returns ListResult
+// Errors (including pending writes) are stored in ListResult.Err
+func (c *Client) List(ctx context.Context, catalog string) *ListResult {
+	tr := trace.FromContext(ctx)
+
+	// Ensure initialized before operation
+	if err := c.ensureInitialized(ctx); err != nil {
+		return &ListResult{
+			client:  c,
+			catalog: catalog,
+			Err:     err,
+		}
+	}
+	tr.RecordSpan("List.Init")
+
+	// Try to get existing snapshot
+	snap, err := c.reader.GetLatestSnap(ctx, catalog)
+	if err != nil {
+		return &ListResult{
+			client:  c,
+			catalog: catalog,
+			Err:     fmt.Errorf("failed to get snapshot: %w", err),
+		}
+	}
+	tr.RecordSpan("List.GetLatestSnap")
+
+	var readResult *index.ReadIndexResult
+
+	if snap != nil {
+		readResult = c.reader.ReadSince(ctx, catalog, snap.StopTsSeq.Score())
+	} else {
+		// No snapshot, read all
+		readResult = c.reader.ReadAll(ctx, catalog)
+	}
+	tr.RecordSpan("List.ReadIndex", map[string]interface{}{
+		"count":      len(readResult.Deltas),
+		"hasPending": readResult.HasPending,
+	})
+
+	return &ListResult{
+		client:     c,
+		catalog:    catalog,
+		LatestSnap: snap,
+		Entries:    readResult.Deltas,
+		HasPending: readResult.HasPending,
+		Err:        readResult.Err,
 	}
 }

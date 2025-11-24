@@ -51,7 +51,7 @@ func main() {
     })
     
     // List catalog entries
-    list, _ := client.List(ctx, "users")
+    list := client.List(ctx, "users")
     
     // Read merged data
     data, _ := lake.ReadMap(ctx, list)
@@ -260,11 +260,11 @@ go test -v ./internal/merge
 - Error stored in `ListResult.Err` (non-fatal, can be checked before Read)
 
 ```go
-list, _ := client.List(ctx, catalog)
+list := client.List(ctx, catalog)
 if list.Err != nil {
     // Pending writes detected, retry later
     time.Sleep(100 * time.Millisecond)
-    list, _ = client.List(ctx, catalog)
+    list = client.List(ctx, catalog)
 }
 data, _ := lake.ReadMap(ctx, list)
 ```

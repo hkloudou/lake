@@ -35,27 +35,27 @@ type DeltaInfo struct {
 }
 
 // ReadAllResult holds read results with pending status
-type ReadAllResult struct {
+type ReadIndexResult struct {
 	Deltas     []DeltaInfo
 	HasPending bool
 	Err        error
 }
 
 // ReadAll reads all entries from the catalog
-func (r *Reader) ReadAll(ctx context.Context, catalog string) *ReadAllResult {
+func (r *Reader) ReadAll(ctx context.Context, catalog string) *ReadIndexResult {
 	key := r.makeCatalogKey(catalog)
 	return r.readRange(ctx, key, "-inf", "+inf")
 }
 
 // ReadSince reads entries since the given timestamp (exclusive)
-func (r *Reader) ReadSince(ctx context.Context, catalog string, sinceTimestamp float64) *ReadAllResult {
+func (r *Reader) ReadSince(ctx context.Context, catalog string, sinceTimestamp float64) *ReadIndexResult {
 	key := r.makeCatalogKey(catalog)
 	// Use '(' to exclude the timestamp itself
 	return r.readRange(ctx, key, fmt.Sprintf("(%f", sinceTimestamp), "+inf")
 }
 
 // ReadRange reads entries between timestamps
-func (r *Reader) ReadRange(ctx context.Context, catalog string, minTimestamp, maxTimestamp int64) *ReadAllResult {
+func (r *Reader) ReadRange(ctx context.Context, catalog string, minTimestamp, maxTimestamp int64) *ReadIndexResult {
 	key := r.makeCatalogKey(catalog)
 	return r.readRange(ctx, key, fmt.Sprintf("%d", minTimestamp), fmt.Sprintf("%d", maxTimestamp))
 }
@@ -107,14 +107,14 @@ func (m SnapInfo) Dump() string {
 	return output.String()
 }
 
-func (r *Reader) readRange(ctx context.Context, key, min, max string) *ReadAllResult {
+func (r *Reader) readRange(ctx context.Context, key, min, max string) *ReadIndexResult {
 	results, err := r.rdb.ZRangeByScoreWithScores(ctx, key, &redis.ZRangeBy{
 		Min: min,
 		Max: max,
 	}).Result()
 
 	if err != nil {
-		return &ReadAllResult{Err: err}
+		return &ReadIndexResult{Err: err}
 	}
 
 	var entries []DeltaInfo
@@ -146,10 +146,10 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) *ReadAllRe
 
 		tsSeq, err := ParseTimeSeqID(tsSeqString)
 		if err != nil {
-			return &ReadAllResult{Err: fmt.Errorf("failed to parse tsSeqID: %w", err)}
+			return &ReadIndexResult{Err: fmt.Errorf("failed to parse tsSeqID: %w", err)}
 		}
 		if tsSeq.Score() != z.Score {
-			return &ReadAllResult{Err: fmt.Errorf("score mismatch: got %f, expected %f", tsSeq.Score(), z.Score)}
+			return &ReadIndexResult{Err: fmt.Errorf("score mismatch: got %f, expected %f", tsSeq.Score(), z.Score)}
 		}
 
 		if tsSeq.Timestamp > lastCommittedTimestamp {
@@ -188,14 +188,14 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) *ReadAllRe
 		}
 
 		// Still within timeout window: set HasPending and error
-		return &ReadAllResult{
+		return &ReadIndexResult{
 			Deltas:     entries,
 			HasPending: true,
 			Err:        fmt.Errorf("pending write detected: %s (age: %ds < 60s)", member, ageSeconds),
 		}
 	}
 
-	return &ReadAllResult{
+	return &ReadIndexResult{
 		Deltas:     entries,
 		HasPending: false,
 		Err:        nil,
