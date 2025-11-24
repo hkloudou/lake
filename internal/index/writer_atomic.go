@@ -2,9 +2,11 @@ package index
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/hkloudou/lake/v2/internal/encode"
+	"github.com/hkloudou/lake/v2/internal/trace"
 )
 
 // Lua script to atomically generate TimeSeqID and pre-commit to Redis
@@ -53,18 +55,37 @@ return {tonumber(timestamp), seqid, member}
 // This is atomic
 const commitScript = `
 -- KEYS[1]: Redis ZADD key
+-- KEYS[2]: Redis meta key
+
 -- ARGV[1]: pending member
 -- ARGV[2]: committed member  
 -- ARGV[3]: score
-
+-- ARGV[4]: updatedMap
 local key = KEYS[1]
+local metaKey = KEYS[2]
 local pendingMember = ARGV[1]
 local committedMember = ARGV[2]
 local score = tonumber(ARGV[3])
-
+local updatedMap = cjson.decode(ARGV[4])
 -- Atomic: remove pending, add committed
 redis.call("ZREM", key, pendingMember)
 redis.call("ZADD", key, score, committedMember)
+
+
+-- Update meta map with updatedMap
+local meta = redis.call("GET", metaKey)
+local metaMap = {}
+if meta then
+    metaMap = cjson.decode(meta)
+end
+
+-- Merge updatedMap into metaMap
+for key, value in pairs(updatedMap) do
+    metaMap[key] = value
+end
+
+-- Save updated meta
+redis.call("SET", metaKey, cjson.encode(metaMap))
 
 return "OK"
 `
@@ -140,12 +161,28 @@ func (w *Writer) GetTimeSeqIDAndPreCommit(ctx context.Context, catalog, field st
 }
 
 // Commit atomically commits a pending write
-func (w *Writer) Commit(ctx context.Context, catalog, pendingMember, committedMember string, score float64) error {
+func (w *Writer) Commit(ctx context.Context, catalog, pendingMember, committedMember string, score float64, updatedMap map[string]int64) error {
+	tr := trace.FromContext(ctx)
+	tr.RecordSpan("Commit.Start")
 	zaddKey := w.makeDeltaZsetKey(catalog)
-
-	_, err := w.rdb.Eval(ctx, commitScript,
-		[]string{zaddKey},
-		pendingMember, committedMember, score).Result()
+	metaKey := w.makeMetaKey(catalog)
+	updatedMapJSON, err := json.Marshal(updatedMap)
+	if err != nil {
+		return fmt.Errorf("failed to marshal updated map: %w", err)
+	}
+	tr.RecordSpan("Commit.MarshalUpdatedMap", map[string]any{
+		"updatedMap":      updatedMap,
+		"size":            len(updatedMapJSON),
+		"zaddKey":         zaddKey,
+		"metaKey":         metaKey,
+		"pendingMember":   pendingMember,
+		"committedMember": committedMember,
+		"score":           score,
+		"updatedMapJSON":  string(updatedMapJSON),
+	})
+	_, err = w.rdb.Eval(ctx, commitScript,
+		[]string{zaddKey, metaKey},
+		pendingMember, committedMember, score, string(updatedMapJSON)).Result()
 
 	return err
 }
