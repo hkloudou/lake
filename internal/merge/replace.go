@@ -3,6 +3,7 @@ package merge
 import (
 	"fmt"
 
+	"github.com/hkloudou/lake/v2/internal/index"
 	"github.com/tidwall/sjson"
 )
 
@@ -32,4 +33,12 @@ func (m *ReplaceMerger) Merge(original, data []byte, field string) ([]byte, erro
 	}
 
 	return result, nil
+}
+
+func (m *ReplaceMerger) UpdatedMap(entries []index.DeltaInfo) map[string]index.TimeSeqID {
+	updatedMap := make(map[string]index.TimeSeqID, 0)
+	for _, entry := range entries {
+		updatedMap[entry.Field] = entry.TsSeq
+	}
+	return updatedMap
 }

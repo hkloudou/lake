@@ -35,8 +35,9 @@ func NewEngine() *Engine {
 	return &Engine{}
 }
 
-func (c *Engine) Merge(catalog string, baseData []byte, entries []index.DeltaInfo) ([]byte, error) {
+func (c *Engine) Merge(catalog string, baseData []byte, entries []index.DeltaInfo) ([]byte, map[string]index.TimeSeqID, error) {
 	merged := baseData
+	var updatedAtMap = make(map[string]index.TimeSeqID, 0)
 	for _, entry := range entries {
 		// Use pre-loaded Body data (filled by fillDeltasBody)
 		if len(entry.Body) == 0 {
@@ -46,17 +47,17 @@ func (c *Engine) Merge(catalog string, baseData []byte, entries []index.DeltaInf
 		// Get merger by type
 		merger, ok := mergers[int(entry.MergeType)]
 		if !ok {
-			return nil, fmt.Errorf("unknown merge type: %d", entry.MergeType)
+			return nil, nil, fmt.Errorf("unknown merge type: %d", entry.MergeType)
 		}
 
 		// Apply merge using unified interface
 		var err error
 		merged, err = merger.Merge(merged, entry.Body, ToGjsonPath(entry.Field))
 		if err != nil {
-			return nil, fmt.Errorf("merge failed (type=%d): %w", entry.MergeType, err)
+			return nil, nil, fmt.Errorf("merge failed (type=%d): %w", entry.MergeType, err)
 		}
 	}
-	return merged, nil
+	return merged, updatedAtMap, nil
 }
 
 // // Merge merges a value into base JSON at the specified field path

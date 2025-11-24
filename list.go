@@ -11,12 +11,13 @@ import (
 
 // ListResult represents the read result
 type ListResult struct {
-	client     *Client           // Client instance
-	catalog    string            // Catalog name
-	LatestSnap *index.SnapInfo   // Snapshot info (if generated or used)
-	Entries    []index.DeltaInfo // Raw entries (for debugging)
-	HasPending bool              // True if pending writes detected (< 60s)
-	Err        error             // Error if pending writes detected (non-fatal)
+	client     *Client                    // Client instance
+	catalog    string                     // Catalog name
+	LatestSnap *index.SnapInfo            // Snapshot info (if generated or used)
+	Entries    []index.DeltaInfo          // Raw entries (for debugging)
+	HasPending bool                       // True if pending writes detected (< 60s)
+	Err        error                      // Error if pending writes detected (non-fatal)
+	UpdatedAt  map[string]index.TimeSeqID // Last updated time
 }
 
 // Dump returns a debug string representation of the ListResult

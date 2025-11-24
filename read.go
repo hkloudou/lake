@@ -80,7 +80,7 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 	tr.RecordSpan("Read.LoadData")
 
 	// Merge entries with base data (pure CPU operation, all data loaded)
-	resultData, err := c.merger.Merge(list.catalog, baseData, list.Entries)
+	resultData, _, err := merger.Merge(list.catalog, baseData, list.Entries)
 	if err != nil {
 		return nil, err
 	}

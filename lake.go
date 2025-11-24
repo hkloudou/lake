@@ -9,7 +9,6 @@ import (
 	"github.com/hkloudou/lake/v2/internal/cache"
 	"github.com/hkloudou/lake/v2/internal/config"
 	"github.com/hkloudou/lake/v2/internal/index"
-	"github.com/hkloudou/lake/v2/internal/merge"
 	"github.com/hkloudou/lake/v2/internal/storage"
 	"github.com/hkloudou/lake/v2/internal/xsync"
 	"github.com/redis/go-redis/v9"
@@ -17,10 +16,10 @@ import (
 
 // Client is the main interface for Lake v2
 type Client struct {
-	rdb        *redis.Client
-	writer     *index.Writer
-	reader     *index.Reader
-	merger     *merge.Engine // Legacy (deprecated)
+	rdb    *redis.Client
+	writer *index.Writer
+	reader *index.Reader
+	// merger     *merge.Engine // Legacy (deprecated)
 	configMgr  *config.Manager
 	snapCache  cache.Cache // Snapshot cache (Redis or NoOp)
 	deltaCache cache.Cache // Delta file cache (Memory, 10min TTL)
@@ -62,7 +61,7 @@ func NewLake(metaUrl string, opts ...func(*Option)) *Client {
 
 	writer := index.NewWriter(rdb)
 	reader := index.NewReader(rdb)
-	merger := merge.NewEngine()
+	// merger := merge.NewEngine()
 	configMgr := config.NewManager(rdb)
 
 	// Use provided cache or default to no-op cache
@@ -74,10 +73,10 @@ func NewLake(metaUrl string, opts ...func(*Option)) *Client {
 	deltaCache := cache.NewMemoryCache(10 * time.Minute)
 
 	client := &Client{
-		rdb:        rdb,
-		writer:     writer,
-		reader:     reader,
-		merger:     merger,
+		rdb:    rdb,
+		writer: writer,
+		reader: reader,
+		// merger:     merger,
 		configMgr:  configMgr,
 		storage:    option.Storage, // May be nil, will be loaded lazily
 		snapCache:  cacheProvider,  // Snapshot cache (Redis or NoOp)
