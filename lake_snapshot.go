@@ -8,9 +8,9 @@ import (
 )
 
 func (m *Client) saveSnapshot(ctx context.Context, catalog string, startTsSeq, stopTsSeq index.TimeSeqID, snapData []byte) (string, error) {
-	// return m.flight.Do(fmt.Sprintf("%s_%s_%s", catalog, startTsSeq.String(), stopTsSeq.String()), func() (string, error) {
-	return m._save(ctx, catalog, startTsSeq, stopTsSeq, snapData)
-	// })
+	return m.snapFlight.Do(fmt.Sprintf("%s_%s_%s", catalog, startTsSeq.String(), stopTsSeq.String()), func() (string, error) {
+		return m._save(ctx, catalog, startTsSeq, stopTsSeq, snapData)
+	})
 }
 
 func (m *Client) _save(ctx context.Context, catalog string, startTsSeq, stopTsSeq index.TimeSeqID, snapData []byte) (string, error) {
