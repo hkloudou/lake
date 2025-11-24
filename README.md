@@ -245,10 +245,12 @@ After v2.2.0 (async snapshot):
 ### Key Optimizations (v2.2.0)
 
 1. **Async Snapshot Save** - Snapshot generation no longer blocks Read response
-2. **SingleFlight** - Prevents duplicate concurrent snapshot saves
-3. **Parallel I/O** - Snapshot and deltas load concurrently
-4. **Worker Pool** - 10 concurrent delta loads
-5. **Smart Caching** - Redis cache with ~90% hit ratio
+2. **Redis-Based Lock Detection** - Uses Redis TIME to detect pending write timeouts (120s, clock-skew resistant)
+3. **SingleFlight** - Prevents duplicate concurrent snapshot saves
+4. **Parallel I/O** - Snapshot and deltas load concurrently
+5. **Worker Pool** - 10 concurrent delta loads
+6. **Smart Caching** - Redis cache with ~90% hit ratio
+7. **Optimized Storage** - Simplified member format saves ~30% Redis space
 
 ## 🏗️ Architecture
 
@@ -288,7 +290,7 @@ Write (Atomic Two-Phase Commit):
 
 Read (Parallel + Async):
   1. List: Get snapshot info + delta index
-     - Check pending writes (< 60s = error, > 60s = ignore)
+     - Check pending writes using Redis TIME (< 120s = error, > 120s = ignore) ✨ v2.2.0
   2. Parallel Load:
      - Thread 1: Cache/OSS load snapshot data
      - Thread 2: Worker pool load delta bodies (10 concurrent)
@@ -299,6 +301,7 @@ Read (Parallel + Async):
 ### What's New in v2.2.0
 
 - **Async Snapshot Save**: Read operations no longer wait for snapshot saves (2x faster!)
+- **Improved Pending Detection**: Uses Redis TIME for accurate lock expiry (120s timeout, prevents clock skew)
 - **Unified Merge Interface**: Single `Merger` interface for all merge strategies (Replace, RFC7396, RFC6902)
 - **Path Validation**: Strict path format with `/` prefix, network-safe for HTTP transmission
 - **Enhanced Score Parsing**: Support multiple formats (underscore/decimal/float64) with 6-decimal precision validation
@@ -331,15 +334,17 @@ go test -v ./internal/merge
 - Phase 2: Write to OSS
 - Phase 3: Commit to `delta|` (atomic)
 
-**Read Behavior**:
-- Pending < 60s: **Error returned** (write in progress, client should retry)
-- Pending > 60s: **Ignored** (abandoned write)
+**Read Behavior** (v2.2.0 - Optimized):
+- Uses **Redis TIME** for accurate age calculation (avoids server clock skew)
+- Pending < 120s: **Error returned** (write in progress, client should retry)
+- Pending > 120s: **Ignored** (abandoned write, auto-cleaned)
 - Error stored in `ListResult.Err` (non-fatal, can be checked before Read)
+- Background updater syncs Redis time every 5s (minimal overhead)
 
 ```go
 list := client.List(ctx, catalog)
 if list.Err != nil {
-    // Pending writes detected, retry later
+    // Pending writes detected (age < 120s), retry later
     time.Sleep(100 * time.Millisecond)
     list = client.List(ctx, catalog)
 }
