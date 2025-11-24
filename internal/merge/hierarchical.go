@@ -49,9 +49,9 @@ func (h *HierarchicalUpdateMap) GetAll() map[string]index.TimeSeqID {
 	return h.updates
 }
 
-// getParentPaths returns all parent paths for a given field
-// Example: "/base/child/item" → ["/base/child", "/base"]
-// Example: "/base" → []
+// getParentPaths returns all parent paths for a given field, including root "/"
+// Example: "/base/child/item" → ["/base/child", "/base", "/"]
+// Example: "/base" → ["/"]
 // Example: "/" → []
 func getParentPaths(field string) []string {
 	if field == "/" || field == "" {
@@ -65,17 +65,17 @@ func getParentPaths(field string) []string {
 
 	// Split by /
 	parts := strings.Split(field, "/")
-	if len(parts) <= 1 {
-		return []string{} // No parents
-	}
 
-	// Build parent paths
-	parents := make([]string, 0, len(parts)-1)
+	// Build parent paths (including root)
+	parents := make([]string, 0, len(parts))
 	for i := 1; i < len(parts); i++ {
 		// Join first i parts
 		parentPath := "/" + strings.Join(parts[:i], "/")
 		parents = append(parents, parentPath)
 	}
+
+	// Always add root path "/"
+	parents = append(parents, "/")
 
 	return parents
 }

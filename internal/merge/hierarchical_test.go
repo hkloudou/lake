@@ -21,32 +21,32 @@ func TestGetParentPaths(t *testing.T) {
 		{
 			name:     "single level",
 			field:    "/base",
-			expected: []string{},
+			expected: []string{"/"},
 		},
 		{
 			name:     "two levels",
 			field:    "/base/child",
-			expected: []string{"/base"},
+			expected: []string{"/base", "/"},
 		},
 		{
 			name:     "three levels",
 			field:    "/base/child/item",
-			expected: []string{"/base", "/base/child"},
+			expected: []string{"/base", "/base/child", "/"},
 		},
 		{
 			name:     "four levels",
 			field:    "/a/b/c/d",
-			expected: []string{"/a", "/a/b", "/a/b/c"},
+			expected: []string{"/a", "/a/b", "/a/b/c", "/"},
 		},
 		{
 			name:     "with dots",
 			field:    "/base.info/child.data",
-			expected: []string{"/base.info"},
+			expected: []string{"/base.info", "/"},
 		},
 		{
 			name:     "deep nesting",
 			field:    "/a/b/c/d/e/f",
-			expected: []string{"/a", "/a/b", "/a/b/c", "/a/b/c/d", "/a/b/c/d/e"},
+			expected: []string{"/a", "/a/b", "/a/b/c", "/a/b/c/d", "/a/b/c/d/e", "/"},
 		},
 	}
 
@@ -76,10 +76,10 @@ func TestHierarchicalUpdateMap(t *testing.T) {
 	ts1 := index.TimeSeqID{Timestamp: 1700000000, SeqID: 1}
 	hm.Update("/base/child1", ts1)
 
-	// Check updates
+	// Check updates (field + /base + /)
 	all := hm.GetAll()
-	if len(all) != 2 {
-		t.Errorf("Expected 2 updates, got %d", len(all))
+	if len(all) != 3 {
+		t.Errorf("Expected 3 updates, got %d", len(all))
 	}
 	if all["/base/child1"] != ts1 {
 		t.Errorf("/base/child1: got %v, want %v", all["/base/child1"], ts1)
@@ -87,18 +87,24 @@ func TestHierarchicalUpdateMap(t *testing.T) {
 	if all["/base"] != ts1 {
 		t.Errorf("/base: got %v, want %v", all["/base"], ts1)
 	}
+	if all["/"] != ts1 {
+		t.Errorf("/: got %v, want %v", all["/"], ts1)
+	}
 
 	// Update /base/child2 with newer timestamp
 	ts2 := index.TimeSeqID{Timestamp: 1700000000, SeqID: 2}
 	hm.Update("/base/child2", ts2)
 
-	// Check that /base is updated to newer timestamp
+	// Check that /base and / are updated to newer timestamp
 	all = hm.GetAll()
-	if len(all) != 3 {
-		t.Errorf("Expected 3 updates, got %d", len(all))
+	if len(all) != 4 {
+		t.Errorf("Expected 4 updates, got %d", len(all))
 	}
 	if all["/base"] != ts2 {
 		t.Errorf("/base should be updated to ts2, got %v, want %v", all["/base"], ts2)
+	}
+	if all["/"] != ts2 {
+		t.Errorf("/ should be updated to ts2, got %v, want %v", all["/"], ts2)
 	}
 
 	// Update /base/child1 with older timestamp (should not update /base)
@@ -113,6 +119,10 @@ func TestHierarchicalUpdateMap(t *testing.T) {
 	// /base should still be ts2 (newest)
 	if all["/base"] != ts2 {
 		t.Errorf("/base should remain ts2, got %v", all["/base"])
+	}
+	// / should still be ts2 (newest)
+	if all["/"] != ts2 {
+		t.Errorf("/ should remain ts2, got %v", all["/"])
 	}
 
 	t.Logf("✓ Hierarchical update map working correctly")
@@ -155,6 +165,11 @@ func TestHierarchicalUpdateMapComplex(t *testing.T) {
 	if all["/a/b/c"] != expected {
 		t.Errorf("/a/b/c: got %v, want %v", all["/a/b/c"], expected)
 	}
+	
+	// / (root) should be ts4 (newest of all)
+	if all["/"] != expected {
+		t.Errorf("/: got %v, want %v", all["/"], expected)
+	}
 
 	t.Logf("✓ Complex hierarchical updates working correctly")
 	for k, v := range all {
@@ -186,6 +201,11 @@ func TestHierarchicalUpdateMapWithDots(t *testing.T) {
 	}
 	if all["/user.info/settings.prefs"] != ts2 {
 		t.Errorf("/user.info/settings.prefs: got %v, want %v", all["/user.info/settings.prefs"], ts2)
+	}
+	
+	// / (root) should be ts2 (newest)
+	if all["/"] != ts2 {
+		t.Errorf("/: got %v, want %v", all["/"], ts2)
 	}
 
 	t.Logf("✓ Hierarchical updates with dots working correctly")
