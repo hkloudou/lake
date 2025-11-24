@@ -165,7 +165,14 @@ func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []in
 				}
 
 				key := c.storage.MakeDeltaKey(catalog, j.delta.TsSeq, int(j.delta.MergeType))
-				data, err := c.storage.Get(workerCtx, key)
+				namespace := c.storage.RedisPrefix()
+				
+				// Use deltaCache (memory cache) for delta files
+				data, err := c.deltaCache.Take(workerCtx, namespace, key, func() ([]byte, error) {
+					// Cache miss: load from storage
+					return c.storage.Get(workerCtx, key)
+				})
+				
 				if err != nil {
 					// Send error and cancel other workers
 					select {

@@ -2,7 +2,6 @@ package cache
 
 import (
 	"context"
-	"log"
 	"time"
 
 	"github.com/hkloudou/lake/v2/internal/encode"
@@ -11,7 +10,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// RedisCache implements Cache interface using Redis  
+// RedisCache implements Cache interface using Redis
 type RedisCache struct {
 	client *redis.Client
 	ttl    time.Duration
