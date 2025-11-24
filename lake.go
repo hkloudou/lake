@@ -17,13 +17,13 @@ import (
 
 // Client is the main interface for Lake v2
 type Client struct {
-	rdb       *redis.Client
-	writer    *index.Writer
-	reader    *index.Reader
-	merger    *merge.Engine // Legacy (deprecated)
-	configMgr *config.Manager
-	cache     cache.Cache       // Snapshot cache (Redis or NoOp)
-	deltaCache cache.Cache      // Delta file cache (Memory, 10min TTL)
+	rdb        *redis.Client
+	writer     *index.Writer
+	reader     *index.Reader
+	merger     *merge.Engine // Legacy (deprecated)
+	configMgr  *config.Manager
+	cache      cache.Cache // Snapshot cache (Redis or NoOp)
+	deltaCache cache.Cache // Delta file cache (Memory, 10min TTL)
 
 	// Lazy-loaded components
 	mu      sync.RWMutex

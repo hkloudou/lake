@@ -11,7 +11,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// RedisCache implements Cache interface using Redis
+// RedisCache implements Cache interface using Redis  
 type RedisCache struct {
 	client *redis.Client
 	ttl    time.Duration
@@ -45,9 +45,6 @@ func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader fun
 	tr := trace.FromContext(ctx)
 	cacheKey := "lake_cache:" + encode.EncodeRedisCatalogName(namespace+":"+key)
 
-	// Trace only, no debug logs
-	}
-
 	// Use SingleFlight to prevent multiple concurrent requests for same key
 	return c.flight.Do(cacheKey, func() ([]byte, error) {
 
@@ -57,8 +54,6 @@ func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader fun
 			// Cache miss
 			c.stat.IncrementMiss()
 			tr.RecordSpan("RedisCache.Miss")
-			// Trace only, no debug logs
-			}
 
 			// Call loader function to get []byte
 			data, err := loader()
@@ -66,32 +61,22 @@ func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader fun
 				tr.RecordSpan("RedisCache.LoaderFailed", map[string]any{
 					"error": err.Error(),
 				})
-				// Trace only, no debug logs
-				}
 				return nil, err
 			}
 
 			tr.RecordSpan("RedisCache.Loaded", map[string]any{
 				"size": len(data),
 			})
-			// Trace only, no debug logs
-			}
 
 			// Write to Redis with TTL (data is already []byte, no need to marshal)
 			err = c.client.Set(ctx, cacheKey, data, c.ttl).Err()
 			if err != nil {
-				// Trace only, no debug logs
-				}
 			} else {
-				// Trace only, no debug logs
-				}
 			}
 
 			return data, nil
 		} else if err != nil {
 			// Redis error, fallback to loader
-			// Trace only, no debug logs
-			}
 			return loader()
 		}
 
@@ -101,8 +86,6 @@ func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader fun
 			"key":  cacheKey,
 			"size": len(cachedData),
 		})
-		// Trace only, no debug logs
-		}
 
 		// Return cached data as []byte
 		return []byte(cachedData), nil
