@@ -45,7 +45,7 @@ func main() {
     // Write data
     _, err := client.Write(ctx, lake.WriteRequest{
         Catalog:   "users",
-        Field:     "profile",
+        Field:     "/profile",  // Path format: starts with /
         Body:      []byte(`{"name":"Alice","age":30}`),
         MergeType: lake.MergeTypeReplace,
     })
@@ -90,6 +90,32 @@ fmt.Println(tr.Dump())
 
 ## 📖 Core Concepts
 
+### Field Path Format
+
+Field paths follow a strict format for network-safe transmission:
+
+- **Must start with `/`** - Like URL paths
+- **Must not end with `/`** - No trailing slashes
+- **Segments follow JavaScript naming** - Start with letter/`_`/`$`, followed by letters/digits/`_`/`$`/`.`
+- **Root document**: Use `"/"` for entire document operations
+
+**Valid Examples:**
+```
+/              → Root document
+/user          → Single field
+/user/profile  → Nested field (user.profile in JSON)
+/user.info     → Field with dot in name (user\.info in gjson)
+/$config       → Dollar sign prefix allowed
+```
+
+**Invalid Examples:**
+```
+user           ✗ No leading /
+/user/         ✗ Trailing /
+/123           ✗ Starts with number
+/user-name     ✗ Contains hyphen
+```
+
 ### Merge Types
 
 Lake V2 supports three merge strategies:
@@ -97,7 +123,7 @@ Lake V2 supports three merge strategies:
 #### 1. MergeTypeReplace (Simple Replacement)
 ```go
 client.Write(ctx, lake.WriteRequest{
-    Field:     "user.name",
+    Field:     "/user/name",  // Path format
     Body:      []byte(`"Alice"`),
     MergeType: lake.MergeTypeReplace,
 })
@@ -109,7 +135,7 @@ client.Write(ctx, lake.WriteRequest{
 ```go
 // Merge patch (adds city, removes age with null)
 client.Write(ctx, lake.WriteRequest{
-    Field:     "user",
+    Field:     "/user",
     Body:      []byte(`{"city":"NYC","age":null}`),
     MergeType: lake.MergeTypeRFC7396,
 })
@@ -120,7 +146,7 @@ client.Write(ctx, lake.WriteRequest{
 
 ```go
 client.Write(ctx, lake.WriteRequest{
-    Field:     "",  // Empty = root document
+    Field:     "/",  // Root document
     Body:      []byte(`[
         {"op":"add","path":"/a/b/c","value":42},
         {"op":"move","from":"/a/b/c","path":"/x/y/z"}

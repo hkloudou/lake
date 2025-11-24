@@ -4,15 +4,21 @@ import (
 	"fmt"
 
 	"github.com/hkloudou/lake/v2/internal/index"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 // Global merger instances (stateless, safe to share)
 var (
+	replaceMerger = NewReplaceMerger()
 	rfc7396Merger = NewRFC7396Merger()
 	rfc6902Merger = NewRFC6902Merger()
 )
+
+// mergers maps merge type to merger implementation
+var mergers = map[int]Merger{
+	1: replaceMerger, // index.MergeTypeReplace
+	2: rfc7396Merger, // index.MergeTypeRFC7396
+	3: rfc6902Merger, // index.MergeTypeRFC6902
+}
 
 // Engine is a JavaScript-based JSON merge engine using goja
 type Engine struct {
@@ -37,49 +43,17 @@ func (c *Engine) Merge(catalog string, baseData []byte, entries []index.DeltaInf
 			continue // Skip entries without body data
 		}
 
-		data := entry.Body
-		var err error
-
-		// Merge using the strategy from entry
-		switch entry.MergeType {
-		case index.MergeTypeReplace:
-			// Simple replace: set the field value directly
-			merged, err = sjson.SetRawBytes(merged, entry.Field, data)
-			if err != nil {
-				return nil, fmt.Errorf("failed to set field: %w", err)
-			}
-
-		case index.MergeTypeRFC7396:
-			// RFC 7396 JSON Merge Patch
-			// https://datatracker.ietf.org/doc/html/rfc7396
-			// Applies patch to the field's value (local scope)
-			fieldValue := gjson.GetBytes(merged, entry.Field).Raw
-			if fieldValue == "" {
-				fieldValue = "{}" // Default to empty object if field doesn't exist
-			}
-
-			mergedData, err := rfc7396Merger.Merge([]byte(fieldValue), data)
-			if err != nil {
-				return nil, fmt.Errorf("RFC7396 merge failed: %w", err)
-			}
-
-			// Set the merged result back to the field
-			merged, err = sjson.SetRawBytes(merged, entry.Field, mergedData)
-			if err != nil {
-				return nil, fmt.Errorf("failed to set merged field: %w", err)
-			}
-
-		case index.MergeTypeRFC6902:
-			// RFC 6902 JSON Patch
-			// https://datatracker.ietf.org/doc/html/rfc6902
-			// If field is empty, patches entire document; otherwise patches that field's value
-			merged, err = rfc6902Merger.Merge(merged, data, entry.Field)
-			if err != nil {
-				return nil, fmt.Errorf("RFC6902 patch failed: %w", err)
-			}
-
-		default:
+		// Get merger by type
+		merger, ok := mergers[int(entry.MergeType)]
+		if !ok {
 			return nil, fmt.Errorf("unknown merge type: %d", entry.MergeType)
+		}
+
+		// Apply merge using unified interface
+		var err error
+		merged, err = merger.Merge(merged, entry.Body, ToGjsonPath(entry.Field))
+		if err != nil {
+			return nil, fmt.Errorf("merge failed (type=%d): %w", entry.MergeType, err)
 		}
 	}
 	return merged, nil

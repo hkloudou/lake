@@ -110,8 +110,73 @@ func TestRFC7396Examples(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Use RFC7396Merger.Merge
-			result, err := merger.Merge([]byte(tt.original), []byte(tt.patch))
+			// Use RFC7396Merger.Merge with empty field (root document)
+			result, err := merger.Merge([]byte(tt.original), []byte(tt.patch), "")
+			if err != nil {
+				t.Fatalf("MergePatch failed: %v", err)
+			}
+
+			// Normalize JSON for comparison
+			var expectedNorm, resultNorm interface{}
+			json.Unmarshal([]byte(tt.expected), &expectedNorm)
+			json.Unmarshal(result, &resultNorm)
+
+			expectedJSON, _ := json.Marshal(expectedNorm)
+			resultJSON, _ := json.Marshal(resultNorm)
+
+			if string(expectedJSON) != string(resultJSON) {
+				t.Errorf("Result mismatch:\n  Expected: %s\n  Got:      %s", expectedJSON, resultJSON)
+			} else {
+				t.Logf("✓ Passed: %s", tt.name)
+			}
+		})
+	}
+}
+
+// TestRFC7396FieldScoping tests field-scoped merge patch
+func TestRFC7396FieldScoping(t *testing.T) {
+	tests := []struct {
+		name     string
+		original string
+		patch    string
+		field    string
+		expected string
+	}{
+		{
+			name:     "merge patch to field",
+			original: `{"user":{"name":"Alice","age":30},"settings":{}}`,
+			patch:    `{"age":31,"city":"NYC"}`,
+			field:    "user",
+			expected: `{"user":{"name":"Alice","age":31,"city":"NYC"},"settings":{}}`,
+		},
+		{
+			name:     "merge patch to nested field",
+			original: `{"data":{"user":{"name":"Bob"}}}`,
+			patch:    `{"email":"bob@example.com"}`,
+			field:    "data.user",
+			expected: `{"data":{"user":{"name":"Bob","email":"bob@example.com"}}}`,
+		},
+		{
+			name:     "merge patch to non-existent field",
+			original: `{"other":"data"}`,
+			patch:    `{"name":"Charlie"}`,
+			field:    "user",
+			expected: `{"other":"data","user":{"name":"Charlie"}}`,
+		},
+		{
+			name:     "delete field within scope",
+			original: `{"user":{"name":"Alice","age":30,"city":"LA"}}`,
+			patch:    `{"age":null}`,
+			field:    "user",
+			expected: `{"user":{"name":"Alice","city":"LA"}}`,
+		},
+	}
+
+	merger := NewRFC7396Merger()
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := merger.Merge([]byte(tt.original), []byte(tt.patch), tt.field)
 			if err != nil {
 				t.Fatalf("MergePatch failed: %v", err)
 			}

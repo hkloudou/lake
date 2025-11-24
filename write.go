@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/hkloudou/lake/v2/internal/index"
+	"github.com/hkloudou/lake/v2/internal/merge"
 	"github.com/hkloudou/lake/v2/internal/trace"
 )
 
@@ -47,11 +48,8 @@ type WriteResult struct {
 func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, error) {
 	tr := trace.FromContext(ctx)
 
-	if req.MergeType == 0 {
-		return nil, fmt.Errorf("merge type unknown is not supported")
-	}
-	if len(req.Body) == 0 {
-		return nil, fmt.Errorf("body is empty")
+	if err := merge.ValidateFieldPath(req.Field); err != nil {
+		return nil, err
 	}
 
 	// Ensure initialized before operation

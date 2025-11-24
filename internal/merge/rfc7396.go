@@ -4,6 +4,8 @@ import (
 	"fmt"
 
 	jsonpatch "github.com/evanphx/json-patch/v5"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 // RFC7396Merger implements RFC 7396 JSON Merge Patch
@@ -15,14 +17,49 @@ func NewRFC7396Merger() *RFC7396Merger {
 	return &RFC7396Merger{}
 }
 
-// Merge applies RFC 7396 JSON Merge Patch
+// Merge applies RFC 7396 JSON Merge Patch with optional field scoping
 // original: the original JSON document
-// patch: the merge patch to apply
+// patchData: the merge patch to apply
+// field: optional field scope (empty "" means root document)
 // Returns: the merged result
-func (m *RFC7396Merger) Merge(original, patch []byte) ([]byte, error) {
-	result, err := jsonpatch.MergePatch(original, patch)
+func (m *RFC7396Merger) Merge(original, patchData []byte, field string) ([]byte, error) {
+	// If field is specified, apply patch to that field's value
+	if field != "" {
+		return m.mergeField(original, patchData, field)
+	}
+
+	// Otherwise, patch the entire document
+	return m.mergeRoot(original, patchData)
+}
+
+// mergeRoot applies merge patch to the entire document
+func (m *RFC7396Merger) mergeRoot(original, patchData []byte) ([]byte, error) {
+	result, err := jsonpatch.MergePatch(original, patchData)
 	if err != nil {
 		return nil, fmt.Errorf("RFC7396 merge failed: %w", err)
 	}
+	return result, nil
+}
+
+// mergeField applies merge patch to a specific field's value
+func (m *RFC7396Merger) mergeField(original, patchData []byte, field string) ([]byte, error) {
+	// Get the field value
+	fieldValue := gjson.GetBytes(original, field).Raw
+	if fieldValue == "" {
+		fieldValue = "{}" // Default to empty object
+	}
+
+	// Apply merge patch to the field value
+	merged, err := m.mergeRoot([]byte(fieldValue), patchData)
+	if err != nil {
+		return nil, err
+	}
+
+	// Set the merged value back to the field
+	result, err := sjson.SetRawBytes(original, field, merged)
+	if err != nil {
+		return nil, fmt.Errorf("failed to set field after merge: %w", err)
+	}
+
 	return result, nil
 }
