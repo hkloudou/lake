@@ -540,7 +540,7 @@ func (c *Client) List(ctx context.Context, catalog string) *ListResult {
 			Err:     fmt.Errorf("failed to get snapshot: %w", err),
 		}
 	}
-	tr.RecordSpan("List.GetSnap")
+	tr.RecordSpan("List.GetLatestSnap")
 
 	var readResult *index.ReadAllResult
 

@@ -47,7 +47,7 @@ func NewManager(
 // stopTsSeq: the stop time sequence (format: "ts_seqid")
 // score: the Redis score for the snapshot (must match stopTsSeq)
 func (m *Manager) Save(ctx context.Context, catalog string, startTsSeq, stopTsSeq index.TimeSeqID, snapData []byte) (string, error) {
-	return m.flight.Do(catalog, func() (string, error) {
+	return m.flight.Do(fmt.Sprintf("%s_%s_%s", catalog, startTsSeq.String(), stopTsSeq.String()), func() (string, error) {
 		return m.save(ctx, catalog, startTsSeq, stopTsSeq, snapData)
 	})
 }
