@@ -87,7 +87,7 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 	})
 
 	// Step 3: Atomically commit (remove pending, add committed)
-	committedMember := index.EncodeDeltaMember(req.Field, tsSeq.String(), req.MergeType)
+	committedMember := index.EncodeDeltaMember(req.Field, req.MergeType)
 	err = c.writer.Commit(ctx, req.Catalog, pendingMember, committedMember, tsSeq.Score())
 	if err != nil {
 		return nil, fmt.Errorf("failed to commit: %w", err)

@@ -43,44 +43,33 @@ func MergeTypeFromInt(i int) MergeType {
 	}
 }
 
-// EncodeDeltaMember encodes field, tsSeqID, and mergeType into Redis ZADD member format
-// Format: "delta|{mergeType}|{field}|{tsSeqID}"
-// Example: "delta|1|/user/name|1700000000_123"
-func EncodeDeltaMember(field, tsSeqID string, mergeType MergeType) string {
-	return fmt.Sprintf("delta|%d|%s|%s", mergeType, field, tsSeqID)
+// EncodeDeltaMember encodes field and mergeType into Redis ZADD member format
+// Format: "delta|{mergeType}|{field}"
+// Example: "delta|1|/user/name"
+func EncodeDeltaMember(field string, mergeType MergeType) string {
+	return fmt.Sprintf("delta|%d|%s", mergeType, field)
 }
 
-// DecodeMember decodes Redis ZADD member into field, tsSeqID, and mergeType
-// Returns tsSeqID in format "ts_seqid"
+// DecodeDeltaMember decodes Redis ZADD member into field and mergeType
 func DecodeDeltaMember(member string) (field string, mergeType MergeType, err error) {
 	// Split by "|" delimiter
 	parts := strings.Split(member, "|")
-	if len(parts) != 4 {
-		return "", 0, fmt.Errorf("invalid member format (expected 4 parts): %s", member)
+	if len(parts) != 3 {
+		return "", 0, fmt.Errorf("invalid member format (expected 3 parts): %s", member)
 	}
 
 	if parts[0] != "delta" {
 		return "", 0, fmt.Errorf("invalid member prefix (expected 'delta'): %s", parts[0])
 	}
 
-	// Decode base64 field
-	// fieldBytes, err := encode.DecodeRedisCatalogName(parts[1])
-	// if err != nil {
-	// 	return "", "", 0, fmt.Errorf("failed to decode field: %w", err)
-	// }
-	// field = string(fieldBytes)
-
 	// Parse merge type
 	var mergeTypeInt int
 	_, err = fmt.Sscanf(parts[1], "%d", &mergeTypeInt)
 	if err != nil {
-		return "", 0, fmt.Errorf("invalid merge type: %s", parts[3])
+		return "", 0, fmt.Errorf("invalid merge type: %s", parts[1])
 	}
 
 	field = parts[2]
-
-	// Parse tsSeqID (already in correct format)
-	// tsSeqID = parts[3]
 
 	return field, MergeTypeFromInt(mergeTypeInt), nil
 }
@@ -132,11 +121,11 @@ func IsPendingMember(member string) bool {
 }
 
 // ParsePendingMemberTimestamp extracts TimeSeqID from a pending member
-// Format: "pending|delta|{field}|{ts_seqid}|{mergeType}"
-// Example: "pending|delta|/user/name|1700000000_123|1"
+// Format: "pending|delta|{mergeType}|{field}"
+// Example: "pending|delta|1|/user/name"
 func ParsePendingMemberTimestamp(member string) (TimeSeqID, error) {
 	parts := strings.Split(member, "|")
-	if len(parts) < 5 {
+	if len(parts) < 4 {
 		return TimeSeqID{}, fmt.Errorf("invalid pending member format")
 	}
 

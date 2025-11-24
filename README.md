@@ -258,10 +258,12 @@ After v2.2.0 (async snapshot):
 Redis Index:
   {prefix}:delta:base64(catalog) -> ZADD
     score: timestamp.seqid (float: timestamp + seqid/1000000.0)
+           Must have exactly 6 decimal places, seqid > 0
+           Valid: 1700000000.000001 to 1700000000.999999
     
   Delta member format:
-    delta|{mergeType}|{field}|{ts_seqid}
-    Example: delta|1|/user/name|1700000000_123
+    delta|{mergeType}|{field}
+    Example: delta|1|/user/name
     
   Pending member format (uncommitted writes):
     pending|delta|{field}|{ts_seqid}|{mergeType}
