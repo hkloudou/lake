@@ -35,7 +35,6 @@ import (
     "fmt"
     
     "github.com/hkloudou/lake/v2"
-    "github.com/hkloudou/lake/v2/internal/index"
 )
 
 func main() {
@@ -48,7 +47,7 @@ func main() {
         Catalog:   "users",
         Field:     "profile",
         Body:      []byte(`{"name":"Alice","age":30}`),
-        MergeType: index.MergeTypeReplace,
+        MergeType: lake.MergeTypeReplace,
     })
     
     // List catalog entries
