@@ -202,7 +202,6 @@ type WriteResult struct {
 //   - RFC6902 patch: []byte(`[{"op":"add","path":"/a","value":1}]`)
 func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, error) {
 	tr := trace.FromContext(ctx)
-	startTime := time.Now()
 
 	if req.MergeType == 0 {
 		return nil, fmt.Errorf("merge type unknown is not supported")
@@ -212,25 +211,22 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 	}
 
 	// Ensure initialized before operation
-	initStart := time.Now()
 	if err := c.ensureInitialized(ctx); err != nil {
 		return nil, err
 	}
-	tr.RecordSpan("Init", time.Since(initStart))
+	tr.RecordSpan("Init")
 
 	// Step 1: Atomically get TimeSeqID and pre-commit to Redis (pending state)
-	step1Start := time.Now()
 	tsSeq, pendingMember, err := c.writer.GetTimeSeqIDAndPreCommit(ctx, req.Catalog, req.Field, req.MergeType)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate timeseq and precommit: %w", err)
 	}
-	tr.RecordSpan("Step1_PreCommit", time.Since(step1Start), map[string]interface{}{
+	tr.RecordSpan("PreCommit", map[string]interface{}{
 		"tsSeq": tsSeq.String(),
 		"seqID": tsSeq.SeqID,
 	})
 
 	// Step 2: Write to storage
-	step2Start := time.Now()
 	if c.storage == nil {
 		return nil, fmt.Errorf("storage not initialized")
 	}
@@ -239,24 +235,21 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 		// Rollback: remove pending member from Redis
 		catalogKey := c.writer.MakeCatalogKey(req.Catalog)
 		c.rdb.ZRem(ctx, catalogKey, pendingMember)
-		tr.RecordSpan("Rollback", time.Since(step2Start))
+		tr.RecordSpan("Rollback_Failed")
 		return nil, fmt.Errorf("failed to write to storage: %w", err)
 	}
-	tr.RecordSpan("Step2_StoragePut", time.Since(step2Start), map[string]interface{}{
+	tr.RecordSpan("StoragePut", map[string]interface{}{
 		"key":  key,
 		"size": len(req.Body),
 	})
 
 	// Step 3: Atomically commit (remove pending, add committed)
-	step3Start := time.Now()
 	committedMember := index.EncodeDeltaMember(req.Field, tsSeq.String(), req.MergeType)
 	err = c.writer.Commit(ctx, req.Catalog, pendingMember, committedMember, tsSeq.Score())
 	if err != nil {
 		return nil, fmt.Errorf("failed to commit: %w", err)
 	}
-	tr.RecordSpan("Step3_Commit", time.Since(step3Start))
-
-	tr.RecordSpan("TOTAL", time.Since(startTime))
+	tr.RecordSpan("Commit")
 
 	return &WriteResult{
 		TsSeqID:   tsSeq.String(),

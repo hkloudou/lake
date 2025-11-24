@@ -13,8 +13,8 @@ import (
 func TestWriteWithTrace(t *testing.T) {
 	client := lake.NewLake("redis://lake-redis-master.cs:6379/2")
 
-	// Create context with trace enabled
-	ctx := trace.WithTrace(context.Background())
+	// Create context with trace enabled (operation name auto-detected or specified)
+	ctx := trace.WithTrace(context.Background(), "Write")
 
 	catalog := "test_trace"
 
@@ -42,7 +42,7 @@ func TestMultipleWritesWithTrace(t *testing.T) {
 
 	// Write 3 times with trace
 	for i := 0; i < 3; i++ {
-		ctx := trace.WithTrace(context.Background())
+		ctx := trace.WithTrace(context.Background(), fmt.Sprintf("Write_%d", i))
 
 		_, err := client.Write(ctx, lake.WriteRequest{
 			Catalog:   catalog,

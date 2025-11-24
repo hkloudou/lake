@@ -3,6 +3,7 @@ package trace
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -13,10 +14,12 @@ const traceKey contextKey = "lake_trace"
 
 // Trace holds timing information for an operation
 type Trace struct {
-	mu     sync.Mutex
-	spans  []Span
-	start  time.Time
-	enable bool
+	mu       sync.Mutex
+	spans    []Span
+	start    time.Time
+	lastTime time.Time // Last span time (for auto-duration calculation)
+	opName   string    // Operation name (e.g., "Write", "Read")
+	enable   bool
 }
 
 // Span represents a timed operation
@@ -26,37 +29,58 @@ type Span struct {
 	Details  map[string]interface{}
 }
 
-// NewTrace creates a new trace
-func NewTrace() *Trace {
+// NewTrace creates a new trace with operation name
+func NewTrace(opName string) *Trace {
+	now := time.Now()
 	return &Trace{
-		spans:  make([]Span, 0),
-		start:  time.Now(),
-		enable: true,
+		spans:    make([]Span, 0),
+		start:    now,
+		lastTime: now,
+		opName:   opName,
+		enable:   true,
 	}
 }
 
-// WithTrace adds a trace to context
-func WithTrace(ctx context.Context) context.Context {
-	return context.WithValue(ctx, traceKey, NewTrace())
+// WithTrace adds a trace to context with operation name
+// opName can be empty, will auto-detect from caller if possible
+func WithTrace(ctx context.Context, opName ...string) context.Context {
+	name := "Operation"
+	if len(opName) > 0 && opName[0] != "" {
+		name = opName[0]
+	} else {
+		// Auto-detect caller function name
+		if pc, _, _, ok := runtime.Caller(1); ok {
+			if fn := runtime.FuncForPC(pc); fn != nil {
+				name = fn.Name()
+			}
+		}
+	}
+	return context.WithValue(ctx, traceKey, NewTrace(name))
 }
 
 // FromContext gets trace from context
+// If not found, returns a disabled trace (zero overhead)
 func FromContext(ctx context.Context) *Trace {
 	if tr, ok := ctx.Value(traceKey).(*Trace); ok {
+		// Reset timer for next span
+		tr.resetTimer()
 		return tr
 	}
 	// Return disabled trace if not found
 	return &Trace{enable: false}
 }
 
-// RecordSpan records a span with duration
-func (t *Trace) RecordSpan(name string, duration time.Duration, details ...map[string]interface{}) {
+// RecordSpan records a span (auto-calculates duration since last span/reset)
+func (t *Trace) RecordSpan(name string, details ...map[string]interface{}) {
 	if !t.enable {
 		return
 	}
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	// Auto-calculate duration since last reset/span
+	duration := time.Since(t.lastTime)
 
 	span := Span{
 		Name:     name,
@@ -68,6 +92,19 @@ func (t *Trace) RecordSpan(name string, duration time.Duration, details ...map[s
 	}
 
 	t.spans = append(t.spans, span)
+
+	// Reset timer for next span
+	t.lastTime = time.Now()
+}
+
+// resetTimer resets the last time marker
+func (t *Trace) resetTimer() {
+	if !t.enable {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.lastTime = time.Now()
 }
 
 // Total returns total elapsed time since trace start
@@ -85,7 +122,7 @@ func (t *Trace) Dump() string {
 	defer t.mu.Unlock()
 
 	var output string
-	output += fmt.Sprintf("=== Trace: Total %v ===\n", t.Total())
+	output += fmt.Sprintf("=== Trace [%s]: Total %v ===\n", t.opName, t.Total())
 
 	for i, span := range t.spans {
 		output += fmt.Sprintf("[%d] %s: %v", i+1, span.Name, span.Duration)
