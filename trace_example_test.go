@@ -28,11 +28,12 @@ func TestWriteWithTrace(t *testing.T) {
 		t.Fatalf("Write failed: %v", err)
 	}
 
+	t.Log(lake.ReadString(ctx, client.List(ctx, "test_trace")))
 	// Get trace and print
 	tr := trace.FromContext(ctx)
 	fmt.Println(tr.Dump())
 
-	t.Logf("Total time: %v", tr.Total())
+	// t.Logf("Total time: %v", tr.Total())
 }
 
 func TestMultipleWritesWithTrace(t *testing.T) {

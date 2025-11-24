@@ -214,14 +214,14 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 	if err := c.ensureInitialized(ctx); err != nil {
 		return nil, err
 	}
-	tr.RecordSpan("Init")
+	tr.RecordSpan("Write.Init")
 
 	// Step 1: Atomically get TimeSeqID and pre-commit to Redis (pending state)
 	tsSeq, pendingMember, err := c.writer.GetTimeSeqIDAndPreCommit(ctx, req.Catalog, req.Field, req.MergeType)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate timeseq and precommit: %w", err)
 	}
-	tr.RecordSpan("PreCommit", map[string]interface{}{
+	tr.RecordSpan("Write.PreCommit", map[string]interface{}{
 		"tsSeq": tsSeq.String(),
 		"seqID": tsSeq.SeqID,
 	})
@@ -235,10 +235,10 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 		// Rollback: remove pending member from Redis
 		catalogKey := c.writer.MakeCatalogKey(req.Catalog)
 		c.rdb.ZRem(ctx, catalogKey, pendingMember)
-		tr.RecordSpan("Rollback_Failed")
+		tr.RecordSpan("Write.Rollback")
 		return nil, fmt.Errorf("failed to write to storage: %w", err)
 	}
-	tr.RecordSpan("StoragePut", map[string]interface{}{
+	tr.RecordSpan("Write.StoragePut", map[string]interface{}{
 		"key":  key,
 		"size": len(req.Body),
 	})
@@ -249,7 +249,7 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 	if err != nil {
 		return nil, fmt.Errorf("failed to commit: %w", err)
 	}
-	tr.RecordSpan("Commit")
+	tr.RecordSpan("Write.Commit")
 
 	return &WriteResult{
 		TsSeqID:   tsSeq.String(),
@@ -275,7 +275,7 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 	if err := c.ensureInitialized(ctx); err != nil {
 		return nil, err
 	}
-	tr.RecordSpan("ReadInit")
+	tr.RecordSpan("Read.Init")
 
 	// Parallel execution: load snapshot base data and delta bodies concurrently
 	var baseData []byte
@@ -320,14 +320,14 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 		return nil, fmt.Errorf("failed to load deltas: %w", deltasErr)
 	}
 
-	tr.RecordSpan("LoadData")
+	tr.RecordSpan("Read.LoadData")
 
 	// Merge entries with base data (pure CPU operation, all data loaded)
 	resultData, err := c.mergeEntries(ctx, list.catalog, baseData, list.Entries)
 	if err != nil {
 		return nil, err
 	}
-	tr.RecordSpan("MergeData")
+	tr.RecordSpan("Read.Merge")
 
 	// Generate and save new snapshot if there are new entries
 	if len(list.Entries) > 0 {
@@ -336,11 +336,14 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 		if err != nil {
 			// Snapshot save failure should not fail the read
 			// Record in trace for debugging
-			tr.RecordSpan("SnapshotSave_Failed", map[string]interface{}{
-				"error": err.Error(),
+			tr.RecordSpan("Read.SnapshotSave", map[string]interface{}{
+				"success": false,
+				"error":   err.Error(),
 			})
 		} else {
-			tr.RecordSpan("SnapshotSave_Success")
+			tr.RecordSpan("Read.SnapshotSave", map[string]interface{}{
+				"success": true,
+			})
 		}
 	}
 
@@ -516,6 +519,8 @@ func (c *Client) mergeEntries(ctx context.Context, catalog string, baseData []by
 // List reads catalog metadata and returns ListResult
 // Errors (including pending writes) are stored in ListResult.Err
 func (c *Client) List(ctx context.Context, catalog string) *ListResult {
+	tr := trace.FromContext(ctx)
+
 	// Ensure initialized before operation
 	if err := c.ensureInitialized(ctx); err != nil {
 		return &ListResult{
@@ -524,6 +529,7 @@ func (c *Client) List(ctx context.Context, catalog string) *ListResult {
 			Err:     err,
 		}
 	}
+	tr.RecordSpan("List.Init")
 
 	// Try to get existing snapshot
 	snap, err := c.reader.GetLatestSnap(ctx, catalog)
@@ -534,6 +540,7 @@ func (c *Client) List(ctx context.Context, catalog string) *ListResult {
 			Err:     fmt.Errorf("failed to get snapshot: %w", err),
 		}
 	}
+	tr.RecordSpan("List.GetSnap")
 
 	var readResult *index.ReadAllResult
 
@@ -543,6 +550,10 @@ func (c *Client) List(ctx context.Context, catalog string) *ListResult {
 		// No snapshot, read all
 		readResult = c.reader.ReadAll(ctx, catalog)
 	}
+	tr.RecordSpan("List.ReadIndex", map[string]interface{}{
+		"count":      len(readResult.Deltas),
+		"hasPending": readResult.HasPending,
+	})
 
 	return &ListResult{
 		client:     c,
