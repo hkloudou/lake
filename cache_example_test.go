@@ -133,7 +133,7 @@ func TestWithNoOpCache(t *testing.T) {
 		MergeType: lake.MergeTypeReplace,
 	})
 	if writeErr != nil {
-		t.Logf("Write failed (Redis not available): %v", err)
+		t.Logf("Write failed (Redis not available): %v", writeErr)
 		t.Skip("Skipping test")
 	}
 
