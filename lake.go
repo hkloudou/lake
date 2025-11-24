@@ -201,7 +201,7 @@ type WriteResult struct {
 //   - RFC6902 patch: []byte(`[{"op":"add","path":"/a","value":1}]`)
 func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, error) {
 	if req.MergeType == 0 {
-		return nil, fmt.Errorf("merge type replace is not supported")
+		return nil, fmt.Errorf("merge type unknown is not supported")
 	}
 	if len(req.Body) == 0 {
 		return nil, fmt.Errorf("body is empty")
@@ -211,28 +211,33 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 		return nil, err
 	}
 
-	tsSeq, err := c.writer.GetTimeSeqID(ctx, req.Catalog)
+	// Step 1: Atomically get TimeSeqID and pre-commit to Redis (pending state)
+	tsSeq, pendingMember, err := c.writer.GetTimeSeqIDAndPreCommit(ctx, req.Catalog, req.Field, req.MergeType)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate time+seqid: %w", err)
-	}
-	if tsSeq.SeqID > 1000000 {
-		return nil, fmt.Errorf("seqid too large: %d", tsSeq.SeqID)
+		return nil, fmt.Errorf("failed to generate timeseq and precommit: %w", err)
 	}
 
-	// Write to storage with filename: catalog/{ts}_{seqid}_{mergetype}.json
+	if tsSeq.SeqID > 999999 {
+		return nil, fmt.Errorf("seqid too large: %d (max 999,999)", tsSeq.SeqID)
+	}
+
+	// Step 2: Write to storage
 	if c.storage == nil {
 		return nil, fmt.Errorf("storage not initialized")
 	}
 	key := storage.MakeDeltaKey(req.Catalog, tsSeq, int(req.MergeType))
 	if err := c.storage.Put(ctx, key, req.Body); err != nil {
-		// Rollback: remove from Redis index (best effort)
-		// TODO: implement proper rollback mechanism
+		// Rollback: remove pending member from Redis
+		catalogKey := c.writer.MakeCatalogKey(req.Catalog)
+		c.rdb.ZRem(ctx, catalogKey, pendingMember)
 		return nil, fmt.Errorf("failed to write to storage: %w", err)
 	}
-	// Generate time+seqid and add to index (atomically)
-	err = c.writer.AddWithTimeSeq(ctx, tsSeq, req.Catalog, req.Field, req.MergeType)
+
+	// Step 3: Atomically commit (remove pending, add committed)
+	committedMember := index.EncodeDeltaMember(req.Field, tsSeq.String(), req.MergeType)
+	err = c.writer.Commit(ctx, req.Catalog, pendingMember, committedMember, tsSeq.Score())
 	if err != nil {
-		return nil, fmt.Errorf("failed to add to index: %w", err)
+		return nil, fmt.Errorf("failed to commit: %w", err)
 	}
 
 	return &WriteResult{

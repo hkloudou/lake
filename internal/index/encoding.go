@@ -127,3 +127,20 @@ func IsSnapMember(member string) bool {
 func IsDeltaMember(member string) bool {
 	return strings.HasPrefix(member, "delta|")
 }
+
+// IsPendingMember checks if member is a pending (uncommitted) member
+func IsPendingMember(member string) bool {
+	return strings.HasPrefix(member, "pending|")
+}
+
+// ParsePendingMemberTimestamp extracts TimeSeqID from a pending member
+// Format: "pending|delta|field|ts_seqid|mergetype"
+func ParsePendingMemberTimestamp(member string) (TimeSeqID, error) {
+	parts := strings.Split(member, "|")
+	if len(parts) < 4 {
+		return TimeSeqID{}, fmt.Errorf("invalid pending member format")
+	}
+	
+	// parts[3] is tsSeqID
+	return ParseTimeSeqID(parts[3])
+}

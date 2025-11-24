@@ -112,6 +112,9 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) ([]DeltaIn
 	}
 
 	var entries []DeltaInfo
+	var lastCommittedTimestamp int64
+
+	// First pass: collect committed entries and find latest timestamp
 	for _, z := range results {
 		member := z.Member.(string)
 
@@ -120,7 +123,12 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) ([]DeltaIn
 			continue
 		}
 
-		// Skip non-data members
+		// Skip pending members (will check in second pass)
+		if IsPendingMember(member) {
+			continue
+		}
+
+		// Skip non-delta members
 		if !IsDeltaMember(member) {
 			continue
 		}
@@ -133,10 +141,13 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) ([]DeltaIn
 		tsSeq, err := ParseTimeSeqID(tsSeqString)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse tsSeqID: %w", err)
-			// continue // Skip invalid members
 		}
 		if tsSeq.Score() != z.Score {
 			return nil, fmt.Errorf("score mismatch: got %f, expected %f", tsSeq.Score(), z.Score)
+		}
+
+		if tsSeq.Timestamp > lastCommittedTimestamp {
+			lastCommittedTimestamp = tsSeq.Timestamp
 		}
 
 		entries = append(entries, DeltaInfo{
@@ -145,6 +156,34 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) ([]DeltaIn
 			MergeType: mergeType,
 			Score:     z.Score,
 		})
+	}
+
+	// Second pass: check pending members for timeout
+	const timeoutThreshold = 60 // 1 minute in seconds
+	for _, z := range results {
+		member := z.Member.(string)
+
+		if !IsPendingMember(member) {
+			continue
+		}
+
+		// Parse pending member to get timestamp
+		tsSeq, err := ParsePendingMemberTimestamp(member)
+		if err != nil {
+			continue // Skip invalid pending members
+		}
+
+		// Calculate age relative to last committed entry
+		ageSeconds := lastCommittedTimestamp - tsSeq.Timestamp
+
+		if ageSeconds > timeoutThreshold {
+			// Timeout > 1 minute: ignore (abandoned write, continue)
+			continue
+		}
+
+		// Still within timeout window: ERROR (write in progress, cannot proceed)
+		return nil, fmt.Errorf("pending write detected: %s (age: %ds < 60s, write in progress)", 
+			member, ageSeconds)
 	}
 
 	return entries, nil

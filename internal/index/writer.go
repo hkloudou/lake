@@ -114,6 +114,11 @@ type Entry struct {
 	MergeType MergeType
 }
 
+// MakeCatalogKey returns the Redis ZADD key for catalog (public accessor)
+func (w *Writer) MakeCatalogKey(catalog string) string {
+	return w.makeCatalogKey(catalog)
+}
+
 // BatchAdd adds multiple entries in a pipeline (legacy - for backward compatibility)
 // DEPRECATED: Use BatchAddWithTimeSeq instead
 // func (w *Writer) BatchAdd(ctx context.Context, catalog string, entries []Entry) error {
