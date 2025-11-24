@@ -28,7 +28,7 @@ type indexKey struct {
 	prefix string
 }
 
-func (w *indexKey) makeCatalogKey(catalog string) string {
+func (w *indexKey) makeDeltaZsetKey(catalog string) string {
 	if w.prefix == "" {
 		panic("prefix is not set")
 	}

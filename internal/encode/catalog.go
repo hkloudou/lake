@@ -31,6 +31,10 @@ func EncodeOssCatalogName(catalog string) string {
 // EncodeRedisCatalogName encodes catalog name for Redis keys
 // Uses base64 URL encoding without padding (safe for Redis keys)
 func EncodeRedisCatalogName(catalog string) string {
+	if len(catalog) == 0 {
+		return "" // Return empty string for empty catalog
+	}
+
 	// For Redis, if catalog is safe, use as-is with prefix
 	if IsRedisSafe(catalog) {
 		return "(" + catalog

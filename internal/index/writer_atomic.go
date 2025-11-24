@@ -72,8 +72,8 @@ return "OK"
 // GetTimeSeqIDAndPreCommit atomically generates TimeSeqID and pre-commits to Redis
 // Returns TimeSeqID and pending member string
 func (w *Writer) GetTimeSeqIDAndPreCommit(ctx context.Context, catalog, field string, mergeType MergeType) (TimeSeqID, string, error) {
-	encodedCatalog := encodeCatalog(catalog)
-	zaddKey := w.makeCatalogKey(catalog)
+	encodedCatalog := encode.EncodeRedisCatalogName(catalog)
+	zaddKey := w.makeDeltaZsetKey(catalog)
 
 	// Encode field for member
 	encodedField := encodeField(field)
@@ -112,7 +112,7 @@ func (w *Writer) GetTimeSeqIDAndPreCommit(ctx context.Context, catalog, field st
 
 // Commit atomically commits a pending write
 func (w *Writer) Commit(ctx context.Context, catalog, pendingMember, committedMember string, score float64) error {
-	zaddKey := w.makeCatalogKey(catalog)
+	zaddKey := w.makeDeltaZsetKey(catalog)
 
 	_, err := w.rdb.Eval(ctx, commitScript,
 		[]string{zaddKey},
@@ -122,9 +122,9 @@ func (w *Writer) Commit(ctx context.Context, catalog, pendingMember, committedMe
 }
 
 // Helper functions
-func encodeCatalog(catalog string) string {
-	return encode.EncodeRedisCatalogName(catalog)
-}
+// func encodeCatalog(catalog string) string {
+// 	return encode.EncodeRedisCatalogName(catalog)
+// }
 
 func encodeField(field string) string {
 	return encode.EncodeRedisCatalogName(field)

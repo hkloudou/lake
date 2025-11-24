@@ -22,35 +22,35 @@ func NewWriter(rdb *redis.Client) *Writer {
 	}
 }
 
-func (w *Writer) GetTimeSeqID(ctx context.Context, catalog string) (TimeSeqID, error) {
-	return w.timeGen.Generate(ctx, catalog)
-}
+// func (w *Writer) GetTimeSeqID(ctx context.Context, catalog string) (TimeSeqID, error) {
+// 	return w.timeGen.Generate(ctx, catalog)
+// }
 
 // AddWithTimeSeq adds an entry to the catalog index with auto-generated time+seqid
 // Returns the generated TimeSeqID
-func (w *Writer) AddWithTimeSeq(ctx context.Context, tsSeq TimeSeqID, catalog, field string, mergeType MergeType) error {
-	// Generate timestamp + seqid from Redis
+// func (w *Writer) AddWithTimeSeq(ctx context.Context, tsSeq TimeSeqID, catalog, field string, mergeType MergeType) error {
+// 	// Generate timestamp + seqid from Redis
 
-	key := w.makeCatalogKey(catalog)
-	member := EncodeDeltaMember(field, tsSeq.String(), mergeType)
+// 	key := w.makeCatalogKey(catalog)
+// 	member := EncodeDeltaMember(field, tsSeq.String(), mergeType)
 
-	return w.rdb.ZAdd(ctx, key, redis.Z{
-		Score:  tsSeq.Score(),
-		Member: member,
-	}).Err()
-}
+// 	return w.rdb.ZAdd(ctx, key, redis.Z{
+// 		Score:  tsSeq.Score(),
+// 		Member: member,
+// 	}).Err()
+// }
 
 // Add adds an entry to the catalog index (legacy - for backward compatibility)
 // DEPRECATED: Use AddWithTimeSeq instead
-func (w *Writer) Add(ctx context.Context, catalog, field, uuid string, timestamp int64, mergeType MergeType) error {
-	key := w.makeCatalogKey(catalog)
-	member := EncodeDeltaMember(field, uuid, mergeType)
+// func (w *Writer) Add(ctx context.Context, catalog, field, uuid string, timestamp int64, mergeType MergeType) error {
+// 	key := w.makeCatalogKey(catalog)
+// 	member := EncodeDeltaMember(field, uuid, mergeType)
 
-	return w.rdb.ZAdd(ctx, key, redis.Z{
-		Score:  float64(timestamp),
-		Member: member,
-	}).Err()
-}
+// 	return w.rdb.ZAdd(ctx, key, redis.Z{
+// 		Score:  float64(timestamp),
+// 		Member: member,
+// 	}).Err()
+// }
 
 // AddSnap adds a snapshot entry to the catalog snapshot index
 // startTsSeq: start time sequence (e.g., "1700000000_1" or "0_0" for first snap)
@@ -115,9 +115,9 @@ type Entry struct {
 }
 
 // MakeCatalogKey returns the Redis ZADD key for catalog (public accessor)
-func (w *Writer) MakeCatalogKey(catalog string) string {
-	return w.makeCatalogKey(catalog)
-}
+// func (w *Writer) MakeCatalogKey(catalog string) string {
+// 	return w.makeCatalogKey(catalog)
+// }
 
 // BatchAdd adds multiple entries in a pipeline (legacy - for backward compatibility)
 // DEPRECATED: Use BatchAddWithTimeSeq instead

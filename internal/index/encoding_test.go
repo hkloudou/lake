@@ -10,9 +10,9 @@ func TestEncodeMember(t *testing.T) {
 		expected  string
 	}{
 		// "user.name" in base64 URL encoding = "dXNlci5uYW1l"
-		{"user.name", "1700000000_123", MergeTypeReplace, "delta|dXNlci5uYW1l|1700000000_123|1"},
+		{"user.name", "1700000000_123", MergeTypeReplace, "delta|(user.name|1700000000_123|1"},
 		// "profile" in base64 URL encoding (no padding) = "cHJvZmlsZQ"
-		{"profile", "1700000001_456", MergeTypeRFC7396, "delta|cHJvZmlsZQ|1700000001_456|2"},
+		{"profile", "1700000001_456", MergeTypeRFC7396, "delta|(profile|1700000001_456|2"},
 		// "" in base64 URL encoding = ""
 		{"", "1700000002_789", MergeTypeRFC6902, "delta||1700000002_789|3"},
 		// Test field with special chars: "user:profile"

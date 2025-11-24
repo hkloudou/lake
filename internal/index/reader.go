@@ -43,20 +43,20 @@ type ReadIndexResult struct {
 
 // ReadAll reads all entries from the catalog
 func (r *Reader) ReadAll(ctx context.Context, catalog string) *ReadIndexResult {
-	key := r.makeCatalogKey(catalog)
+	key := r.makeDeltaZsetKey(catalog)
 	return r.readRange(ctx, key, "-inf", "+inf")
 }
 
 // ReadSince reads entries since the given timestamp (exclusive)
 func (r *Reader) ReadSince(ctx context.Context, catalog string, sinceTimestamp float64) *ReadIndexResult {
-	key := r.makeCatalogKey(catalog)
+	key := r.makeDeltaZsetKey(catalog)
 	// Use '(' to exclude the timestamp itself
 	return r.readRange(ctx, key, fmt.Sprintf("(%f", sinceTimestamp), "+inf")
 }
 
 // ReadRange reads entries between timestamps
 func (r *Reader) ReadRange(ctx context.Context, catalog string, minTimestamp, maxTimestamp int64) *ReadIndexResult {
-	key := r.makeCatalogKey(catalog)
+	key := r.makeDeltaZsetKey(catalog)
 	return r.readRange(ctx, key, fmt.Sprintf("%d", minTimestamp), fmt.Sprintf("%d", maxTimestamp))
 }
 

@@ -221,25 +221,26 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate timeseq and precommit: %w", err)
 	}
-	tr.RecordSpan("Write.PreCommit", map[string]interface{}{
-		"tsSeq": tsSeq.String(),
-		"seqID": tsSeq.SeqID,
+	tr.RecordSpan("Write.PreCommit", map[string]any{
+		"tsSeq":  tsSeq.String(),
+		"seqID":  tsSeq.SeqID,
+		"member": pendingMember,
 	})
 
 	// Step 2: Write to storage
 	if c.storage == nil {
 		return nil, fmt.Errorf("storage not initialized")
 	}
-	key := storage.MakeDeltaKey(req.Catalog, tsSeq, int(req.MergeType))
-	if err := c.storage.Put(ctx, key, req.Body); err != nil {
+	storageKey := storage.MakeDeltaKey(req.Catalog, tsSeq, int(req.MergeType))
+	if err := c.storage.Put(ctx, storageKey, req.Body); err != nil {
 		// Rollback: remove pending member from Redis
-		catalogKey := c.writer.MakeCatalogKey(req.Catalog)
-		c.rdb.ZRem(ctx, catalogKey, pendingMember)
+		// catalogKey := c.writer.MakeCatalogKey(req.Catalog)
+		// c.rdb.ZRem(ctx, catalogKey, pendingMember)
 		tr.RecordSpan("Write.Rollback")
 		return nil, fmt.Errorf("failed to write to storage: %w", err)
 	}
-	tr.RecordSpan("Write.StoragePut", map[string]interface{}{
-		"key":  key,
+	tr.RecordSpan("Write.StoragePut", map[string]any{
+		"key":  storageKey,
 		"size": len(req.Body),
 	})
 

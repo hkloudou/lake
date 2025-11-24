@@ -133,7 +133,7 @@ func TestWriteData(t *testing.T) {
 		_, err := client.Write(ctx, lake.WriteRequest{
 			Catalog:   catalog,
 			Field:     "user",
-			Body:      []byte(`{"age": 30, "city": "NYC"}`), // JSON object
+			Body:      []byte(`{"age": 31, "city": "NYC2"}`), // JSON object
 			MergeType: lake.MergeTypeRFC7396,
 		})
 		if err != nil {
