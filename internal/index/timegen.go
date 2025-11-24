@@ -42,7 +42,7 @@ func ParseTimeSeqID(s any) (TimeSeqID, error) {
 		}
 
 		// Try format: "timestamp.seqid" (decimal with 1-6 digits, auto-padded to 6)
-		// Check decimal point exists
+		// First validate string format before parsing
 		dotIndex := strings.Index(v, ".")
 		if dotIndex == -1 {
 			return TimeSeqID{}, fmt.Errorf("invalid format: score must have decimal point (format: timestamp.x to timestamp.xxxxxx)")
@@ -54,24 +54,15 @@ func ParseTimeSeqID(s any) (TimeSeqID, error) {
 			return TimeSeqID{}, fmt.Errorf("invalid precision: score must have 1-6 decimal places, got %d decimal places", len(decimalPart))
 		}
 
-		// Parse the float
+		// Parse to float64
 		var tsFloat float64
 		_, err = fmt.Sscanf(v, "%f", &tsFloat)
 		if err != nil {
 			return TimeSeqID{}, fmt.Errorf("invalid TimeSeqID format: %s", v)
 		}
 
-		// Extract timestamp and seqid from float
-		ts = int64(tsFloat)
-		fractional := tsFloat - float64(ts)
-		seqid = int64(math.Round(fractional * 1000000))
-
-		// Validate: seqid cannot be 0 (fractional part must be non-zero)
-		if seqid == 0 {
-			return TimeSeqID{}, fmt.Errorf("invalid score: seqid cannot be 0 (fractional part must be non-zero)")
-		}
-
-		return TimeSeqID{Timestamp: ts, SeqID: seqid}, nil
+		// Reuse float64 validation logic by recursive call
+		return ParseTimeSeqID(tsFloat)
 
 	case float64:
 		// Extract timestamp and seqid from float
