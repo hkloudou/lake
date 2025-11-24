@@ -14,7 +14,7 @@ func TestWriteWithTrace(t *testing.T) {
 	client := lake.NewLake("redis://lake-redis-master.cs:6379/2")
 
 	// Create context with trace enabled (operation name auto-detected or specified)
-	ctx := trace.WithTrace(context.Background(), "Write")
+	ctx := trace.WithTrace(context.Background())
 
 	catalog := "test_trace"
 

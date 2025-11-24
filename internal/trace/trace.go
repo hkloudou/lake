@@ -29,8 +29,8 @@ type Span struct {
 	Details  map[string]interface{}
 }
 
-// NewTrace creates a new trace with operation name
-func NewTrace(opName string) *Trace {
+// newTrace creates a new trace with operation name (private)
+func newTrace(opName string) *Trace {
 	now := time.Now()
 	return &Trace{
 		spans:    make([]Span, 0),
@@ -55,22 +55,22 @@ func WithTrace(ctx context.Context, opName ...string) context.Context {
 			}
 		}
 	}
-	return context.WithValue(ctx, traceKey, NewTrace(name))
+	return context.WithValue(ctx, traceKey, newTrace(name))
 }
 
 // FromContext gets trace from context
 // If not found, returns a disabled trace (zero overhead)
+// Does NOT reset timer (can be called multiple times safely)
 func FromContext(ctx context.Context) *Trace {
 	if tr, ok := ctx.Value(traceKey).(*Trace); ok {
-		// Reset timer for next span
-		tr.resetTimer()
 		return tr
 	}
 	// Return disabled trace if not found
 	return &Trace{enable: false}
 }
 
-// RecordSpan records a span (auto-calculates duration since last span/reset)
+// RecordSpan records a span (auto-calculates duration since last RecordSpan)
+// Timer is automatically reset after recording
 func (t *Trace) RecordSpan(name string, details ...map[string]interface{}) {
 	if !t.enable {
 		return
@@ -79,7 +79,7 @@ func (t *Trace) RecordSpan(name string, details ...map[string]interface{}) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	// Auto-calculate duration since last reset/span
+	// Auto-calculate duration since last RecordSpan
 	duration := time.Since(t.lastTime)
 
 	span := Span{
@@ -93,17 +93,7 @@ func (t *Trace) RecordSpan(name string, details ...map[string]interface{}) {
 
 	t.spans = append(t.spans, span)
 
-	// Reset timer for next span
-	t.lastTime = time.Now()
-}
-
-// resetTimer resets the last time marker
-func (t *Trace) resetTimer() {
-	if !t.enable {
-		return
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	// Auto-reset timer for next span
 	t.lastTime = time.Now()
 }
 
