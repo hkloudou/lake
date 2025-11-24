@@ -30,23 +30,23 @@ func TestWithCacheHelper(t *testing.T) {
 		t.Fatalf("Write failed: %v", writeErr)
 	}
 	// First read: cache miss, loads from OSS
-	list1, err := client.List(ctx, "users")
-	if writeErr != nil {
-		t.Fatalf("List error: %v", result.Err)
+	list1 := client.List(ctx, "users")
+	if list1.Err != nil {
+		t.Fatalf("List error: %v", list1.Err)
 	}
 	data1, err := lake.ReadMap(ctx, list1)
-	if writeErr != nil {
+	if err != nil {
 		t.Fatalf("ReadMap failed: %v", err)
 	}
 	t.Logf("First read (cache miss): %+v", data1)
 
 	// Second read: cache hit, loads from Redis
-	list2, err := client.List(ctx, "users")
-	if writeErr != nil {
-		t.Fatalf("List error: %v", result.Err)
+	list2 := client.List(ctx, "users")
+	if list2.Err != nil {
+		t.Fatalf("List error: %v", list2.Err)
 	}
 	data2, err := lake.ReadMap(ctx, list2)
-	if writeErr != nil {
+	if err != nil {
 		t.Fatalf("ReadMap failed: %v", err)
 	}
 	t.Logf("Second read (cache hit): %+v", data2)
@@ -92,25 +92,25 @@ func TestWithRedisCache(t *testing.T) {
 	}
 
 	// First read - cache miss
-	list1, err := client.List(ctx, catalog)
-	if writeErr != nil {
-		t.Fatalf("List error: %v", result.Err)
+	list1 := client.List(ctx, catalog)
+	if list1.Err != nil {
+		t.Fatalf("List error: %v", list1.Err)
 	}
 
 	data1, err := lake.ReadMap(ctx, list1)
-	if writeErr != nil {
+	if err != nil {
 		t.Fatalf("ReadMap failed: %v", err)
 	}
 	t.Logf("First read (cache miss): %+v", data1)
 
 	// Second read - should hit cache
-	list2, err := client.List(ctx, catalog)
-	if writeErr != nil {
-		t.Fatalf("List error: %v", result.Err)
+	list2 := client.List(ctx, catalog)
+	if list2.Err != nil {
+		t.Fatalf("List error: %v", list2.Err)
 	}
 
 	data2, err := lake.ReadMap(ctx, list2)
-	if writeErr != nil {
+	if err != nil {
 		t.Fatalf("ReadMap failed: %v", err)
 	}
 	t.Logf("Second read (cache hit): %+v", data2)
