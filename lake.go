@@ -3,7 +3,6 @@ package lake
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/hkloudou/lake/v2/internal/merge"
 	"github.com/hkloudou/lake/v2/internal/snapshot"
 	"github.com/hkloudou/lake/v2/internal/storage"
+	"github.com/hkloudou/lake/v2/internal/trace"
 	"github.com/redis/go-redis/v9"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -201,6 +201,7 @@ type WriteResult struct {
 //   - RFC7396 patch: []byte(`{"age":31,"city":null}`)
 //   - RFC6902 patch: []byte(`[{"op":"add","path":"/a","value":1}]`)
 func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, error) {
+	tr := trace.FromContext(ctx)
 	startTime := time.Now()
 
 	if req.MergeType == 0 {
@@ -215,7 +216,7 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 	if err := c.ensureInitialized(ctx); err != nil {
 		return nil, err
 	}
-	log.Printf("[Write Timing] Init: %v", time.Since(initStart))
+	tr.RecordSpan("Init", time.Since(initStart))
 
 	// Step 1: Atomically get TimeSeqID and pre-commit to Redis (pending state)
 	step1Start := time.Now()
@@ -223,11 +224,10 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate timeseq and precommit: %w", err)
 	}
-	step1Duration := time.Since(step1Start)
-	log.Printf("[Write Timing] Step1 (GetTimeSeqID+PreCommit): %v, tsSeq=%s, seqID=%d",
-		step1Duration, tsSeq.String(), tsSeq.SeqID)
-
-	// Note: seqid limit now checked in Lua script (no need to check here)
+	tr.RecordSpan("Step1_PreCommit", time.Since(step1Start), map[string]interface{}{
+		"tsSeq": tsSeq.String(),
+		"seqID": tsSeq.SeqID,
+	})
 
 	// Step 2: Write to storage
 	step2Start := time.Now()
@@ -239,11 +239,13 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 		// Rollback: remove pending member from Redis
 		catalogKey := c.writer.MakeCatalogKey(req.Catalog)
 		c.rdb.ZRem(ctx, catalogKey, pendingMember)
+		tr.RecordSpan("Rollback", time.Since(step2Start))
 		return nil, fmt.Errorf("failed to write to storage: %w", err)
 	}
-	step2Duration := time.Since(step2Start)
-	log.Printf("[Write Timing] Step2 (Storage.Put): %v, key=%s, size=%d bytes",
-		step2Duration, key, len(req.Body))
+	tr.RecordSpan("Step2_StoragePut", time.Since(step2Start), map[string]interface{}{
+		"key":  key,
+		"size": len(req.Body),
+	})
 
 	// Step 3: Atomically commit (remove pending, add committed)
 	step3Start := time.Now()
@@ -252,12 +254,9 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 	if err != nil {
 		return nil, fmt.Errorf("failed to commit: %w", err)
 	}
-	step3Duration := time.Since(step3Start)
-	log.Printf("[Write Timing] Step3 (Commit): %v", step3Duration)
+	tr.RecordSpan("Step3_Commit", time.Since(step3Start))
 
-	totalDuration := time.Since(startTime)
-	log.Printf("[Write Timing] TOTAL: %v (Step1=%v, Step2=%v, Step3=%v)",
-		totalDuration, step1Duration, step2Duration, step3Duration)
+	tr.RecordSpan("TOTAL", time.Since(startTime))
 
 	return &WriteResult{
 		TsSeqID:   tsSeq.String(),
