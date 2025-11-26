@@ -151,6 +151,79 @@ sysctlImage:
 - ✅ **Memory Efficient** - Uses 4GB max, starts with 256MB
 - ✅ **Optimized Networking** - Increased connection limits for high throughput
 
+### Main Redis Configuration (Index Storage)
+
+**Critical**: Main Redis stores index data (delta/pending/snapshot members) and MUST have persistence enabled.
+
+**Recommended Configuration for Minimum Data Loss:**
+
+```yaml
+master:
+  persistence:
+    enabled: true
+    path: /data
+  
+  configuration: |
+    dir /data
+    
+    # Enable AOF persistence (Append-Only File)
+    appendonly yes
+    
+    # Configure RDB auto-save policies (multiple time points for redundancy)
+    save 900 1     # Save after 900 seconds (15 min) if at least 1 modification
+    save 300 10    # Save after 300 seconds (5 min) if at least 10 modifications
+    save 60 100    # Save after 60 seconds (1 min) if at least 100 modifications
+    
+    # AOF sync policy (sync every second - balance between performance and durability)
+    appendfsync everysec
+    
+    # Disable dangerous commands (prevent accidental data loss)
+    rename-command FLUSHDB ""
+    rename-command FLUSHALL ""
+```
+
+**Why This is the Lowest Data Loss Configuration:**
+
+1. **Dual Persistence (AOF + RDB)**
+   - AOF: Logs every write operation, can recover to the last second
+   - RDB: Creates point-in-time snapshots at multiple intervals
+   - If AOF corrupts, RDB provides backup recovery
+
+2. **Multi-Level RDB Snapshots**
+   - High-frequency writes: RDB every 1 minute (60s/100 changes)
+   - Medium-frequency: RDB every 5 minutes (300s/10 changes)
+   - Low-frequency: RDB every 15 minutes (900s/1 change)
+   - Ensures data is saved regardless of write pattern
+
+3. **AOF everysec (Best Balance)**
+   - Max 1 second of data loss in worst case
+   - Better performance than `appendfsync always`
+   - More durable than `appendfsync no`
+
+4. **Command Protection**
+   - FLUSHDB/FLUSHALL disabled to prevent accidental deletion
+   - Critical for production environments
+
+**Data Loss Scenarios:**
+
+| Scenario | Max Data Loss | Recovery Method |
+|----------|---------------|-----------------|
+| Graceful shutdown | 0 seconds | AOF + RDB intact |
+| Power failure | 1 second | AOF recovery |
+| AOF corruption | Up to RDB interval | RDB snapshot recovery |
+| Both corrupted | Manual recovery | Rebuild from OSS deltas |
+
+**Cache vs Main Redis Comparison:**
+
+| Feature | Cache Redis | Main Redis |
+|---------|-------------|------------|
+| Persistence | ❌ Disabled | ✅ AOF + RDB |
+| Eviction | ✅ LRU enabled | ❌ No eviction |
+| Data Importance | Low (rebuiltable) | Critical (index) |
+| Disk I/O | None | Moderate |
+| Max Data Loss | All (OK) | 1 second |
+| Recovery Time | Fast (rebuild) | Instant (AOF) |
+
 ### With Performance Tracing
 
 ```go
