@@ -70,6 +70,87 @@ client := lake.NewLake(
 )
 ```
 
+### Why Separate SnapCache?
+
+**Recommended**: Use a dedicated Redis instance for snapshot caching
+
+**Reasons:**
+1. **Data Isolation** - Snapshots are pure cache (can be rebuilt), separate from critical index data
+2. **Memory Management** - Enable LRU eviction on cache Redis without affecting index data
+3. **Performance** - No persistence overhead (AOF/RDB disabled) for faster access
+4. **Cost Optimization** - Use cheaper ephemeral storage for cache Redis
+5. **Independent Scaling** - Scale cache and index Redis independently based on workload
+
+**Recommended Setup: OCI Bitnami Redis**
+
+```bash
+# Install using Helm
+helm install lake-cache oci://registry-1.docker.io/bitnamicharts/redis -f cache-redis-values.yaml
+```
+
+**cache-redis-values.yaml:**
+```yaml
+architecture: standalone  # Standalone mode (single node)
+
+replica:
+  replicaCount: 1  # Single node, no replicas needed
+
+master:
+  kind: Deployment
+  persistence:
+    enabled: false  # Disable persistence (ephemeral storage)
+  
+  resources:
+    limits:
+      memory: "4096Mi"    # Maximum memory: 4GB
+    requests:
+      memory: "256Mi"     # Initial memory request: 256MB
+  
+  configuration: |
+    # Disable AOF persistence
+    appendonly no
+    
+    # Disable RDB auto-save
+    save ""
+    
+    # Enable LRU cache with 4GB memory limit
+    maxmemory 4096mb
+    
+    # Set eviction policy to allkeys-lru (evict least recently used keys)
+    maxmemory-policy allkeys-lru
+
+auth:
+  enabled: false  # Disable authentication (internal use)
+
+usePassword: false
+
+cluster:
+  enabled: false  # Disable cluster mode
+
+persistence: 
+  existingClaim: false  # Don't use existing PVC
+  enabled: false  # Disable persistence
+
+sysctlImage:
+  enabled: true
+  repository: busybox
+  tag: v1.35.0
+  command:
+    - /bin/sh
+    - '-c'
+    - |
+      mount -o remount rw /proc/sys
+      sysctl -w net.core.somaxconn=65535
+      sysctl -w net.ipv4.ip_local_port_range="1024 65535"
+```
+
+**Why This Configuration?**
+- ✅ **No Persistence** - Snapshots can be rebuilt from deltas, no need to persist
+- ✅ **LRU Eviction** - Automatically evicts old snapshots when memory is full
+- ✅ **High Performance** - No disk I/O overhead from AOF/RDB
+- ✅ **Memory Efficient** - Uses 4GB max, starts with 256MB
+- ✅ **Optimized Networking** - Increased connection limits for high throughput
+
 ### With Performance Tracing
 
 ```go
