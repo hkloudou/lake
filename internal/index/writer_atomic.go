@@ -168,6 +168,12 @@ func (w *Writer) GetTimeSeqIDAndPreCommit(ctx context.Context, catalog, fieldPat
 	return tsSeq, pendingMember, nil
 }
 
+// Rollback removes a pending member from Redis (used when storage write fails)
+func (w *Writer) Rollback(ctx context.Context, catalog, pendingMember string) error {
+	zaddKey := w.makeDeltaZsetKey(catalog)
+	return w.rdb.ZRem(ctx, zaddKey, pendingMember).Err()
+}
+
 // Commit atomically commits a pending write
 func (w *Writer) Commit(ctx context.Context, catalog, pendingMember, committedMember string, score float64) error {
 	tr := trace.FromContext(ctx)

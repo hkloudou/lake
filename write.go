@@ -68,16 +68,20 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) error {
 	if c.storage == nil {
 		return fmt.Errorf("storage not initialized")
 	}
-	storageKey := c.storage.MakeDeltaKey(req.Catalog, tsSeq, int(req.MergeType))
-	if err := c.storage.Put(ctx, storageKey, req.Body); err != nil {
-		// Rollback: remove pending member from Redis
-		// catalogKey := c.writer.(req.Catalog)
-		// c.rdb.ZRem(ctx, catalogKey, pendingMember)
-		tr.RecordSpan("Write.Rollback")
+	storageDeltaKey := c.storage.MakeDeltaKey(req.Catalog, tsSeq, int(req.MergeType))
+	if err := c.storage.Put(ctx, storageDeltaKey, req.Body); err != nil {
+		// Rollback: remove pending member from Redis delta zset
+		// This prevents Read errors from detecting stale pending writes
+		if rollbackErr := c.writer.Rollback(ctx, req.Catalog, pendingMember); rollbackErr != nil {
+			tr.RecordSpan("Write.Rollback", map[string]any{"error": rollbackErr.Error()})
+			// Log rollback error but return original storage error
+		} else {
+			tr.RecordSpan("Write.Rollback", map[string]any{"success": true})
+		}
 		return fmt.Errorf("failed to write to storage: %w", err)
 	}
 	tr.RecordSpan("Write.StoragePut", map[string]any{
-		"key":  storageKey,
+		"key":  storageDeltaKey,
 		"size": len(req.Body),
 	})
 
