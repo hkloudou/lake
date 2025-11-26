@@ -124,105 +124,39 @@ func TestTimeGeneratorCatalogIsolation(t *testing.T) {
 func TestTimeSeqIDParsing(t *testing.T) {
 	tests := []struct {
 		name      string
-		input     any
+		input     string
 		expectTS  int64
 		expectSeq int64
 		wantErr   bool
 	}{
-		// String format: "timestamp_seqid"
+		// Format: "timestamp_seqid"
 		{
-			name:      "string underscore format",
+			name:      "underscore format",
 			input:     "1700000000_123",
 			expectTS:  1700000000,
 			expectSeq: 123,
 			wantErr:   false,
 		},
 		{
-			name:      "string underscore zero seqid",
+			name:      "underscore zero seqid",
 			input:     "1700000000_0",
 			expectTS:  1700000000,
 			expectSeq: 0,
 			wantErr:   false,
 		},
 		{
-			name:      "string underscore max seqid",
+			name:      "underscore max seqid",
 			input:     "1700000000_999999",
 			expectTS:  1700000000,
 			expectSeq: 999999,
 			wantErr:   false,
 		},
-
-		// String format: "timestamp.seqid" (decimal with 1-6 digits, seqid > 0)
 		{
-			name:      "string decimal 6 digits",
-			input:     "1700000000.000123",
+			name:      "underscore min seqid",
+			input:     "1700000000_1",
 			expectTS:  1700000000,
-			expectSeq: 123,
+			expectSeq: 1,
 			wantErr:   false,
-		},
-		{
-			name:      "string decimal 1 digit",
-			input:     "1700000000.1",
-			expectTS:  1700000000,
-			expectSeq: 100000, // Auto-padded to 6 digits
-			wantErr:   false,
-		},
-		{
-			name:      "string decimal 2 digits",
-			input:     "1700000000.12",
-			expectTS:  1700000000,
-			expectSeq: 120000,
-			wantErr:   false,
-		},
-		{
-			name:      "string decimal 6 digits - max",
-			input:     "1700000000.123456",
-			expectTS:  1700000000,
-			expectSeq: 123456,
-			wantErr:   false,
-		},
-		{
-			name:    "string decimal all zeros - invalid",
-			input:   "1700000000.000000",
-			wantErr: true, // seqid cannot be 0
-		},
-		{
-			name:    "string decimal 1 digit zero - invalid",
-			input:   "1700000000.0",
-			wantErr: true, // seqid cannot be 0
-		},
-		{
-			name:    "string no decimal - invalid",
-			input:   "1700000000",
-			wantErr: true, // Must have decimal point
-		},
-
-		// Float64 format (seqid > 0)
-		{
-			name:      "float64 format - 6 digits",
-			input:     1700000000.000123,
-			expectTS:  1700000000,
-			expectSeq: 123,
-			wantErr:   false,
-		},
-		{
-			name:      "float64 1 digit",
-			input:     1700000000.1,
-			expectTS:  1700000000,
-			expectSeq: 100000,
-			wantErr:   false,
-		},
-		{
-			name:      "float64 6 digits precision - max",
-			input:     1700000000.123456,
-			expectTS:  1700000000,
-			expectSeq: 123456,
-			wantErr:   false,
-		},
-		{
-			name:    "float64 all zeros - invalid",
-			input:   1700000000.000000,
-			wantErr: true, // seqid cannot be 0
 		},
 
 		// Error cases
@@ -232,48 +166,34 @@ func TestTimeSeqIDParsing(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "unsupported type",
-			input:   123,
+			name:    "no underscore",
+			input:   "1700000000",
 			wantErr: true,
 		},
 		{
-			name:      "string decimal min valid - 0.000001",
-			input:     "1700000000.000001",
-			expectTS:  1700000000,
-			expectSeq: 1,
-			wantErr:   false,
+			name:    "decimal format not supported",
+			input:   "1700000000.000123",
+			wantErr: true,
 		},
 		{
-			name:      "string decimal 5 digits",
-			input:     "1700000000.00001",
-			expectTS:  1700000000,
-			expectSeq: 10,
-			wantErr:   false,
+			name:    "missing seqid",
+			input:   "1700000000_",
+			wantErr: true,
 		},
 		{
-			name:    "string decimal 7 digits - invalid",
-			input:   "1700000000.0000005",
-			wantErr: true, // More than 6 digits
+			name:    "missing timestamp",
+			input:   "_123",
+			wantErr: true,
 		},
 		{
-			name:    "string decimal 8 digits - invalid",
-			input:   "1700000000.00000001",
-			wantErr: true, // More than 6 digits
+			name:    "non-numeric timestamp",
+			input:   "abc_123",
+			wantErr: true,
 		},
 		{
-			name:    "float64 7 decimals - 0.0000001 - invalid",
-			input:   1700000000.0000001,
-			wantErr: true, // More than 6 decimal places
-		},
-		{
-			name:    "float64 7 decimals - 0.0000005 - invalid",
-			input:   1700000000.0000005,
-			wantErr: true, // More than 6 decimal places
-		},
-		{
-			name:    "float64 7 decimals - 0.1234567 - invalid",
-			input:   1700000000.1234567,
-			wantErr: true, // More than 6 decimal places
+			name:    "non-numeric seqid",
+			input:   "1700000000_abc",
+			wantErr: true,
 		},
 	}
 
@@ -283,13 +203,13 @@ func TestTimeSeqIDParsing(t *testing.T) {
 
 			if tt.wantErr {
 				if err == nil {
-					t.Errorf("ParseTimeSeqID(%v) expected error, got nil", tt.input)
+					t.Errorf("ParseTimeSeqID(%q) expected error, got nil", tt.input)
 				}
 				return
 			}
 
 			if err != nil {
-				t.Fatalf("ParseTimeSeqID(%v) unexpected error: %v", tt.input, err)
+				t.Fatalf("ParseTimeSeqID(%q) unexpected error: %v", tt.input, err)
 			}
 
 			if parsed.Timestamp != tt.expectTS {
@@ -308,26 +228,11 @@ func TestTimeSeqIDParsing(t *testing.T) {
 	}
 
 	// Test round-trip: TimeSeqID -> String -> ParseTimeSeqID
-	t.Run("round-trip string format", func(t *testing.T) {
+	t.Run("round-trip", func(t *testing.T) {
 		original := TimeSeqID{Timestamp: 1700000000, SeqID: 123}
 		str := original.String()
 
 		parsed, err := ParseTimeSeqID(str)
-		if err != nil {
-			t.Fatalf("Parse failed: %v", err)
-		}
-
-		if parsed != original {
-			t.Errorf("Round-trip mismatch: got %+v, want %+v", parsed, original)
-		}
-	})
-
-	// Test round-trip: TimeSeqID -> Score -> ParseTimeSeqID
-	t.Run("round-trip score format", func(t *testing.T) {
-		original := TimeSeqID{Timestamp: 1700000000, SeqID: 123}
-		score := original.Score()
-
-		parsed, err := ParseTimeSeqID(score)
 		if err != nil {
 			t.Fatalf("Parse failed: %v", err)
 		}
