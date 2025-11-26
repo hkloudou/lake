@@ -10,7 +10,7 @@ import (
 type Writer struct {
 	rdb *redis.Client
 	indexKey
-	timeGen *TimeGenerator
+	// timeGen *TimeGenerator
 }
 
 // NewWriter creates a new index writer
@@ -18,7 +18,7 @@ func NewWriter(rdb *redis.Client) *Writer {
 	return &Writer{
 		rdb:      rdb,
 		indexKey: indexKey{prefix: "lake"}, // Will be set later via SetPrefix
-		timeGen:  NewTimeGenerator(rdb),
+		// timeGen:  NewTimeGenerator(rdb),
 	}
 }
 

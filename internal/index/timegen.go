@@ -1,12 +1,8 @@
 package index
 
 import (
-	"context"
 	"fmt"
 	"strings"
-
-	"github.com/hkloudou/lake/v2/internal/encode"
-	"github.com/redis/go-redis/v9"
 )
 
 // TimeSeqID represents a timestamp + sequence ID pair
@@ -32,8 +28,10 @@ func (t TimeSeqID) String() string {
 // ParseTimeSeqID parses a TimeSeqID from string format "timestamp_seqid"
 // Validates:
 // - Format must be "timestamp_seqid"
+// - timestamp must be in range [0, 32503680000] (0 to year 3000)
 // - seqPart length must be <= 6
 // - seqPart must not start with 0 unless it is exactly "0"
+// - Special case: "0_0" is valid (initial snapshot marker)
 func ParseTimeSeqID(s string) (TimeSeqID, error) {
 	// Split by underscore
 	parts := strings.Split(s, "_")
@@ -44,14 +42,20 @@ func ParseTimeSeqID(s string) (TimeSeqID, error) {
 	tsPart := parts[0]
 	seqPart := parts[1]
 
+	// Special case: "0_0" is valid (initial snapshot marker)
+	if s != "0_0" {
+		// Neither part should start with 0 (no leading zeros)
+		if strings.HasPrefix(tsPart, "0") {
+			return TimeSeqID{}, fmt.Errorf("invalid timestamp: %s (cannot have leading zeros)", tsPart)
+		}
+		if strings.HasPrefix(seqPart, "0") {
+			return TimeSeqID{}, fmt.Errorf("invalid seqid: %s (cannot have leading zeros)", seqPart)
+		}
+	}
+
 	// Validate seqPart length (max 6 digits for 999,999 ops/sec)
 	if len(seqPart) > 6 {
 		return TimeSeqID{}, fmt.Errorf("invalid seqid: %s (length %d > 6)", seqPart, len(seqPart))
-	}
-
-	// Validate seqPart: must not start with 0 unless it is exactly "0"
-	if seqPart != "0" && strings.HasPrefix(seqPart, "0") {
-		return TimeSeqID{}, fmt.Errorf("invalid seqid: %s (cannot have leading zeros)", seqPart)
 	}
 
 	// Parse timestamp and seqid
@@ -59,6 +63,12 @@ func ParseTimeSeqID(s string) (TimeSeqID, error) {
 	_, err := fmt.Sscanf(tsPart, "%d", &ts)
 	if err != nil {
 		return TimeSeqID{}, fmt.Errorf("invalid timestamp: %s", tsPart)
+	}
+
+	// Validate timestamp range: 0 (epoch) to 32503680000 (year 3000)
+	// 0 is valid for initial snapshot marker (0_0)
+	if ts < 0 || ts > 32503680000 {
+		return TimeSeqID{}, fmt.Errorf("invalid timestamp: %d (must be in range [0, 32503680000], 0 to year 3000)", ts)
 	}
 
 	_, err = fmt.Sscanf(seqPart, "%d", &seqid)
@@ -147,76 +157,76 @@ func ParseTimeSeqID(s string) (TimeSeqID, error) {
 	// }
 }
 
-// TimeGenerator generates unique timestamp + sequence ID pairs using Redis
-type TimeGenerator struct {
-	rdb *redis.Client
-}
+// // TimeGenerator generates unique timestamp + sequence ID pairs using Redis
+// type TimeGenerator struct {
+// 	rdb *redis.Client
+// }
 
-// NewTimeGenerator creates a new time generator
-func NewTimeGenerator(rdb *redis.Client) *TimeGenerator {
-	return &TimeGenerator{rdb: rdb}
-}
+// // NewTimeGenerator creates a new time generator
+// func NewTimeGenerator(rdb *redis.Client) *TimeGenerator {
+// 	return &TimeGenerator{rdb: rdb}
+// }
 
-// Lua script to generate timestamp + seqid atomically with catalog isolation
-// KEYS[1]: base64 encoded catalog name
-// Returns: {timestamp, seqid}
-const timeGenScript = `
-local catalog = KEYS[1]
-local timeResult = redis.call("TIME")
-local timestamp = timeResult[1]
+// // Lua script to generate timestamp + seqid atomically with catalog isolation
+// // KEYS[1]: base64 encoded catalog name
+// // Returns: {timestamp, seqid}
+// const timeGenScript = `
+// local catalog = KEYS[1]
+// local timeResult = redis.call("TIME")
+// local timestamp = timeResult[1]
 
--- Sequence key includes catalog for isolation
-local seqKey = "lake:seqid:" .. catalog .. ":" .. timestamp
+// -- Sequence key includes catalog for isolation
+// local seqKey = "lake:seqid:" .. catalog .. ":" .. timestamp
 
--- Initialize sequence counter if not exists (expires in 5 seconds)
-local setResult = redis.call("SETNX", seqKey, "0")
-if setResult == 1 then
-    redis.call("EXPIRE", seqKey, 5)
-end
+// -- Initialize sequence counter if not exists (expires in 5 seconds)
+// local setResult = redis.call("SETNX", seqKey, "0")
+// if setResult == 1 then
+//     redis.call("EXPIRE", seqKey, 5)
+// end
 
--- Increment and return
-local seqid = redis.call("INCR", seqKey)
+// -- Increment and return
+// local seqid = redis.call("INCR", seqKey)
 
-return {timestamp, seqid}
-`
+// return {timestamp, seqid}
+// `
 
-// Generate generates a unique TimeSeqID using Redis TIME + INCR
-// catalog: catalog name for seqid isolation (will be base64 URL encoded)
-func (g *TimeGenerator) Generate(ctx context.Context, catalog string) (TimeSeqID, error) {
-	// Base64 URL encode the catalog name to avoid special characters
-	encodedCatalog := encode.EncodeRedisCatalogName(catalog)
+// // Generate generates a unique TimeSeqID using Redis TIME + INCR
+// // catalog: catalog name for seqid isolation (will be base64 URL encoded)
+// func (g *TimeGenerator) Generate(ctx context.Context, catalog string) (TimeSeqID, error) {
+// 	// Base64 URL encode the catalog name to avoid special characters
+// 	encodedCatalog := encode.EncodeRedisCatalogName(catalog)
 
-	// Pass encoded catalog as KEYS[1]
-	result, err := g.rdb.Eval(ctx, timeGenScript, []string{encodedCatalog}).Result()
-	if err != nil {
-		return TimeSeqID{}, fmt.Errorf("failed to generate time+seqid: %w", err)
-	}
+// 	// Pass encoded catalog as KEYS[1]
+// 	result, err := g.rdb.Eval(ctx, timeGenScript, []string{encodedCatalog}).Result()
+// 	if err != nil {
+// 		return TimeSeqID{}, fmt.Errorf("failed to generate time+seqid: %w", err)
+// 	}
 
-	// Parse result
-	arr, ok := result.([]interface{})
-	if !ok || len(arr) != 2 {
-		return TimeSeqID{}, fmt.Errorf("unexpected result format: %v", result)
-	}
+// 	// Parse result
+// 	arr, ok := result.([]interface{})
+// 	if !ok || len(arr) != 2 {
+// 		return TimeSeqID{}, fmt.Errorf("unexpected result format: %v", result)
+// 	}
 
-	// Redis TIME returns strings
-	tsStr, ok := arr[0].(string)
-	if !ok {
-		return TimeSeqID{}, fmt.Errorf("invalid timestamp type: %T", arr[0])
-	}
+// 	// Redis TIME returns strings
+// 	tsStr, ok := arr[0].(string)
+// 	if !ok {
+// 		return TimeSeqID{}, fmt.Errorf("invalid timestamp type: %T", arr[0])
+// 	}
 
-	seqid, ok := arr[1].(int64)
-	if !ok {
-		return TimeSeqID{}, fmt.Errorf("invalid seqid type: %T", arr[1])
-	}
+// 	seqid, ok := arr[1].(int64)
+// 	if !ok {
+// 		return TimeSeqID{}, fmt.Errorf("invalid seqid type: %T", arr[1])
+// 	}
 
-	var timestamp int64
-	_, err = fmt.Sscanf(tsStr, "%d", &timestamp)
-	if err != nil {
-		return TimeSeqID{}, fmt.Errorf("failed to parse timestamp: %w", err)
-	}
+// 	var timestamp int64
+// 	_, err = fmt.Sscanf(tsStr, "%d", &timestamp)
+// 	if err != nil {
+// 		return TimeSeqID{}, fmt.Errorf("failed to parse timestamp: %w", err)
+// 	}
 
-	return TimeSeqID{
-		Timestamp: timestamp,
-		SeqID:     seqid,
-	}, nil
-}
+// 	return TimeSeqID{
+// 		Timestamp: timestamp,
+// 		SeqID:     seqid,
+// 	}, nil
+// }
