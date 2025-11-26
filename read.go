@@ -85,7 +85,17 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
-	tr.RecordSpan("Read.Merge")
+	for _, entry := range list.Entries {
+		tr.RecordSpan("Read.Merge.Entry", map[string]interface{}{
+			"path":      entry.Path,
+			"mergeType": entry.MergeType,
+			"tsSeq":     entry.TsSeq.String(),
+		})
+	}
+	tr.RecordSpan("Read.Merge.Done", map[string]interface{}{
+		"catalog": list.catalog,
+		"size":    len(resultData),
+	})
 
 	// Generate and save new snapshot asynchronously (non-blocking)
 	if nextSnap := list.NextSnap(); nextSnap != nil {

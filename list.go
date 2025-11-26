@@ -115,9 +115,13 @@ func (c *Client) List(ctx context.Context, catalog string) *ListResult {
 	var readResult *index.ReadIndexResult
 
 	if snap != nil {
+		tr.RecordSpan("List.ReadSince", map[string]interface{}{
+			"since": snap.StopTsSeq.String(),
+		})
 		readResult = c.reader.ReadSince(ctx, catalog, snap.StopTsSeq.Score())
 	} else {
 		// No snapshot, read all
+		tr.RecordSpan("List.ReadAll")
 		readResult = c.reader.ReadAll(ctx, catalog)
 	}
 	tr.RecordSpan("List.ReadIndex", map[string]interface{}{

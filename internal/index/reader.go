@@ -48,7 +48,11 @@ type ReadIndexResult struct {
 
 // ReadAll reads all entries from the catalog
 func (r *Reader) ReadAll(ctx context.Context, catalog string) *ReadIndexResult {
+	tr := trace.FromContext(ctx)
 	key := r.makeDeltaZsetKey(catalog)
+	tr.RecordSpan("Read.ReadAll", map[string]interface{}{
+		"key": key,
+	})
 	return r.readRange(ctx, key, "-inf", "+inf")
 }
 
