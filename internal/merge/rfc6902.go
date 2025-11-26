@@ -94,7 +94,7 @@ func (m *RFC6902Merger) mergeField(original, patchData []byte, field string) ([]
 func (m *RFC6902Merger) UpdatedMap(entries []index.DeltaInfo) map[string]index.TimeSeqID {
 	updatedMap := make(map[string]index.TimeSeqID, 0)
 	for _, entry := range entries {
-		updatedMap[entry.Field] = entry.TsSeq
+		updatedMap[entry.Path] = entry.TsSeq
 	}
 	return updatedMap
 }

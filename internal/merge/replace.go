@@ -38,7 +38,7 @@ func (m *ReplaceMerger) Merge(original, data []byte, field string) ([]byte, erro
 func (m *ReplaceMerger) UpdatedMap(entries []index.DeltaInfo) map[string]index.TimeSeqID {
 	updatedMap := make(map[string]index.TimeSeqID, 0)
 	for _, entry := range entries {
-		updatedMap[entry.Field] = entry.TsSeq
+		updatedMap[entry.Path] = entry.TsSeq
 	}
 	return updatedMap
 }

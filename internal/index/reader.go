@@ -32,10 +32,10 @@ func NewReader(rdb *redis.Client) *Reader {
 
 // DeltaInfo represents delta information (with optional body data)
 type DeltaInfo struct {
-	Field     string
 	TsSeq     TimeSeqID
 	MergeType MergeType
 	Score     float64
+	Path      string
 	Body      []byte // Optional: filled by fillDeltasBody
 }
 
@@ -154,7 +154,7 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) *ReadIndex
 			continue
 		}
 
-		field, mergeType, err := DecodeDeltaMember(member)
+		fieldPath, mergeType, err := DecodeDeltaMember(member)
 		if err != nil {
 			continue // Skip invalid members
 		}
@@ -166,7 +166,7 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) *ReadIndex
 		}
 
 		entries = append(entries, DeltaInfo{
-			Field:     field,
+			Path:      fieldPath,
 			TsSeq:     tsSeq,
 			MergeType: mergeType,
 			Score:     z.Score,

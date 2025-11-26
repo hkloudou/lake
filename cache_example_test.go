@@ -15,14 +15,13 @@ func TestWithCacheHelper(t *testing.T) {
 	// Create Lake client with Redis cache
 	client := lake.NewLake(
 		"redis://lake-redis-master.cs:6379/2",
-		lake.WithRedisCache("redis://lake-redis-master.cs:6379/2", 5*time.Minute),
 	)
 
 	ctx := context.Background()
 	// Write some data
-	_, writeErr := client.Write(ctx, lake.WriteRequest{
+	writeErr := client.Write(ctx, lake.WriteRequest{
 		Catalog:   "users",
-		Field:     "/profile",
+		Path:      "/profile",
 		Body:      []byte(`{"name":"Alice2","age":30}`),
 		MergeType: lake.MergeTypeReplace,
 	})
@@ -75,15 +74,15 @@ func TestWithRedisCache(t *testing.T) {
 	// Create client with cache
 	client := lake.NewLake(
 		"redis://localhost:6379/15",
-		lake.WithCache(redisCache),
+		lake.WithSnapCache(redisCache),
 	)
 
 	catalog := "test_cache"
 
 	// Write some data
-	_, writeErr := client.Write(ctx, lake.WriteRequest{
+	writeErr := client.Write(ctx, lake.WriteRequest{
 		Catalog:   catalog,
-		Field:     "/user",
+		Path:      "/user",
 		Body:      []byte(`{"name":"Bob","age":25}`),
 		MergeType: lake.MergeTypeReplace,
 	})
@@ -126,9 +125,9 @@ func TestWithNoOpCache(t *testing.T) {
 	// This client uses NoOpCache by default (always loads from storage)
 	ctx := context.Background()
 
-	_, writeErr := client.Write(ctx, lake.WriteRequest{
+	writeErr := client.Write(ctx, lake.WriteRequest{
 		Catalog:   "test_nocache",
-		Field:     "/data",
+		Path:      "/data",
 		Body:      []byte(`"test"`),
 		MergeType: lake.MergeTypeReplace,
 	})

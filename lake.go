@@ -19,6 +19,7 @@ type Client struct {
 	rdb    *redis.Client
 	writer *index.Writer
 	reader *index.Reader
+
 	// merger     *merge.Engine // Legacy (deprecated)
 	configMgr  *config.Manager
 	snapCache  cache.Cache // Snapshot cache (Redis or NoOp)
@@ -34,14 +35,15 @@ type Client struct {
 }
 
 // Option is a function that configures the client
-type Option struct {
-	Storage       storage.Storage
-	CacheProvider cache.Cache
+type option struct {
+	Storage            storage.Storage
+	SnapCacheProvider  cache.Cache
+	DeltaCacheProvider cache.Cache
 }
 
 // NewLake creates a new Lake client with the given Redis URL
 // Config is loaded lazily on first operation
-func NewLake(metaUrl string, opts ...func(*Option)) *Client {
+func NewLake(metaUrl string, opts ...func(*option)) *Client {
 	// Parse Redis URL
 	redisOpt, err := redis.ParseURL(metaUrl)
 	if err != nil {
@@ -54,7 +56,7 @@ func NewLake(metaUrl string, opts ...func(*Option)) *Client {
 	rdb := redis.NewClient(redisOpt)
 
 	// Apply options
-	option := &Option{}
+	option := &option{}
 	for _, opt := range opts {
 		opt(option)
 	}
@@ -64,13 +66,17 @@ func NewLake(metaUrl string, opts ...func(*Option)) *Client {
 	// merger := merge.NewEngine()
 	configMgr := config.NewManager(rdb)
 
-	// Use provided cache or default to no-op cache
-	cacheProvider := option.CacheProvider
-	if cacheProvider == nil {
-		cacheProvider = cache.NewMemoryCache(1 * time.Hour)
+	// Use provided cache or default to main Redis cache with 1 hour TTL
+	snapCache := option.SnapCacheProvider
+	if snapCache == nil {
+		snapCache = cache.NewRedisCache(rdb, 1*time.Hour)
 	}
-	// Delta cache: in-memory with 10 minute TTL for delta files
-	deltaCache := cache.NewMemoryCache(10 * time.Minute)
+
+	// Use provided cache or default to memory cache with 10 minute TTL
+	deltaCache := option.DeltaCacheProvider
+	if deltaCache == nil {
+		deltaCache = cache.NewMemoryCache(10 * time.Minute)
+	}
 
 	client := &Client{
 		rdb:    rdb,
@@ -79,8 +85,8 @@ func NewLake(metaUrl string, opts ...func(*Option)) *Client {
 		// merger:     merger,
 		configMgr:  configMgr,
 		storage:    option.Storage, // May be nil, will be loaded lazily
-		snapCache:  cacheProvider,  // Snapshot cache (Redis or NoOp)
-		deltaCache: deltaCache,     // Delta cache (Memory, 10min)
+		snapCache:  snapCache,
+		deltaCache: deltaCache,
 		snapFlight: xsync.NewSingleFlight[string](),
 	}
 	// client.startRedisTimeUnixUpdater()
@@ -88,25 +94,40 @@ func NewLake(metaUrl string, opts ...func(*Option)) *Client {
 }
 
 // WithCache returns an option function that sets the cache provider
-func WithCache(cacheProvider cache.Cache) func(*Option) {
-	return func(opt *Option) {
-		opt.CacheProvider = cacheProvider
+func WithSnapCache(cacheProvider cache.Cache) func(*option) {
+	return func(opt *option) {
+		opt.SnapCacheProvider = cacheProvider
 	}
 }
 
-func WithRedisCache(metaUrl string, ttl time.Duration) func(*Option) {
-	return func(opt *Option) {
-		cacheProvider, err := cache.NewRedisCacheWithURL(metaUrl, ttl)
-		if err != nil {
-			panic(err)
-		}
-		opt.CacheProvider = cacheProvider
+// WithCache returns an option function that sets the cache provider
+func WithSnapCacheMetaURL(metaUrl string, ttl time.Duration) func(*option) {
+	cacheProvider, err := cache.NewRedisCacheWithURL(metaUrl, ttl)
+	if err != nil {
+		panic(err)
 	}
+	return WithSnapCache(cacheProvider)
+}
+
+// WithCache returns an option function that sets the cache provider
+func WithDeltaCache(cacheProvider cache.Cache) func(*option) {
+	return func(opt *option) {
+		opt.DeltaCacheProvider = cacheProvider
+	}
+}
+
+// WithCache returns an option function that sets the cache provider
+func WithDeltaCacheMetaURL(metaUrl string, ttl time.Duration) func(*option) {
+	cacheProvider, err := cache.NewRedisCacheWithURL(metaUrl, ttl)
+	if err != nil {
+		panic(err)
+	}
+	return WithDeltaCache(cacheProvider)
 }
 
 // WithStorage returns an option function that sets the storage provider
-func WithStorage(storage storage.Storage) func(*Option) {
-	return func(opt *Option) {
+func WithStorage(storage storage.Storage) func(*option) {
+	return func(opt *option) {
 		opt.Storage = storage
 	}
 }

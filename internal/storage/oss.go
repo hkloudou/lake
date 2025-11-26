@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 
@@ -45,6 +46,13 @@ func NewOSSStorage(cfg OSSConfig) (*ossStorage, error) {
 		endpoint = endpoint + "-internal"
 	}
 	if !strings.HasPrefix(endpoint, "http") {
+		// step1: check if FC_REGION is set and if the endpoint contains the FC_REGION and the endpoint does not contain -internal
+		fcRegion := os.Getenv("FC_REGION")
+		if fcRegion != "" && strings.Contains(endpoint, fcRegion) && !strings.Contains(endpoint, "-internal") {
+			endpoint = endpoint + "-internal"
+		}
+
+		//end step: fill the endpoint with the region
 		endpoint = fmt.Sprintf("https://%s.aliyuncs.com", endpoint)
 	}
 

@@ -45,7 +45,7 @@ func (m ListResult) Dump() string {
 		// output.WriteString(fmt.Sprintf("Entries: %d total\n", len(m.Entries)))
 		for i, entry := range m.Entries {
 			output.WriteString(fmt.Sprintf("\n[%d/%d] --------------------------------\n", i+1, len(m.Entries)))
-			output.WriteString(fmt.Sprintf("  Field: %s\n", entry.Field))
+			output.WriteString(fmt.Sprintf("  Path: %s\n", entry.Path))
 			output.WriteString(fmt.Sprintf("  TsSeq: %s\n", entry.TsSeq))
 			output.WriteString(fmt.Sprintf("  MergeType: %d (%s)\n", entry.MergeType, entry.MergeType.String()))
 			output.WriteString(fmt.Sprintf("  Score: %.6f\n", entry.Score))

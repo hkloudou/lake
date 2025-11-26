@@ -6,21 +6,18 @@ import (
 	"testing"
 
 	"github.com/hkloudou/lake/v2"
-	"github.com/hkloudou/lake/v2/internal/storage"
 )
 
 func TestBasicUsage(t *testing.T) {
 	// For testing, provide storage directly via options
-	client := lake.NewLake("redis://lake-redis-master.cs:6379/2", func(opt *lake.Option) {
-		opt.Storage = storage.NewMemoryStorage("test")
-	})
+	client := lake.NewLake("redis://lake-redis-master.cs:6379/2")
 
 	ctx := context.Background()
 
 	// Write some data (Body is raw JSON)
-	_, err := client.Write(ctx, lake.WriteRequest{
+	err := client.Write(ctx, lake.WriteRequest{
 		Catalog:   "users",
-		Field:     "/profile/name",
+		Path:      "/profile/name",
 		Body:      []byte(`"Alice"`), // JSON string
 		MergeType: lake.MergeTypeReplace,
 	})
@@ -28,9 +25,9 @@ func TestBasicUsage(t *testing.T) {
 		t.Fatalf("Write failed: %v", err)
 	}
 
-	_, err = client.Write(ctx, lake.WriteRequest{
+	err = client.Write(ctx, lake.WriteRequest{
 		Catalog:   "users",
-		Field:     "/profile/age",
+		Path:      "/profile/age",
 		Body:      []byte(`30`), // JSON number
 		MergeType: lake.MergeTypeReplace,
 	})
@@ -66,9 +63,9 @@ func TestWriteRFC6902(t *testing.T) {
 			{ "op": "copy", "from": "/a/b/d", "path": "/a/b/e" }
 		]`)
 
-		_, err := client.Write(ctx, lake.WriteRequest{
+		err := client.Write(ctx, lake.WriteRequest{
 			Catalog:   catalog,
-			Field:     "/", // Root document
+			Path:      "/", // Root document
 			Body:      patchOps,
 			MergeType: lake.MergeTypeRFC6902,
 		})
@@ -85,9 +82,9 @@ func TestWriteRFC6902(t *testing.T) {
 			{ "op": "add", "path": "/y", "value": 123 }
 		]`)
 
-		_, err := client.Write(ctx, lake.WriteRequest{
+		err := client.Write(ctx, lake.WriteRequest{
 			Catalog:   catalog,
-			Field:     "/profile", // Patch applies to "profile" field only
+			Path:      "/profile", // Patch applies to "profile" field only
 			Body:      patchOpsField,
 			MergeType: lake.MergeTypeRFC6902,
 		})
@@ -118,9 +115,9 @@ func TestWriteData(t *testing.T) {
 
 	// Test different merge types
 	t.Run("replace", func(t *testing.T) {
-		_, err := client.Write(ctx, lake.WriteRequest{
+		err := client.Write(ctx, lake.WriteRequest{
 			Catalog:   catalog,
-			Field:     "/user/name",
+			Path:      "/user/name",
 			Body:      []byte(`"Alice"`), // JSON string
 			MergeType: lake.MergeTypeReplace,
 		})
@@ -131,9 +128,9 @@ func TestWriteData(t *testing.T) {
 	})
 
 	t.Run("rfc7396 merge", func(t *testing.T) {
-		_, err := client.Write(ctx, lake.WriteRequest{
+		err := client.Write(ctx, lake.WriteRequest{
 			Catalog:   catalog,
-			Field:     "/user",
+			Path:      "/user",
 			Body:      []byte(`{"age": 31, "city": "NYC2"}`), // JSON object
 			MergeType: lake.MergeTypeRFC7396,
 		})

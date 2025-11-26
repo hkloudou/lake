@@ -1,6 +1,8 @@
 package lake
 
-import "github.com/hkloudou/lake/v2/internal/index"
+import (
+	"github.com/hkloudou/lake/v2/internal/index"
+)
 
 // MergeType defines how to merge values (re-exported from index for public API)
 type MergeType = index.MergeType

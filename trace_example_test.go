@@ -27,7 +27,7 @@ import (
 //	}
 func TestReadSimple(t *testing.T) {
 
-	client := lake.NewLake("redis://lake-redis-master.cs:6379/2", lake.WithRedisCache("redis://lake-redis-master.cs:6379/2", 1*time.Hour))
+	client := lake.NewLake("redis://lake-redis-master.cs:6379/2")
 	// Create context with trace enabled (operation name auto-detected or specified)
 	ctx := trace.WithTrace(context.Background())
 	// for i := 0; i < 5; i++ {
@@ -55,9 +55,9 @@ func TestWriteWithTrace(t *testing.T) {
 	catalog := "test_trace"
 
 	// Write with trace
-	_, err := client.Write(ctx, lake.WriteRequest{
+	err := client.Write(ctx, lake.WriteRequest{
 		Catalog:   catalog,
-		Field:     "/user.info/profile.data",
+		Path:      "/user.info/profile.data",
 		Body:      []byte(`"Bob"`),
 		MergeType: lake.MergeTypeReplace,
 	})
@@ -81,9 +81,9 @@ func TestMultipleWritesWithTrace(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		ctx := trace.WithTrace(context.Background(), fmt.Sprintf("Write_%d", i))
 
-		_, err := client.Write(ctx, lake.WriteRequest{
+		err := client.Write(ctx, lake.WriteRequest{
 			Catalog:   catalog,
-			Field:     fmt.Sprintf("/field_%d", i),
+			Path:      fmt.Sprintf("/field_%d", i),
 			Body:      []byte(fmt.Sprintf(`"value_%d"`, i)),
 			MergeType: lake.MergeTypeReplace,
 		})
@@ -102,9 +102,9 @@ func TestWriteWithoutTrace(t *testing.T) {
 	// Regular context without trace (no overhead)
 	ctx := context.Background()
 
-	_, err := client.Write(ctx, lake.WriteRequest{
+	err := client.Write(ctx, lake.WriteRequest{
 		Catalog:   "test_no_trace",
-		Field:     "/data",
+		Path:      "/data",
 		Body:      []byte(`"test"`),
 		MergeType: lake.MergeTypeReplace,
 	})

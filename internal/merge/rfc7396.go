@@ -71,7 +71,7 @@ func (m *RFC7396Merger) mergeField(original, patchData []byte, field string) ([]
 func (m *RFC7396Merger) UpdatedMap(entries []index.DeltaInfo) map[string]index.TimeSeqID {
 	hm := NewHierarchicalUpdateMap()
 	for _, entry := range entries {
-		hm.Update(entry.Field, entry.TsSeq)
+		hm.Update(entry.Path, entry.TsSeq)
 	}
 	return hm.GetAll()
 }

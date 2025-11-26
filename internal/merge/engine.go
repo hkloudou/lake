@@ -21,21 +21,21 @@ var mergers = map[int]Merger{
 }
 
 // Engine is a JavaScript-based JSON merge engine using goja
-type Engine struct {
-	// vm *goja.Runtime
-}
+// type Engine struct {
+// vm *goja.Runtime
+// }
 
 // NewEngine creates a new merge engine
-func NewEngine() *Engine {
-	// vm := goja.New()
+// func NewEngine() *Engine {
+// 	// vm := goja.New()
 
-	// Load merge utilities
-	// vm.RunString(mergeScript)
+// 	// Load merge utilities
+// 	// vm.RunString(mergeScript)
 
-	return &Engine{}
-}
+// 	return &Engine{}
+// }
 
-func (c *Engine) Merge(catalog string, baseData []byte, entries []index.DeltaInfo) ([]byte, map[string]index.TimeSeqID, error) {
+func Merge(catalog string, baseData []byte, entries []index.DeltaInfo) ([]byte, map[string]index.TimeSeqID, error) {
 	merged := baseData
 	var updatedAtMap = make(map[string]index.TimeSeqID, 0)
 	for _, entry := range entries {
@@ -52,7 +52,7 @@ func (c *Engine) Merge(catalog string, baseData []byte, entries []index.DeltaInf
 
 		// Apply merge using unified interface
 		var err error
-		merged, err = merger.Merge(merged, entry.Body, ToGjsonPath(entry.Field))
+		merged, err = merger.Merge(merged, entry.Body, ToGjsonPath(entry.Path))
 		if err != nil {
 			return nil, nil, fmt.Errorf("merge failed (type=%d): %w", entry.MergeType, err)
 		}
