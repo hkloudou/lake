@@ -33,6 +33,13 @@ func (w *indexIO) makeSnapKey(catalog string) string {
 	return fmt.Sprintf("%s:snap:%s", w.prefix, encode.EncodeRedisCatalogName(catalog))
 }
 
+func (w *indexIO) makeSampleKey(catalog string) string {
+	if w.prefix == "" {
+		panic("prefix is not set")
+	}
+	return fmt.Sprintf("%s:sample:%s", w.prefix, encode.EncodeRedisCatalogName(catalog))
+}
+
 // SetPrefix sets the key prefix (e.g., "oss:my-lake")
 func (w *indexIO) SetPrefix(prefix string) {
 	w.prefix = prefix

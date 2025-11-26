@@ -31,7 +31,8 @@ type Client struct {
 	config  *config.Config
 	// redisTimeUnix int64
 
-	snapFlight xsync.SingleFlight[string]
+	snapFlight   xsync.SingleFlight[string]
+	sampleFlight xsync.SingleFlight[float64]
 }
 
 // Option is a function that configures the client
@@ -83,11 +84,12 @@ func NewLake(metaUrl string, opts ...func(*option)) *Client {
 		writer: writer,
 		reader: reader,
 		// merger:     merger,
-		configMgr:  configMgr,
-		storage:    option.Storage, // May be nil, will be loaded lazily
-		snapCache:  snapCache,
-		deltaCache: deltaCache,
-		snapFlight: xsync.NewSingleFlight[string](),
+		configMgr:    configMgr,
+		storage:      option.Storage, // May be nil, will be loaded lazily
+		snapCache:    snapCache,
+		deltaCache:   deltaCache,
+		snapFlight:   xsync.NewSingleFlight[string](),
+		sampleFlight: xsync.NewSingleFlight[float64](),
 	}
 	// client.startRedisTimeUnixUpdater()
 	return client

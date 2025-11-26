@@ -19,6 +19,16 @@ type ListResult struct {
 	Err        error             // Error if pending writes detected (non-fatal)
 }
 
+func (m ListResult) LastUpdated() float64 {
+	if len(m.Entries) > 0 {
+		return m.Entries[len(m.Entries)-1].Score
+	}
+	if m.LatestSnap != nil {
+		return m.LatestSnap.StopTsSeq.Score()
+	}
+	return 0
+}
+
 func (m ListResult) Exist() bool {
 	// return m.LatestSnap != nil || len(m.Entries) > 0 || m.HasPending //removed pending writes for now
 	return m.LatestSnap != nil || len(m.Entries) > 0

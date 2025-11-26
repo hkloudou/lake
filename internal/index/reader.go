@@ -46,6 +46,11 @@ type ReadIndexResult struct {
 	Err        error
 }
 
+type SampleInfo struct {
+	Indicator string
+	Score     float64
+}
+
 // ReadAll reads all entries from the catalog
 func (r *Reader) ReadAll(ctx context.Context, catalog string) *ReadIndexResult {
 	tr := trace.FromContext(ctx)
