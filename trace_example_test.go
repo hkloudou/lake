@@ -53,7 +53,6 @@ func TestWriteWithTrace(t *testing.T) {
 	ctx := trace.WithTrace(context.Background())
 
 	catalog := "test_trace"
-
 	// Write with trace
 	err := client.Write(ctx, lake.WriteRequest{
 		Catalog:   catalog,

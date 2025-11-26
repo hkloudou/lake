@@ -3,6 +3,7 @@ package lake
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/hkloudou/lake/v2/internal/index"
 	"github.com/hkloudou/lake/v2/internal/merge"
@@ -87,6 +88,9 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) error {
 
 	// Step 4: Atomically commit (remove pending, add committed)
 	committedMember := index.EncodeDeltaMember(req.Path, req.MergeType, tsSeq)
+	if strings.TrimPrefix(pendingMember, "pending|") != committedMember {
+		return fmt.Errorf("pending member and committed member do not match: %s != %s", pendingMember, committedMember)
+	}
 	err = c.writer.Commit(ctx, req.Catalog, pendingMember, committedMember, tsSeq.Score())
 	if err != nil {
 		return fmt.Errorf("failed to commit: %w", err)

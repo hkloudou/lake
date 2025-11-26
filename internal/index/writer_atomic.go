@@ -14,7 +14,7 @@ import (
 const getTimeSeqIDAndPreCommitScript = `
 -- KEYS[1]: base64 encoded catalog name (for seqid isolation)
 -- KEYS[2]: Redis ZADD key (e.g., "oss:mylake:delta:users")
--- ARGV[1]: encoded field
+-- ARGV[1]: field (raw, not encoded - used in member value)
 -- ARGV[2]: mergeType
 
 local catalog = KEYS[1]
@@ -126,13 +126,13 @@ func (w *Writer) GetTimeSeqIDAndPreCommit(ctx context.Context, catalog, field st
 	encodedCatalog := encode.EncodeRedisCatalogName(catalog)
 	zaddKey := w.makeDeltaZsetKey(catalog)
 
-	// Encode field for member
-	encodedField := encodeField(field)
+	// Field is used as-is in member, no encoding needed
+	// (encoding is only for Redis keys, not member values)
 
 	// Execute Lua script
 	result, err := w.rdb.Eval(ctx, getTimeSeqIDAndPreCommitScript,
 		[]string{encodedCatalog, zaddKey},
-		encodedField, int(mergeType)).Result()
+		field, int(mergeType)).Result()
 
 	if err != nil {
 		return TimeSeqID{}, "", fmt.Errorf("failed to get timeseq and precommit: %w", err)
@@ -200,6 +200,6 @@ func (w *Writer) Commit(ctx context.Context, catalog, pendingMember, committedMe
 // 	return encode.EncodeRedisCatalogName(catalog)
 // }
 
-func encodeField(field string) string {
-	return encode.EncodeRedisCatalogName(field)
-}
+// func encodeField(field string) string {
+// 	return encode.EncodeRedisCatalogName(field)
+// }
