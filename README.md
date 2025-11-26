@@ -264,12 +264,12 @@ Redis Index:
            Valid: 1700000000.000001 to 1700000000.999999
     
   Delta member format:
-    delta|{mergeType}|{field}
-    Example: delta|1|/user/name
+    delta|{mergeType}|{field}|{tsSeq}
+    Example: delta|1|/user/name|1700000000_1
     
   Pending member format (uncommitted writes):
-    pending|delta|{field}|{ts_seqid}|{mergeType}
-    Example: pending|delta|/user/name|1700000000_123|1
+    pending|delta|{mergeType}|{field}|{tsSeq}
+    Example: pending|delta|1|/user/name|1700000000_1
     
   Snapshot member format:
     snap|{startTsSeq}|{stopTsSeq}
