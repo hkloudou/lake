@@ -195,6 +195,26 @@ func TestTimeSeqIDParsing(t *testing.T) {
 			input:   "1700000000_abc",
 			wantErr: true,
 		},
+		{
+			name:    "seqid with leading zero",
+			input:   "1700000000_01",
+			wantErr: true,
+		},
+		{
+			name:    "seqid with multiple leading zeros",
+			input:   "1700000000_001",
+			wantErr: true,
+		},
+		{
+			name:    "seqid too long - 7 digits",
+			input:   "1700000000_1234567",
+			wantErr: true,
+		},
+		{
+			name:    "seqid too long - 8 digits",
+			input:   "1700000000_12345678",
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {

@@ -3,7 +3,6 @@ package index
 import (
 	"context"
 	"fmt"
-	"math"
 	"strings"
 
 	"github.com/hkloudou/lake/v2/internal/encode"
@@ -30,71 +29,122 @@ func (t TimeSeqID) String() string {
 	return fmt.Sprintf("%d_%d", t.Timestamp, t.SeqID)
 }
 
-// ParseTimeSeqID parses a TimeSeqID from string format
-func ParseTimeSeqID(s any) (TimeSeqID, error) {
-	switch v := s.(type) {
-	case string:
-		// Try format: "timestamp_seqid"
-		var ts, seqid int64
-		_, err := fmt.Sscanf(v, "%d_%d", &ts, &seqid)
-		if err == nil {
-			return TimeSeqID{Timestamp: ts, SeqID: seqid}, nil
-		}
-
-		// Try format: "timestamp.seqid" (decimal with 1-6 digits, auto-padded to 6)
-		// First validate string format before parsing
-		dotIndex := strings.Index(v, ".")
-		if dotIndex == -1 {
-			return TimeSeqID{}, fmt.Errorf("invalid format: score must have decimal point (format: timestamp.x to timestamp.xxxxxx)")
-		}
-
-		// Get decimal part and check length (1-6 digits allowed)
-		decimalPart := v[dotIndex+1:]
-		if len(decimalPart) < 1 || len(decimalPart) > 6 {
-			return TimeSeqID{}, fmt.Errorf("invalid precision: score must have 1-6 decimal places, got %d decimal places", len(decimalPart))
-		}
-
-		// Parse to float64
-		var tsFloat float64
-		_, err = fmt.Sscanf(v, "%f", &tsFloat)
-		if err != nil {
-			return TimeSeqID{}, fmt.Errorf("invalid TimeSeqID format: %s", v)
-		}
-
-		// Reuse float64 validation logic by recursive call
-		return ParseTimeSeqID(tsFloat)
-
-	case float64:
-		// Extract timestamp and seqid from float
-		ts := int64(v)
-		fractional := v - float64(ts)
-		seqid := int64(math.Round(fractional * 1000000))
-
-		// Validate: seqid cannot be 0 (fractional part must be non-zero)
-		if seqid == 0 {
-			return TimeSeqID{}, fmt.Errorf("invalid score: seqid cannot be 0 (fractional part must be non-zero)")
-		}
-
-		// Validate: seqid must be valid (0 < seqid < 1000000)
-		if seqid < 0 || seqid >= 1000000 {
-			return TimeSeqID{}, fmt.Errorf("invalid score: seqid out of range (must be 0 < seqid < 1000000), got %d", seqid)
-		}
-
-		// Validate: score must be exactly representable in 6 decimal places
-		// Reconstruct the score and check if it matches the original
-		reconstructed := float64(ts) + float64(seqid)/1000000.0
-		diff := math.Abs(v - reconstructed)
-		// Allow tiny floating point error (< 1e-10), but reject anything larger
-		// which indicates more than 6 decimal places
-		if diff > 1e-10 {
-			return TimeSeqID{}, fmt.Errorf("invalid precision: score has more than 6 decimal places (got %f, reconstructed %f, diff %e)", v, reconstructed, diff)
-		}
-
-		return TimeSeqID{Timestamp: ts, SeqID: seqid}, nil
-
-	default:
-		return TimeSeqID{}, fmt.Errorf("unsupported type for TimeSeqID: %T", s)
+// ParseTimeSeqID parses a TimeSeqID from string format "timestamp_seqid"
+// Validates:
+// - Format must be "timestamp_seqid"
+// - seqPart length must be <= 6
+// - seqPart must not start with 0 unless it is exactly "0"
+func ParseTimeSeqID(s string) (TimeSeqID, error) {
+	// Split by underscore
+	parts := strings.Split(s, "_")
+	if len(parts) != 2 {
+		return TimeSeqID{}, fmt.Errorf("invalid TimeSeqID format: %s (expected format: timestamp_seqid)", s)
 	}
+
+	tsPart := parts[0]
+	seqPart := parts[1]
+
+	// Validate seqPart length (max 6 digits for 999,999 ops/sec)
+	if len(seqPart) > 6 {
+		return TimeSeqID{}, fmt.Errorf("invalid seqid: %s (length %d > 6)", seqPart, len(seqPart))
+	}
+
+	// Validate seqPart: must not start with 0 unless it is exactly "0"
+	if seqPart != "0" && strings.HasPrefix(seqPart, "0") {
+		return TimeSeqID{}, fmt.Errorf("invalid seqid: %s (cannot have leading zeros)", seqPart)
+	}
+
+	// Parse timestamp and seqid
+	var ts, seqid int64
+	_, err := fmt.Sscanf(tsPart, "%d", &ts)
+	if err != nil {
+		return TimeSeqID{}, fmt.Errorf("invalid timestamp: %s", tsPart)
+	}
+
+	_, err = fmt.Sscanf(seqPart, "%d", &seqid)
+	if err != nil {
+		return TimeSeqID{}, fmt.Errorf("invalid seqid: %s", seqPart)
+	}
+
+	return TimeSeqID{Timestamp: ts, SeqID: seqid}, nil
+
+	// switch v := s.(type) {
+	// case string:
+	// 	// Try format: "timestamp_seqid"
+	// 	if strings.Contains(v, "_") {
+	// 		var ts, seqid int64
+	// 		_, err := fmt.Sscanf(v, "%d_%d", &ts, &seqid)
+	// 		if err != nil {
+	// 			return TimeSeqID{}, fmt.Errorf("invalid TimeSeqID format: %s", v)
+	// 		}
+	// 		return TimeSeqID{Timestamp: ts, SeqID: seqid}, nil
+	// 	} else if strings.Contains(v, ".") {
+	// 		// Try format: "timestamp.seqid" (decimal with 1-6 digits, auto-padded to 6)
+	// 		// First validate string format before parsing
+	// 		dotIndex := strings.Index(v, ".")
+	// 		if dotIndex == -1 {
+	// 			return TimeSeqID{}, fmt.Errorf("invalid format: score must have decimal point (format: timestamp.x to timestamp.xxxxxx)")
+	// 		}
+
+	// 		// // Get decimal part and check length (1-6 digits allowed)
+	// 		decimalPart := v[dotIndex+1:]
+	// 		ts, err := strconv.ParseInt(v[:dotIndex], 10, 64)
+	// 		if err != nil {
+	// 			return TimeSeqID{}, fmt.Errorf("invalid timestamp: %w", err)
+	// 		}
+	// 		// ts must be >= unix epoch (1970-01-01T00:00:00Z, time.Unix(0,0)), and should not exceed 32503680000 (year 3000).
+	// 		// 9007199254740992 is just the max safe integer for float64, but we do not recommend using such large values (mainly to avoid accidental use of ms timestamps); this comment is for reference only.
+	// 		// if ts < 0 || ts > 9007199254740992 { ... } // float64 precision safety upper bound, for reference
+	// 		if ts < 0 || ts > 32503680000 {
+	// 			return TimeSeqID{}, fmt.Errorf("invalid timestamp: %d (must be >= unix epoch 0 and <= 32503680000, year 3000, got %d)", ts, ts)
+	// 		}
+	// 		if len(decimalPart) > 6 {
+	// 			return TimeSeqID{}, fmt.Errorf("invalid seqid: %s (must have 6 digits)", decimalPart)
+	// 		}
+
+	// 		seqid, err := strconv.ParseInt(decimalPart, 10, 64)
+	// 		if err != nil {
+	// 			return TimeSeqID{}, fmt.Errorf("invalid seqid: %w", err)
+	// 		}
+
+	// 		if seqid < 0 || seqid >= 1000000 {
+	// 			return TimeSeqID{}, fmt.Errorf("invalid seqid: %d", seqid)
+	// 		}
+	// 		return TimeSeqID{Timestamp: ts, SeqID: seqid}, nil
+	// 	}
+	// 	return TimeSeqID{}, fmt.Errorf("invalid TimeSeqID format: %s", v)
+
+	// case float64:
+	// 	// Extract timestamp and seqid from float
+	// 	ts := int64(v)
+	// 	fractional := v - float64(ts)
+	// 	seqid := int64(math.Round(fractional * 1000000))
+
+	// 	// Validate: seqid cannot be 0 (fractional part must be non-zero)
+	// 	if seqid == 0 {
+	// 		return TimeSeqID{}, fmt.Errorf("invalid score: seqid cannot be 0 (fractional part must be non-zero)")
+	// 	}
+
+	// 	// Validate: seqid must be valid (0 < seqid < 1000000)
+	// 	if seqid < 0 || seqid >= 1000000 {
+	// 		return TimeSeqID{}, fmt.Errorf("invalid score: seqid out of range (must be 0 < seqid < 1000000), got %d", seqid)
+	// 	}
+
+	// 	// Validate: score must be exactly representable in 6 decimal places
+	// 	// Reconstruct the score and check if it matches the original
+	// 	reconstructed := float64(ts) + float64(seqid)/1000000.0
+	// 	diff := math.Abs(v - reconstructed)
+	// 	// Allow tiny floating point error (< 1e-10), but reject anything larger
+	// 	// which indicates more than 6 decimal places
+	// 	if diff > 1e-10 {
+	// 		return TimeSeqID{}, fmt.Errorf("invalid precision: score has more than 6 decimal places (got %f, reconstructed %f, diff %e)", v, reconstructed, diff)
+	// 	}
+
+	// 	return TimeSeqID{Timestamp: ts, SeqID: seqid}, nil
+
+	// default:
+	// 	return TimeSeqID{}, fmt.Errorf("unsupported type for TimeSeqID: %T", s)
+	// }
 }
 
 // TimeGenerator generates unique timestamp + sequence ID pairs using Redis
