@@ -33,6 +33,11 @@ func (t TimeSeqID) String() string {
 // - seqPart must not start with 0 unless it is exactly "0"
 // - Special case: "0_0" is valid (initial snapshot marker)
 func ParseTimeSeqID(s string) (TimeSeqID, error) {
+	// Special case: "0_0" is valid (initial snapshot marker)
+	if s == "0_0" {
+		return TimeSeqID{Timestamp: 0, SeqID: 0}, nil
+	}
+
 	// Split by underscore
 	parts := strings.Split(s, "_")
 	if len(parts) != 2 {
@@ -58,15 +63,12 @@ func ParseTimeSeqID(s string) (TimeSeqID, error) {
 		return TimeSeqID{}, fmt.Errorf("invalid seqid: %s (scientific notation not allowed)", seqPart)
 	}
 
-	// Special case: "0_0" is valid (initial snapshot marker)
-	if s != "0_0" {
-		// Neither part should start with 0 (no leading zeros)
-		if strings.HasPrefix(tsPart, "0") {
-			return TimeSeqID{}, fmt.Errorf("invalid timestamp: %s (cannot have leading zeros)", tsPart)
-		}
-		if strings.HasPrefix(seqPart, "0") {
-			return TimeSeqID{}, fmt.Errorf("invalid seqid: %s (cannot have leading zeros)", seqPart)
-		}
+	// Validate: no leading zeros (already handled "0_0" above)
+	if strings.HasPrefix(tsPart, "0") {
+		return TimeSeqID{}, fmt.Errorf("invalid timestamp: %s (cannot have leading zeros)", tsPart)
+	}
+	if strings.HasPrefix(seqPart, "0") {
+		return TimeSeqID{}, fmt.Errorf("invalid seqid: %s (cannot have leading zeros)", seqPart)
 	}
 
 	// Validate seqPart length (max 6 digits for 999,999 ops/sec)
@@ -92,9 +94,10 @@ func ParseTimeSeqID(s string) (TimeSeqID, error) {
 		return TimeSeqID{}, fmt.Errorf("invalid seqid: %s", seqPart)
 	}
 
-	// Validate seqid range: 0 to 999,999
-	if seqid < 0 || seqid > 999999 {
-		return TimeSeqID{}, fmt.Errorf("invalid seqid: %d (must be in range [0, 999999])", seqid)
+	// Validate seqid range: 1 to 999,999
+	// Note: seqid = 0 only allowed in special case "0_0" (already handled above)
+	if seqid < 1 || seqid > 999999 {
+		return TimeSeqID{}, fmt.Errorf("invalid seqid: %d (must be in range [1, 999999])", seqid)
 	}
 
 	return TimeSeqID{Timestamp: ts, SeqID: seqid}, nil
