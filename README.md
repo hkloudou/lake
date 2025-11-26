@@ -43,9 +43,9 @@ func main() {
     ctx := context.Background()
     
     // Write data
-    _, err := client.Write(ctx, lake.WriteRequest{
+    err := client.Write(ctx, lake.WriteRequest{
         Catalog:   "users",
-        Field:     "/profile",  // Path format: starts with /
+        Path:      "/profile",  // Path format: starts with /
         Body:      []byte(`{"name":"Alice","age":30}`),
         MergeType: lake.MergeTypeReplace,
     })
@@ -90,9 +90,9 @@ fmt.Println(tr.Dump())
 
 ## 📖 Core Concepts
 
-### Field Path Format
+### Path Format
 
-Field paths follow a strict format for network-safe transmission:
+Path follows a strict format for network-safe transmission:
 
 - **Must start with `/`** - Like URL paths
 - **Must not end with `/`** - No trailing slashes
@@ -123,7 +123,7 @@ Lake V2 supports three merge strategies:
 #### 1. MergeTypeReplace (Simple Replacement)
 ```go
 client.Write(ctx, lake.WriteRequest{
-    Field:     "/user/name",  // Path format
+    Path:      "/user/name",  // Path format
     Body:      []byte(`"Alice"`),
     MergeType: lake.MergeTypeReplace,
 })
@@ -135,7 +135,7 @@ client.Write(ctx, lake.WriteRequest{
 ```go
 // Merge patch (adds city, removes age with null)
 client.Write(ctx, lake.WriteRequest{
-    Field:     "/user",
+    Path:      "/user",
     Body:      []byte(`{"city":"NYC","age":null}`),
     MergeType: lake.MergeTypeRFC7396,
 })
@@ -146,7 +146,7 @@ client.Write(ctx, lake.WriteRequest{
 
 ```go
 client.Write(ctx, lake.WriteRequest{
-    Field:     "/",  // Root document
+    Path:      "/",  // Root document
     Body:      []byte(`[
         {"op":"add","path":"/a/b/c","value":42},
         {"op":"move","from":"/a/b/c","path":"/x/y/z"}
