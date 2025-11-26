@@ -6,20 +6,21 @@ func TestEncodeMember(t *testing.T) {
 	tests := []struct {
 		field     string
 		mergeType MergeType
+		tsSeq     TimeSeqID
 		expected  string
 	}{
-		// Format: delta|{mergeType}|{field}
-		{"/user/name", MergeTypeReplace, "delta|1|/user/name"},
-		{"/profile", MergeTypeRFC7396, "delta|2|/profile"},
-		{"/", MergeTypeRFC6902, "delta|3|/"},
-		{"/user.info", MergeTypeReplace, "delta|1|/user.info"},
+		// Format: delta|{mergeType}|{field}|{tsSeq}
+		{"/user/name", MergeTypeReplace, TimeSeqID{1700000000, 1}, "delta|1|/user/name|1700000000_1"},
+		{"/profile", MergeTypeRFC7396, TimeSeqID{1700000000, 2}, "delta|2|/profile|1700000000_2"},
+		{"/", MergeTypeRFC6902, TimeSeqID{1700000000, 3}, "delta|3|/|1700000000_3"},
+		{"/user.info", MergeTypeReplace, TimeSeqID{1700000100, 123}, "delta|1|/user.info|1700000100_123"},
 	}
 
 	for _, tt := range tests {
-		result := EncodeDeltaMember(tt.field, tt.mergeType)
+		result := EncodeDeltaMember(tt.field, tt.mergeType, tt.tsSeq)
 		if result != tt.expected {
-			t.Errorf("EncodeMember(%q, %d) = %q, want %q",
-				tt.field, tt.mergeType, result, tt.expected)
+			t.Errorf("EncodeMember(%q, %d, %v) = %q, want %q",
+				tt.field, tt.mergeType, tt.tsSeq, result, tt.expected)
 		}
 	}
 }
@@ -29,22 +30,24 @@ func TestDecodeMember(t *testing.T) {
 		member          string
 		expectField     string
 		expectMergeType MergeType
+		expectTsSeq     TimeSeqID
 		expectError     bool
 	}{
-		// Format: delta|{mergeType}|{field}
-		{"delta|1|/user/name", "/user/name", MergeTypeReplace, false},
-		{"delta|2|/profile", "/profile", MergeTypeRFC7396, false},
-		{"delta|3|/", "/", MergeTypeRFC6902, false},
-		{"delta|1|/user.info", "/user.info", MergeTypeReplace, false},
+		// Format: delta|{mergeType}|{field}|{tsSeq}
+		{"delta|1|/user/name|1700000000_1", "/user/name", MergeTypeReplace, TimeSeqID{1700000000, 1}, false},
+		{"delta|2|/profile|1700000000_2", "/profile", MergeTypeRFC7396, TimeSeqID{1700000000, 2}, false},
+		{"delta|3|/|1700000000_3", "/", MergeTypeRFC6902, TimeSeqID{1700000000, 3}, false},
+		{"delta|1|/user.info|1700000100_123", "/user.info", MergeTypeReplace, TimeSeqID{1700000100, 123}, false},
 		// Invalid formats
-		{"invalid", "", MergeTypeUnknown, true},
-		{"delta|only", "", MergeTypeUnknown, true},
-		{"data|1|field", "", MergeTypeUnknown, true},        // Wrong prefix
-		{"delta|1|field|extra", "", MergeTypeUnknown, true}, // Too many parts
+		{"invalid", "", MergeTypeUnknown, TimeSeqID{}, true},
+		{"delta|only", "", MergeTypeUnknown, TimeSeqID{}, true},
+		{"data|1|field|1700000000_1", "", MergeTypeUnknown, TimeSeqID{}, true},        // Wrong prefix
+		{"delta|1|field", "", MergeTypeUnknown, TimeSeqID{}, true},                    // Too few parts
+		{"delta|1|field|1700000000_1|extra", "", MergeTypeUnknown, TimeSeqID{}, true}, // Too many parts
 	}
 
 	for _, tt := range tests {
-		field, mergeType, err := DecodeDeltaMember(tt.member)
+		field, mergeType, tsSeq, err := DecodeDeltaMember(tt.member)
 		if tt.expectError {
 			if err == nil {
 				t.Errorf("DecodeMember(%q) expected error, got nil", tt.member)
@@ -53,10 +56,10 @@ func TestDecodeMember(t *testing.T) {
 			if err != nil {
 				t.Errorf("DecodeMember(%q) unexpected error: %v", tt.member, err)
 			}
-			if field != tt.expectField || mergeType != tt.expectMergeType {
-				t.Errorf("DecodeMember(%q) = (%q, %d), want (%q, %d)",
-					tt.member, field, mergeType,
-					tt.expectField, tt.expectMergeType)
+			if field != tt.expectField || mergeType != tt.expectMergeType || tsSeq != tt.expectTsSeq {
+				t.Errorf("DecodeMember(%q) = (%q, %d, %v), want (%q, %d, %v)",
+					tt.member, field, mergeType, tsSeq,
+					tt.expectField, tt.expectMergeType, tt.expectTsSeq)
 			}
 		}
 	}

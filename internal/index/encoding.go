@@ -43,35 +43,43 @@ func MergeTypeFromInt(i int) MergeType {
 	}
 }
 
-// EncodeDeltaMember encodes field and mergeType into Redis ZADD member format
-// Format: "delta|{mergeType}|{field}"
-// Example: "delta|1|/user/name"
-func EncodeDeltaMember(field string, mergeType MergeType) string {
-	return fmt.Sprintf("delta|%d|%s", mergeType, field)
+// EncodeDeltaMember encodes field, mergeType and tsSeq into Redis ZADD member format
+// Format: "delta|{mergeType}|{field}|{tsSeq}"
+// Example: "delta|1|/user/name|1700000000_1"
+// Note: tsSeq is required for snapshot time-range merging and keeping history
+func EncodeDeltaMember(field string, mergeType MergeType, tsSeq TimeSeqID) string {
+	return fmt.Sprintf("delta|%d|%s|%s", mergeType, field, tsSeq.String())
 }
 
-// DecodeDeltaMember decodes Redis ZADD member into field and mergeType
-func DecodeDeltaMember(member string) (field string, mergeType MergeType, err error) {
+// DecodeDeltaMember decodes Redis ZADD member into field, mergeType and tsSeq
+// Format: "delta|{mergeType}|{field}|{tsSeq}"
+func DecodeDeltaMember(member string) (field string, mergeType MergeType, tsSeq TimeSeqID, err error) {
 	// Split by "|" delimiter
 	parts := strings.Split(member, "|")
-	if len(parts) != 3 {
-		return "", 0, fmt.Errorf("invalid member format (expected 3 parts): %s", member)
+	if len(parts) != 4 {
+		return "", 0, TimeSeqID{}, fmt.Errorf("invalid member format (expected 4 parts): %s", member)
 	}
 
 	if parts[0] != "delta" {
-		return "", 0, fmt.Errorf("invalid member prefix (expected 'delta'): %s", parts[0])
+		return "", 0, TimeSeqID{}, fmt.Errorf("invalid member prefix (expected 'delta'): %s", parts[0])
 	}
 
 	// Parse merge type
 	var mergeTypeInt int
 	_, err = fmt.Sscanf(parts[1], "%d", &mergeTypeInt)
 	if err != nil {
-		return "", 0, fmt.Errorf("invalid merge type: %s", parts[1])
+		return "", 0, TimeSeqID{}, fmt.Errorf("invalid merge type: %s", parts[1])
 	}
 
 	field = parts[2]
 
-	return field, MergeTypeFromInt(mergeTypeInt), nil
+	// Parse tsSeq
+	tsSeq, err = ParseTimeSeqID(parts[3])
+	if err != nil {
+		return "", 0, TimeSeqID{}, fmt.Errorf("invalid tsSeq: %w", err)
+	}
+
+	return field, MergeTypeFromInt(mergeTypeInt), tsSeq, nil
 }
 
 // EncodeSnapMember encodes snapshot time range into Redis ZADD member format
@@ -121,14 +129,14 @@ func IsPendingMember(member string) bool {
 }
 
 // ParsePendingMemberTimestamp extracts TimeSeqID from a pending member
-// Format: "pending|delta|{mergeType}|{field}"
-// Example: "pending|delta|1|/user/name"
+// Format: "pending|delta|{mergeType}|{field}|{tsSeq}"
+// Example: "pending|delta|1|/user/name|1700000000_1"
 func ParsePendingMemberTimestamp(member string) (TimeSeqID, error) {
 	parts := strings.Split(member, "|")
-	if len(parts) < 4 {
+	if len(parts) < 5 {
 		return TimeSeqID{}, fmt.Errorf("invalid pending member format")
 	}
 
-	// parts[3] is ts_seqid
-	return ParseTimeSeqID(parts[3])
+	// parts[4] is tsSeq
+	return ParseTimeSeqID(parts[4])
 }

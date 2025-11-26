@@ -154,15 +154,14 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) *ReadIndex
 			continue
 		}
 
-		fieldPath, mergeType, err := DecodeDeltaMember(member)
+		fieldPath, mergeType, tsSeq, err := DecodeDeltaMember(member)
 		if err != nil {
-			continue // Skip invalid members
+			return &ReadIndexResult{Err: fmt.Errorf("failed to decode delta member %q: %w", member, err)}
 		}
 
-		// Parse TimeSeqID from score (float64 format)
-		tsSeq, err := ParseTimeSeqID(z.Score)
-		if err != nil {
-			continue // Skip invalid score
+		// Verify tsSeq matches score (data integrity check)
+		if tsSeq.Score() != z.Score {
+			return &ReadIndexResult{Err: fmt.Errorf("data integrity error: tsSeq in member %q (score=%.6f) doesn't match Redis score (%.6f)", member, tsSeq.Score(), z.Score)}
 		}
 
 		entries = append(entries, DeltaInfo{

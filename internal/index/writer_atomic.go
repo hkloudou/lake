@@ -41,7 +41,7 @@ end
 
 -- Build pending member
 local tsSeq = timestamp .. "_" .. seqid
-local member = "pending|delta|" .. mergeType .. "|" .. field
+local member = "pending|delta|" .. mergeType .. "|" .. field .. "|" .. tsSeq
 local score = tonumber(timestamp) + (tonumber(seqid) / 1000000.0)
 
 -- Pre-commit to Redis (pending state)
