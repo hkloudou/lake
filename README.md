@@ -66,7 +66,7 @@ import "time"
 
 client := lake.NewLake(
     "redis://localhost:6379",
-    lake.WithRedisCache("redis://localhost:6379", 5*time.Minute),
+    lake.WithSnapCacheMetaURL("redis://localhost:6379", 5*time.Minute),
 )
 ```
 
@@ -376,7 +376,7 @@ data, _ := lake.ReadMap(ctx, list)
 ### Error Handling
 
 **Panic Locations** (defensive programming):
-1. `WithRedisCache()` - Invalid Redis URL at initialization
+1. `WithSnapCacheMetaURL()` - Invalid Redis URL at initialization
 2. `makeCatalogKey()` - Prefix not set (internal invariant violation)
 
 **Rationale**: These represent programming errors, not runtime errors. Fail-fast to catch bugs early.
