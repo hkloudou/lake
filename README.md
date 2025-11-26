@@ -227,7 +227,7 @@ master:
 ### With Performance Tracing
 
 ```go
-import "github.com/hkloudou/lake/v2/internal/trace"
+import "github.com/hkloudou/lake/v2/trace"
 
 ctx := trace.WithTrace(context.Background(), "Write")
 client.Write(ctx, req)

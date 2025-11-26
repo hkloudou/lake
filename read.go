@@ -7,7 +7,7 @@ import (
 
 	"github.com/hkloudou/lake/v2/internal/index"
 	"github.com/hkloudou/lake/v2/internal/merge"
-	"github.com/hkloudou/lake/v2/internal/trace"
+	"github.com/hkloudou/lake/v2/trace"
 )
 
 func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error) {

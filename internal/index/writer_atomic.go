@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/hkloudou/lake/v2/internal/encode"
-	"github.com/hkloudou/lake/v2/internal/trace"
+	"github.com/hkloudou/lake/v2/trace"
 )
 
 // Lua script to atomically generate TimeSeqID and pre-commit to Redis

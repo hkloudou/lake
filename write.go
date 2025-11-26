@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/hkloudou/lake/v2/internal/index"
-	"github.com/hkloudou/lake/v2/internal/trace"
 	"github.com/hkloudou/lake/v2/internal/utils"
+	"github.com/hkloudou/lake/v2/trace"
 )
 
 // WriteRequest represents a write request

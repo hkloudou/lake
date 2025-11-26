@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hkloudou/lake/v2/internal/trace"
+	"github.com/hkloudou/lake/v2/trace"
 	"github.com/redis/go-redis/v9"
 )
 

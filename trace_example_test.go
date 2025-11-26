@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/hkloudou/lake/v2"
-	"github.com/hkloudou/lake/v2/internal/trace"
+	"github.com/hkloudou/lake/v2/trace"
 )
 
 //	func TestReadWithTrace(t *testing.T) {
