@@ -73,6 +73,11 @@ func DecodeDeltaMember(member string) (fieldPath string, mergeType MergeType, ts
 		return "", 0, TimeSeqID{}, fmt.Errorf("invalid merge type: %s", parts[1])
 	}
 
+	// Validate merge type range (1: Replace, 2: RFC7396, 3: RFC6902)
+	if mergeTypeInt < 1 || mergeTypeInt > 3 {
+		return "", 0, TimeSeqID{}, fmt.Errorf("invalid merge type: %d (must be 1-3)", mergeTypeInt)
+	}
+
 	fieldPath = parts[2]
 	if err := utils.ValidateFieldPath(fieldPath); err != nil {
 		return "", 0, TimeSeqID{}, fmt.Errorf("invalid field path: %w", err)
