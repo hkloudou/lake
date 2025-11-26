@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	jsonpatch "github.com/evanphx/json-patch/v5"
-	"github.com/hkloudou/lake/v2/internal/index"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -89,14 +88,6 @@ func (m *RFC6902Merger) mergeField(original, patchData []byte, field string) ([]
 	}
 
 	return result, nil
-}
-
-func (m *RFC6902Merger) UpdatedMap(entries []index.DeltaInfo) map[string]index.TimeSeqID {
-	updatedMap := make(map[string]index.TimeSeqID, 0)
-	for _, entry := range entries {
-		updatedMap[entry.Path] = entry.TsSeq
-	}
-	return updatedMap
 }
 
 // ensureParentPath ensures all parent paths exist for a given path

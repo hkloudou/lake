@@ -17,7 +17,6 @@ type ListResult struct {
 	Entries    []index.DeltaInfo // Raw entries (for debugging)
 	HasPending bool              // True if pending writes detected (< 60s)
 	Err        error             // Error if pending writes detected (non-fatal)
-	// UpdatedAt  map[string]index.TimeSeqID // Last updated time
 }
 
 func (m ListResult) Exist() bool {

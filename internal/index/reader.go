@@ -15,14 +15,14 @@ type Reader struct {
 	rdb *redis.Client
 	// prefix string
 	redisTimeUnix int64
-	indexKey
+	indexIO
 }
 
 // NewReader creates a new index reader
 func NewReader(rdb *redis.Client) *Reader {
 	reader := &Reader{
 		rdb: rdb,
-		indexKey: indexKey{
+		indexIO: indexIO{
 			prefix: "lake",
 		}, // Will be set later via SetPrefix
 	}

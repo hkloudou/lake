@@ -51,13 +51,13 @@ func TestDecodeMember(t *testing.T) {
 		{"delta|999|/user/name|1700000000_1", "", MergeTypeUnknown, TimeSeqID{}, true}, // mergeType = 999 (too large)
 		{"delta|abc|/user/name|1700000000_1", "", MergeTypeUnknown, TimeSeqID{}, true}, // mergeType = non-numeric
 		// Invalid field paths
-		{"delta|1|user/name|1700000000_1", "", MergeTypeUnknown, TimeSeqID{}, true},  // field missing leading /
+		{"delta|1|user/name|1700000000_1", "", MergeTypeUnknown, TimeSeqID{}, true},   // field missing leading /
 		{"delta|1|/user/name/|1700000000_1", "", MergeTypeUnknown, TimeSeqID{}, true}, // field has trailing /
 		{"delta|1|/user|name|1700000000_1", "", MergeTypeUnknown, TimeSeqID{}, true},  // field contains | (pipe)
 		{"delta|1|/user-name|1700000000_1", "", MergeTypeUnknown, TimeSeqID{}, true},  // field contains - (hyphen)
 		// Invalid tsSeq
-		{"delta|1|/user/name|invalid", "", MergeTypeUnknown, TimeSeqID{}, true},           // tsSeq invalid format
-		{"delta|1|/user/name|1700000000_01", "", MergeTypeUnknown, TimeSeqID{}, true},     // tsSeq with leading zero in seqid
+		{"delta|1|/user/name|invalid", "", MergeTypeUnknown, TimeSeqID{}, true},            // tsSeq invalid format
+		{"delta|1|/user/name|1700000000_01", "", MergeTypeUnknown, TimeSeqID{}, true},      // tsSeq with leading zero in seqid
 		{"delta|1|/user/name|1700000000_1234567", "", MergeTypeUnknown, TimeSeqID{}, true}, // tsSeq seqid too long
 	}
 
