@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/hkloudou/lake/v2/internal/index"
-	"github.com/hkloudou/lake/v2/internal/merge"
 	"github.com/hkloudou/lake/v2/internal/trace"
+	"github.com/hkloudou/lake/v2/internal/utils"
 )
 
 // WriteRequest represents a write request
@@ -43,7 +43,7 @@ type WriteRequest struct {
 func (c *Client) Write(ctx context.Context, req WriteRequest) error {
 	tr := trace.FromContext(ctx)
 
-	if err := merge.ValidateFieldPath(req.Path); err != nil {
+	if err := utils.ValidateFieldPath(req.Path); err != nil {
 		return err
 	}
 

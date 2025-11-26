@@ -2,6 +2,8 @@ package merge
 
 import (
 	"testing"
+
+	"github.com/hkloudou/lake/v2/internal/utils"
 )
 
 func TestToGjsonPath(t *testing.T) {
@@ -225,7 +227,7 @@ func TestValidateFieldPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateFieldPath(tt.path)
+			err := utils.ValidateFieldPath(tt.path)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ValidateFieldPath(%q) error = %v, wantErr %v", tt.path, err, tt.wantErr)
 			}

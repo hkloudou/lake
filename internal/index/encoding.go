@@ -3,6 +3,8 @@ package index
 import (
 	"fmt"
 	"strings"
+
+	"github.com/hkloudou/lake/v2/internal/utils"
 )
 
 // MergeType defines how to merge values
@@ -72,6 +74,9 @@ func DecodeDeltaMember(member string) (fieldPath string, mergeType MergeType, ts
 	}
 
 	fieldPath = parts[2]
+	if err := utils.ValidateFieldPath(fieldPath); err != nil {
+		return "", 0, TimeSeqID{}, fmt.Errorf("invalid field path: %w", err)
+	}
 
 	// Parse tsSeq
 	tsSeq, err = ParseTimeSeqID(parts[3])
