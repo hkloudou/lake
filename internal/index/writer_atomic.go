@@ -23,8 +23,7 @@ local field = ARGV[1]
 local mergeType = ARGV[2]
 
 -- Generate timestamp + seqid
-local timeResult = redis.call("TIME")
-local timestamp = timeResult[1]
+local timestamp = redis.call("TIME")[1]
 local seqKey = "lake:seqid:" .. catalog .. ":" .. timestamp
 
 local setResult = redis.call("SETNX", seqKey, "0")
