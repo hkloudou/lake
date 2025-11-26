@@ -70,7 +70,7 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) error {
 	storageKey := c.storage.MakeDeltaKey(req.Catalog, tsSeq, int(req.MergeType))
 	if err := c.storage.Put(ctx, storageKey, req.Body); err != nil {
 		// Rollback: remove pending member from Redis
-		// catalogKey := c.writer.MakeCatalogKey(req.Catalog)
+		// catalogKey := c.writer.(req.Catalog)
 		// c.rdb.ZRem(ctx, catalogKey, pendingMember)
 		tr.RecordSpan("Write.Rollback")
 		return fmt.Errorf("failed to write to storage: %w", err)

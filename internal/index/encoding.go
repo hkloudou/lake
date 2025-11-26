@@ -46,6 +46,7 @@ func MergeTypeFromInt(i int) MergeType {
 // EncodeDeltaMember encodes field and mergeType into Redis ZADD member format
 // Format: "delta|{mergeType}|{field}"
 // Example: "delta|1|/user/name"
+// Note: Does NOT include tsSeq - this allows Redis ZADD to overwrite the same field
 func EncodeDeltaMember(field string, mergeType MergeType) string {
 	return fmt.Sprintf("delta|%d|%s", mergeType, field)
 }

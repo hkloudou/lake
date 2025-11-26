@@ -23,8 +23,7 @@ local field = ARGV[1]
 local mergeType = ARGV[2]
 
 -- Generate timestamp + seqid
-local timeResult = redis.call("TIME")
-local timestamp = timeResult[1]
+local timestamp = redis.call("TIME")[1]
 local seqKey = "lake:seqid:" .. catalog .. ":" .. timestamp
 
 local setResult = redis.call("SETNX", seqKey, "0")
@@ -41,7 +40,7 @@ end
 
 -- Build pending member
 local tsSeq = timestamp .. "_" .. seqid
-local member = "pending|delta|" .. mergeType .. "|" .. field
+local member = "pending|delta|" .. mergeType .. "|" .. field .. "|" .. tsSeq
 local score = tonumber(timestamp) + (tonumber(seqid) / 1000000.0)
 
 -- Pre-commit to Redis (pending state)
