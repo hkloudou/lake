@@ -157,22 +157,12 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) *ReadIndex
 			return &ReadIndexResult{Err: fmt.Errorf("unknown member type (not snap/pending/delta): %q", member)}
 		}
 
-		fieldPath, mergeType, tsSeq, err := DecodeDeltaMember(member)
+		deltaInfo, err := DecodeDeltaMember(member, z.Score)
 		if err != nil {
-			return &ReadIndexResult{Err: fmt.Errorf("failed to decode delta member %q: %w", member, err)}
+			return &ReadIndexResult{Err: fmt.Errorf("failed to decode delta member: %w", err)}
 		}
 
-		// Verify tsSeq matches score (data integrity check)
-		if tsSeq.Score() != z.Score {
-			return &ReadIndexResult{Err: fmt.Errorf("data integrity error: tsSeq in member %q (score=%.6f) doesn't match Redis score (%.6f)", member, tsSeq.Score(), z.Score)}
-		}
-
-		entries = append(entries, DeltaInfo{
-			Path:      fieldPath,
-			TsSeq:     tsSeq,
-			MergeType: mergeType,
-			Score:     z.Score,
-		})
+		entries = append(entries, *deltaInfo)
 	}
 
 	tr.RecordSpan("Read.ReadRange", map[string]interface{}{

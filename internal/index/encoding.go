@@ -53,43 +53,55 @@ func EncodeDeltaMember(field string, mergeType MergeType, tsSeq TimeSeqID) strin
 	return fmt.Sprintf("delta|%d|%s|%s", mergeType, field, tsSeq.String())
 }
 
-// DecodeDeltaMember decodes Redis ZADD member into field, mergeType and tsSeq
+// DecodeDeltaMember decodes Redis ZADD entry into DeltaInfo
 // Format: "delta|{mergeType}|{field}|{tsSeq}"
-func DecodeDeltaMember(member string) (fieldPath string, mergeType MergeType, tsSeq TimeSeqID, err error) {
+// Validates all fields and verifies tsSeq.Score() matches score
+func DecodeDeltaMember(member string, score float64) (*DeltaInfo, error) {
+
 	// Split by "|" delimiter
 	parts := strings.Split(member, "|")
 	if len(parts) != 4 {
-		return "", 0, TimeSeqID{}, fmt.Errorf("invalid member format (expected 4 parts): %s", member)
+		return nil, fmt.Errorf("invalid member format (expected 4 parts): %s", member)
 	}
 
 	if parts[0] != "delta" {
-		return "", 0, TimeSeqID{}, fmt.Errorf("invalid member prefix (expected 'delta'): %s", parts[0])
+		return nil, fmt.Errorf("invalid member prefix (expected 'delta'): %s", parts[0])
 	}
 
 	// Parse merge type
 	var mergeTypeInt int
-	_, err = fmt.Sscanf(parts[1], "%d", &mergeTypeInt)
+	_, err := fmt.Sscanf(parts[1], "%d", &mergeTypeInt)
 	if err != nil {
-		return "", 0, TimeSeqID{}, fmt.Errorf("invalid merge type: %s", parts[1])
+		return nil, fmt.Errorf("invalid merge type: %s", parts[1])
 	}
 
 	// Validate merge type range (1: Replace, 2: RFC7396, 3: RFC6902)
 	if mergeTypeInt < 1 || mergeTypeInt > 3 {
-		return "", 0, TimeSeqID{}, fmt.Errorf("invalid merge type: %d (must be 1-3)", mergeTypeInt)
+		return nil, fmt.Errorf("invalid merge type: %d (must be 1-3)", mergeTypeInt)
 	}
 
-	fieldPath = parts[2]
+	fieldPath := parts[2]
 	if err := utils.ValidateFieldPath(fieldPath); err != nil {
-		return "", 0, TimeSeqID{}, fmt.Errorf("invalid field path: %w", err)
+		return nil, fmt.Errorf("invalid field path: %w", err)
 	}
 
 	// Parse tsSeq
-	tsSeq, err = ParseTimeSeqID(parts[3])
+	tsSeq, err := ParseTimeSeqID(parts[3])
 	if err != nil {
-		return "", 0, TimeSeqID{}, fmt.Errorf("invalid tsSeq: %w", err)
+		return nil, fmt.Errorf("invalid tsSeq: %w", err)
 	}
 
-	return fieldPath, MergeTypeFromInt(mergeTypeInt), tsSeq, nil
+	// Verify tsSeq matches score (data integrity check)
+	if tsSeq.Score() != score {
+		return nil, fmt.Errorf("data integrity error: tsSeq in member %q (score=%.6f) doesn't match Redis score (%.6f)", member, tsSeq.Score(), score)
+	}
+
+	return &DeltaInfo{
+		Path:      fieldPath,
+		TsSeq:     tsSeq,
+		MergeType: MergeTypeFromInt(mergeTypeInt),
+		Score:     score,
+	}, nil
 }
 
 // EncodeSnapMember encodes snapshot time range into Redis ZADD member format
