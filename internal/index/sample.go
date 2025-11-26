@@ -2,9 +2,8 @@ package index
 
 import (
 	"context"
-	"fmt"
 
-	"github.com/hkloudou/lake/v2/internal/utils"
+	"github.com/hkloudou/lake/v2/trace"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -19,24 +18,39 @@ import (
 // }
 
 func (r *Reader) GetSampleScore(ctx context.Context, catalog, indicatorMember string) (float64, error) {
-	if err := utils.ValidateFieldPath(indicatorMember); err != nil {
-		return 0, fmt.Errorf("invalid indicator member: %w", err)
-	}
+	tr := trace.FromContext(ctx)
 	key := r.makeSampleKey(catalog)
+	tr.RecordSpan("Sample.GetSampleScore", map[string]interface{}{
+		"catalog":         catalog,
+		"indicatorMember": indicatorMember,
+		"key":             key,
+	})
 	score, err := r.rdb.ZScore(ctx, key, indicatorMember).Result()
 	if err != nil {
 		return 0, err
 	}
+	tr.RecordSpan("Sample.GetSampleScore.Done", map[string]interface{}{
+		"score": score,
+	})
 	return score, nil
 }
 
 func (r *Writer) UpdateSampleScore(ctx context.Context, catalog, indicatorMember string, score float64) error {
-	if err := utils.ValidateFieldPath(indicatorMember); err != nil {
-		return fmt.Errorf("invalid indicator member: %w", err)
-	}
+	tr := trace.FromContext(ctx)
 	key := r.makeSampleKey(catalog)
-	return r.rdb.ZAdd(ctx, key, redis.Z{
+	tr.RecordSpan("Sample.UpdateSampleScore", map[string]interface{}{
+		"catalog":         catalog,
+		"indicatorMember": indicatorMember,
+		"score":           score,
+		"key":             key,
+	})
+	err := r.rdb.ZAdd(ctx, key, redis.Z{
 		Score:  score,
 		Member: indicatorMember,
 	}).Err()
+	if err != nil {
+		return err
+	}
+	tr.RecordSpan("Sample.UpdateSampleScore.Done")
+	return nil
 }
