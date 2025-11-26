@@ -14,12 +14,12 @@ import (
 const getTimeSeqIDAndPreCommitScript = `
 -- KEYS[1]: base64 encoded catalog name (for seqid isolation)
 -- KEYS[2]: Redis ZADD key (e.g., "oss:mylake:delta:users")
--- ARGV[1]: field (raw, not encoded - used in member value)
+-- ARGV[1]: fieldPath (raw, not encoded - used in member value)
 -- ARGV[2]: mergeType
 
 local catalog = KEYS[1]
 local zaddKey = KEYS[2]
-local field = ARGV[1]
+local fieldPath = ARGV[1]
 local mergeType = ARGV[2]
 
 -- Generate timestamp + seqid
@@ -40,7 +40,7 @@ end
 
 -- Build pending member
 local tsSeq = timestamp .. "_" .. seqid
-local member = "pending|delta|" .. mergeType .. "|" .. field .. "|" .. tsSeq
+local member = "pending|delta|" .. mergeType .. "|" .. fieldPath .. "|" .. tsSeq
 local score = tonumber(timestamp) + (tonumber(seqid) / 1000000.0)
 
 -- Pre-commit to Redis (pending state)
@@ -122,7 +122,7 @@ return "OK"
 
 // GetTimeSeqIDAndPreCommit atomically generates TimeSeqID and pre-commits to Redis
 // Returns TimeSeqID and pending member string
-func (w *Writer) GetTimeSeqIDAndPreCommit(ctx context.Context, catalog, field string, mergeType MergeType) (TimeSeqID, string, error) {
+func (w *Writer) GetTimeSeqIDAndPreCommit(ctx context.Context, catalog, fieldPath string, mergeType MergeType) (TimeSeqID, string, error) {
 	encodedCatalog := encode.EncodeRedisCatalogName(catalog)
 	zaddKey := w.makeDeltaZsetKey(catalog)
 
@@ -132,7 +132,7 @@ func (w *Writer) GetTimeSeqIDAndPreCommit(ctx context.Context, catalog, field st
 	// Execute Lua script
 	result, err := w.rdb.Eval(ctx, getTimeSeqIDAndPreCommitScript,
 		[]string{encodedCatalog, zaddKey},
-		field, int(mergeType)).Result()
+		fieldPath, int(mergeType)).Result()
 
 	if err != nil {
 		return TimeSeqID{}, "", fmt.Errorf("failed to get timeseq and precommit: %w", err)

@@ -138,20 +138,23 @@ func (r *Reader) readRange(ctx context.Context, key, min, max string) *ReadIndex
 			continue
 		}
 
-		// Skip pending members (will check in second pass)
+		// Check pending members
 		if IsPendingMember(member) {
 			ageSeconds := int64(r.redisTimeUnix) - int64(z.Score)
 			if ageSeconds > timeoutThreshold {
-				// Timeout > timeoutThreshold minute: ignore (abandoned write, continue)
+				// Timeout > timeoutThreshold: ignore (abandoned write)
 				continue
 			}
+			// Pending write in progress (age < timeout)
 			lastError = fmt.Errorf("pending write detected: %s (age: %ds < %ds)", member, ageSeconds, timeoutThreshold)
 			hasPending = true
+			continue
 		}
 
-		// Skip non-delta members
+		// Only delta members should remain at this point
 		if !IsDeltaMember(member) {
-			continue
+			// Unknown member type - data corruption
+			return &ReadIndexResult{Err: fmt.Errorf("unknown member type (not snap/pending/delta): %q", member)}
 		}
 
 		fieldPath, mergeType, tsSeq, err := DecodeDeltaMember(member)

@@ -53,7 +53,7 @@ func EncodeDeltaMember(field string, mergeType MergeType, tsSeq TimeSeqID) strin
 
 // DecodeDeltaMember decodes Redis ZADD member into field, mergeType and tsSeq
 // Format: "delta|{mergeType}|{field}|{tsSeq}"
-func DecodeDeltaMember(member string) (field string, mergeType MergeType, tsSeq TimeSeqID, err error) {
+func DecodeDeltaMember(member string) (fieldPath string, mergeType MergeType, tsSeq TimeSeqID, err error) {
 	// Split by "|" delimiter
 	parts := strings.Split(member, "|")
 	if len(parts) != 4 {
@@ -71,7 +71,7 @@ func DecodeDeltaMember(member string) (field string, mergeType MergeType, tsSeq 
 		return "", 0, TimeSeqID{}, fmt.Errorf("invalid merge type: %s", parts[1])
 	}
 
-	field = parts[2]
+	fieldPath = parts[2]
 
 	// Parse tsSeq
 	tsSeq, err = ParseTimeSeqID(parts[3])
@@ -79,7 +79,7 @@ func DecodeDeltaMember(member string) (field string, mergeType MergeType, tsSeq 
 		return "", 0, TimeSeqID{}, fmt.Errorf("invalid tsSeq: %w", err)
 	}
 
-	return field, MergeTypeFromInt(mergeTypeInt), tsSeq, nil
+	return fieldPath, MergeTypeFromInt(mergeTypeInt), tsSeq, nil
 }
 
 // EncodeSnapMember encodes snapshot time range into Redis ZADD member format

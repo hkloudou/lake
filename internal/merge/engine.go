@@ -41,7 +41,8 @@ func Merge(catalog string, baseData []byte, entries []index.DeltaInfo) ([]byte, 
 	for _, entry := range entries {
 		// Use pre-loaded Body data (filled by fillDeltasBody)
 		if len(entry.Body) == 0 {
-			continue // Skip entries without body data
+			// Empty body means storage load failed - this is a data integrity error
+			return nil, nil, fmt.Errorf("missing body data for delta entry: path=%s, tsSeq=%s, mergeType=%d", entry.Path, entry.TsSeq.String(), entry.MergeType)
 		}
 
 		// Get merger by type
