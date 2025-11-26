@@ -123,6 +123,36 @@ func TestTimeSeqIDParsing(t *testing.T) {
 			input:   "-1_1",
 			wantErr: true,
 		},
+		{
+			name:    "negative seqid",
+			input:   "1700000000_-1",
+			wantErr: true,
+		},
+		{
+			name:    "timestamp with scientific notation - lowercase e",
+			input:   "1.7e9_123",
+			wantErr: true,
+		},
+		{
+			name:    "timestamp with scientific notation - uppercase E",
+			input:   "1.7E9_123",
+			wantErr: true,
+		},
+		{
+			name:    "seqid with scientific notation",
+			input:   "1700000000_1e2",
+			wantErr: true,
+		},
+		{
+			name:    "seqid exceeds max - 1000000",
+			input:   "1700000000_1000000",
+			wantErr: true,
+		},
+		{
+			name:    "seqid exceeds max - 9999999",
+			input:   "1700000000_9999999",
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {

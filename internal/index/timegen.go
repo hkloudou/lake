@@ -42,6 +42,22 @@ func ParseTimeSeqID(s string) (TimeSeqID, error) {
 	tsPart := parts[0]
 	seqPart := parts[1]
 
+	// Validate: no minus sign (negative numbers not allowed)
+	if strings.HasPrefix(tsPart, "-") {
+		return TimeSeqID{}, fmt.Errorf("invalid timestamp: %s (negative values not allowed)", tsPart)
+	}
+	if strings.HasPrefix(seqPart, "-") {
+		return TimeSeqID{}, fmt.Errorf("invalid seqid: %s (negative values not allowed)", seqPart)
+	}
+
+	// Validate: no scientific notation (e/E not allowed)
+	if strings.ContainsAny(tsPart, "eE") {
+		return TimeSeqID{}, fmt.Errorf("invalid timestamp: %s (scientific notation not allowed)", tsPart)
+	}
+	if strings.ContainsAny(seqPart, "eE") {
+		return TimeSeqID{}, fmt.Errorf("invalid seqid: %s (scientific notation not allowed)", seqPart)
+	}
+
 	// Special case: "0_0" is valid (initial snapshot marker)
 	if s != "0_0" {
 		// Neither part should start with 0 (no leading zeros)
@@ -74,6 +90,11 @@ func ParseTimeSeqID(s string) (TimeSeqID, error) {
 	_, err = fmt.Sscanf(seqPart, "%d", &seqid)
 	if err != nil {
 		return TimeSeqID{}, fmt.Errorf("invalid seqid: %s", seqPart)
+	}
+
+	// Validate seqid range: 0 to 999,999
+	if seqid < 0 || seqid > 999999 {
+		return TimeSeqID{}, fmt.Errorf("invalid seqid: %d (must be in range [0, 999999])", seqid)
 	}
 
 	return TimeSeqID{Timestamp: ts, SeqID: seqid}, nil
