@@ -33,6 +33,7 @@ type Client struct {
 
 	snapFlight   xsync.SingleFlight[string]
 	sampleFlight xsync.SingleFlight[float64]
+	clearFlight  xsync.SingleFlight[struct{}] // Prevents concurrent clear operations on same catalog
 }
 
 // Option is a function that configures the client
@@ -90,6 +91,7 @@ func NewLake(metaUrl string, opts ...func(*option)) *Client {
 		deltaCache:   deltaCache,
 		snapFlight:   xsync.NewSingleFlight[string](),
 		sampleFlight: xsync.NewSingleFlight[float64](),
+		clearFlight:  xsync.NewSingleFlight[struct{}](),
 	}
 	// client.startRedisTimeUnixUpdater()
 	return client

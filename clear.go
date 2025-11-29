@@ -23,7 +23,19 @@ func (c *Client) ClearHistory(ctx context.Context, catalog string) error {
 //
 // Benefits: Reduces Redis size and OSS storage
 // Trade-off: Cannot access historical versions (but you don't need them anyway)
+//
+// Uses SingleFlight to prevent concurrent clear operations on the same catalog (avoids deletion traffic storm)
 func (c *Client) ClearHistoryWithRetention(ctx context.Context, catalog string, keepSnaps int) error {
+	// Use SingleFlight to prevent concurrent deletion on same catalog
+	key := fmt.Sprintf("%s_%d", catalog, keepSnaps)
+	_, err := c.clearFlight.Do(key, func() (struct{}, error) {
+		return struct{}{}, c.doClearHistoryWithRetention(ctx, catalog, keepSnaps)
+	})
+	return err
+}
+
+// doClearHistoryWithRetention is the actual implementation (wrapped by SingleFlight)
+func (c *Client) doClearHistoryWithRetention(ctx context.Context, catalog string, keepSnaps int) error {
 	tr := trace.FromContext(ctx)
 
 	// Ensure initialized before operation
