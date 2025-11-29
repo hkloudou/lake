@@ -27,7 +27,7 @@ func NewWriter(rdb *redis.Client) *Writer {
 // stopTsSeq: stop time sequence (e.g., "1700000100_500")
 // score: the score for Redis ZADD (typically parsed from stopTsSeq)
 func (w *Writer) AddSnap(ctx context.Context, catalog string, startTsSeq, stopTsSeq TimeSeqID) error {
-	key := w.makeSnapKey(catalog)
+	key := w.MakeSnapZsetKey(catalog)
 	member := EncodeSnapMember(startTsSeq, stopTsSeq)
 
 	return w.rdb.ZAdd(ctx, key, redis.Z{

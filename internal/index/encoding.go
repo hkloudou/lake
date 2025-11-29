@@ -97,10 +97,11 @@ func DecodeDeltaMember(member string, score float64) (*DeltaInfo, error) {
 	}
 
 	return &DeltaInfo{
+		Member:    member,
+		Score:     score,
 		Path:      fieldPath,
 		TsSeq:     tsSeq,
 		MergeType: MergeTypeFromInt(mergeTypeInt),
-		Score:     score,
 	}, nil
 }
 

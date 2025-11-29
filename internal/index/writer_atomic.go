@@ -141,7 +141,7 @@ return "OK"
 // Returns TimeSeqID and pending member string
 func (w *Writer) GetTimeSeqIDAndPreCommit(ctx context.Context, catalog, fieldPath string, mergeType MergeType) (TimeSeqID, string, error) {
 	encodedCatalog := encode.EncodeRedisCatalogName(catalog)
-	zaddKey := w.makeDeltaZsetKey(catalog)
+	zaddKey := w.MakeDeltaZsetKey(catalog)
 
 	// Field is used as-is in member, no encoding needed
 	// (encoding is only for Redis keys, not member values)
@@ -187,7 +187,7 @@ func (w *Writer) GetTimeSeqIDAndPreCommit(ctx context.Context, catalog, fieldPat
 
 // Rollback removes a pending member from Redis (used when storage write fails)
 func (w *Writer) Rollback(ctx context.Context, catalog, pendingMember string) error {
-	zaddKey := w.makeDeltaZsetKey(catalog)
+	zaddKey := w.MakeDeltaZsetKey(catalog)
 	return w.rdb.ZRem(ctx, zaddKey, pendingMember).Err()
 }
 
@@ -195,8 +195,8 @@ func (w *Writer) Rollback(ctx context.Context, catalog, pendingMember string) er
 func (w *Writer) Commit(ctx context.Context, catalog, pendingMember, committedMember string, score float64, meta []byte) error {
 	tr := trace.FromContext(ctx)
 	tr.RecordSpan("Commit.Start")
-	zaddKey := w.makeDeltaZsetKey(catalog)
-	metaKey := w.makeMetaKey(catalog)
+	zaddKey := w.MakeDeltaZsetKey(catalog)
+	metaKey := w.MakeMetaKey(catalog)
 	// metaMapJSON, err := json.Marshal(metaMap)
 	// if err != nil {
 	// 	return fmt.Errorf("failed to marshal updated map: %w", err)

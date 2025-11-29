@@ -26,14 +26,18 @@ func NewManager(rdb *redis.Client) *Manager {
 
 // Config represents lake configuration stored in Redis
 type Config struct {
-	Name      string `json:"Name"`
-	Storage   string `json:"Storage"`   // "oss" | "s3" | "local"
+	Name    string `json:"Name"`
+	Storage string `json:"Storage"` // "oss" | "s3" | "local"
+	AESPwd  string `json:"AESPwd"`  // AES encryption password
+
+	//oss
 	Bucket    string `json:"Bucket"`    // Bucket name
 	Endpoint  string `json:"Endpoint"`  // OSS/S3 endpoint
 	AccessKey string `json:"AccessKey"` // Access key
 	SecretKey string `json:"SecretKey"` // Secret key
-	AESPwd    string `json:"AESPwd"`    // AES encryption password
-	// Region    string `json:"Region"`    // AWS region (for S3)
+
+	//file
+	BasePath string `json:"BasePath"` // Base directory path (e.g., "/data/lake" or "./storage")
 }
 
 // Load loads configuration from Redis using SingleFlight
@@ -94,6 +98,13 @@ func (cfg *Config) CreateStorage() (storage.Storage, error) {
 			SecretKey: cfg.SecretKey,
 			AESKey:    cfg.AESPwd,
 			Internal:  false, // TODO: make this configurable
+		})
+	case "file":
+		// Create file storage with encryption
+		return storage.NewFileStorage(storage.FileConfig{
+			Name:     cfg.Name,
+			BasePath: cfg.BasePath,
+			AESKey:   cfg.AESPwd,
 		})
 
 	// case "s3":
