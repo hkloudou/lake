@@ -145,11 +145,15 @@ sysctlImage:
 ```
 
 **Why This Configuration?**
-- ✅ **No Persistence** - Snapshots can be rebuilt from deltas, no need to persist
-- ✅ **LRU Eviction** - Automatically evicts old snapshots when memory is full
+- ✅ **No Persistence** - Cache Redis stores snapshot data content (can be rebuilt from OSS), no need to persist
+- ✅ **LRU Eviction** - Automatically evicts cached snapshot data when memory is full (only affects cache, not index data)
 - ✅ **High Performance** - No disk I/O overhead from AOF/RDB
 - ✅ **Memory Efficient** - Uses 4GB max, starts with 256MB
 - ✅ **Optimized Networking** - Increased connection limits for high throughput
+
+**Important**: 
+- **Cache Redis** (this section): Only caches snapshot data content, can use LRU eviction
+- **Main Redis** (below): Stores index data (snap/delta/pending members), **permanently saved** unless manually deleted, **MUST have persistence enabled**
 
 ### Main Redis Configuration (Index Storage)
 

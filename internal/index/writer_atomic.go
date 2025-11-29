@@ -2,6 +2,7 @@ package index
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/hkloudou/lake/v2/internal/encode"
@@ -53,14 +54,12 @@ return {tonumber(timestamp), seqid, member}
 // This is atomic
 const commitScript = `
 -- KEYS[1]: Redis ZADD key
--- KEYS[2]: Redis meta key
 
 -- ARGV[1]: pending member
 -- ARGV[2]: committed member  
 -- ARGV[3]: score
 
 local key = KEYS[1]
-local metaKey = KEYS[2]
 local pendingMember = ARGV[1]
 local committedMember = ARGV[2]
 local score = tonumber(ARGV[3])
@@ -68,6 +67,24 @@ local score = tonumber(ARGV[3])
 -- Atomic: remove pending, add committed
 redis.call("ZADD", key, score, committedMember)
 redis.call("ZREM", key, pendingMember)
+
+
+-- KEYS[2]: Redis meta key
+-- ARGV[4]: updatedMap
+local metaKey = KEYS[2]
+local updatedMap = cjson.decode(ARGV[4])
+local oldMeta = redis.call("GET", metaKey)
+local metaMap = {}
+if oldMeta then
+    metaMap = cjson.decode(oldMeta)
+end
+
+-- Merge updatedMap into metaMap
+for key, value in pairs(updatedMap) do
+    metaMap[key] = value
+end
+
+
 
 return "OK"
 `
@@ -175,15 +192,15 @@ func (w *Writer) Rollback(ctx context.Context, catalog, pendingMember string) er
 }
 
 // Commit atomically commits a pending write
-func (w *Writer) Commit(ctx context.Context, catalog, pendingMember, committedMember string, score float64) error {
+func (w *Writer) Commit(ctx context.Context, catalog, pendingMember, committedMember string, score float64, metaMap map[string]any) error {
 	tr := trace.FromContext(ctx)
 	tr.RecordSpan("Commit.Start")
 	zaddKey := w.makeDeltaZsetKey(catalog)
 	metaKey := w.makeMetaKey(catalog)
-	// updatedMapJSON, err := json.Marshal(updatedMap)
-	// if err != nil {
-	// 	return fmt.Errorf("failed to marshal updated map: %w", err)
-	// }
+	metaMapJSON, err := json.Marshal(metaMap)
+	if err != nil {
+		return fmt.Errorf("failed to marshal updated map: %w", err)
+	}
 	tr.RecordSpan("Commit.MarshalUpdatedMap", map[string]any{
 		// "updatedMap":      updatedMap,
 		// "size":            len(updatedMapJSON),
@@ -192,11 +209,11 @@ func (w *Writer) Commit(ctx context.Context, catalog, pendingMember, committedMe
 		"pendingMember":   pendingMember,
 		"committedMember": committedMember,
 		"score":           fmt.Sprintf("%.6f", score),
-		// "updatedMapJSON":  string(updatedMapJSON),
+		"metaMapJSON":     string(metaMapJSON),
 	})
-	_, err := w.rdb.Eval(ctx, commitScript,
+	_, err = w.rdb.Eval(ctx, commitScript,
 		[]string{zaddKey, metaKey},
-		pendingMember, committedMember, score).Result()
+		pendingMember, committedMember, score, string(metaMapJSON)).Result()
 
 	return err
 }

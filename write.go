@@ -12,11 +12,21 @@ import (
 
 // WriteRequest represents a write request
 type WriteRequest struct {
-	Catalog   string    // Catalog name
-	Path      string    // JSON path (e.g., "user.profile.name")
-	Body      []byte    // JSON body to write (raw bytes from network)
-	MergeType MergeType // Merge strategy (Replace, RFC7396, or RFC6902)
+	Catalog   string         // Catalog name
+	Path      string         // JSON path (e.g., "user.profile.name")
+	Body      []byte         // JSON body to write (raw bytes from network)
+	Meta      map[string]any // Write request meta
+	MergeType MergeType      // Merge strategy (Replace, RFC7396, or RFC6902)
 }
+
+// type FileInfo interface {
+// 	Name() string       // base name of the file
+// 	Size() int64        // length in bytes for regular files; system-dependent for others
+// 	Mode() FileMode     // file mode bits
+// 	ModTime() time.Time // modification time
+// 	IsDir() bool        // abbreviation for Mode().IsDir()
+// 	Sys() any           // underlying data source (can return nil)
+// }
 
 // WriteResult represents the write result
 // Write writes data to the catalog
@@ -95,7 +105,7 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) error {
 	if strings.TrimPrefix(pendingMember, "pending|") != committedMember {
 		return fmt.Errorf("pending member and committed member do not match: %s != %s", pendingMember, committedMember)
 	}
-	err = c.writer.Commit(ctx, req.Catalog, pendingMember, committedMember, tsSeq.Score())
+	err = c.writer.Commit(ctx, req.Catalog, pendingMember, committedMember, tsSeq.Score(), req.Meta)
 	if err != nil {
 		return fmt.Errorf("failed to commit: %w", err)
 	}
