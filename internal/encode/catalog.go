@@ -11,6 +11,7 @@ func EncodeRedisCatalogName(catalog string) string {
 	if len(catalog) == 0 {
 		return "" // Return empty string for empty catalog
 	}
+	return catalog
 
 	// For Redis, if catalog is safe, use as-is with prefix
 	if IsRedisSafe(catalog) {

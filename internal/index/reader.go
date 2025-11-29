@@ -221,3 +221,17 @@ return tonumber(timestamp)`,
 	}
 	return timestamp, nil
 }
+
+func (c *Reader) Meta(ctx context.Context, catalog string) (string, error) {
+	tr := trace.FromContext(ctx)
+	metaKey := c.makeMetaKey(catalog)
+	tr.RecordSpan("Reader.Meta", map[string]interface{}{
+		"catalog": catalog,
+		"metaKey": metaKey,
+	})
+	val, err := c.rdb.Get(ctx, metaKey).Result()
+	if err != nil && err != redis.Nil {
+		return "", err
+	}
+	return val, nil
+}

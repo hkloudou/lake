@@ -12,11 +12,11 @@ import (
 
 // WriteRequest represents a write request
 type WriteRequest struct {
-	Catalog   string         // Catalog name
-	Path      string         // JSON path (e.g., "user.profile.name")
-	Body      []byte         // JSON body to write (raw bytes from network)
-	Meta      map[string]any // Write request meta
-	MergeType MergeType      // Merge strategy (Replace, RFC7396, or RFC6902)
+	Catalog   string    // Catalog name
+	Path      string    // JSON path (e.g., "user.profile.name")
+	Meta      []byte    // Write request meta
+	Body      []byte    // JSON body to write (raw bytes from network)
+	MergeType MergeType // Merge strategy (Replace, RFC7396, or RFC6902)
 }
 
 // type FileInfo interface {

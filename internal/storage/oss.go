@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/md5"
 	"encoding/base32"
@@ -77,29 +78,44 @@ func NewOSSStorage(cfg OSSConfig) (*ossStorage, error) {
 	}, nil
 }
 
-// Put stores data with the given key (with AES encryption)
+// Put stores data with the given key (with compression and AES encryption)
 func (s *ossStorage) Put(ctx context.Context, key string, data []byte) error {
 	s.mu.RLock()
 	bucket := s.bucket
 	aesKey := s.aesKey
 	s.mu.RUnlock()
 
-	// Encrypt data if AES key is provided
+	// Step 1: Compress data with highest compression level
+	var compressedBuf bytes.Buffer
+	gzipWriter, err := gzip.NewWriterLevel(&compressedBuf, gzip.BestCompression)
+	if err != nil {
+		return fmt.Errorf("failed to create gzip writer: %w", err)
+	}
+	if _, err := gzipWriter.Write(data); err != nil {
+		gzipWriter.Close()
+		return fmt.Errorf("failed to compress data: %w", err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		return fmt.Errorf("failed to close gzip writer: %w", err)
+	}
+	compressedData := compressedBuf.Bytes()
+
+	// Step 2: Encrypt data if AES key is provided
 	var dataToWrite []byte
 	if len(aesKey) > 0 {
-		encrypted, err := encrypt.AesGcmEncrypt(data, aesKey)
+		encrypted, err := encrypt.AesGcmEncrypt(compressedData, aesKey)
 		if err != nil {
 			return fmt.Errorf("failed to encrypt data: %w", err)
 		}
 		dataToWrite = encrypted
 	} else {
-		dataToWrite = data
+		dataToWrite = compressedData
 	}
 
 	return bucket.PutObject(key, bytes.NewReader(dataToWrite))
 }
 
-// Get retrieves data by key (with AES decryption)
+// Get retrieves data by key (with AES decryption and decompression)
 func (s *ossStorage) Get(ctx context.Context, key string) ([]byte, error) {
 	s.mu.RLock()
 	bucket := s.bucket
@@ -117,16 +133,31 @@ func (s *ossStorage) Get(ctx context.Context, key string) ([]byte, error) {
 		return nil, err
 	}
 
-	// Decrypt data if AES key is provided
+	// Step 1: Decrypt data if AES key is provided
+	var compressedData []byte
 	if len(aesKey) > 0 {
 		decrypted, err := encrypt.AesGcmDecrypt(data, aesKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to decrypt data: %w", err)
 		}
-		return decrypted, nil
+		compressedData = decrypted
+	} else {
+		compressedData = data
 	}
 
-	return data, nil
+	// Step 2: Decompress data
+	gzipReader, err := gzip.NewReader(bytes.NewReader(compressedData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+	defer gzipReader.Close()
+
+	decompressedData, err := io.ReadAll(gzipReader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decompress data: %w", err)
+	}
+
+	return decompressedData, nil
 }
 
 // Delete removes data by key

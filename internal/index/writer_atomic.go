@@ -2,7 +2,6 @@ package index
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/hkloudou/lake/v2/internal/encode"
@@ -84,7 +83,8 @@ for key, value in pairs(updatedMap) do
     metaMap[key] = value
 end
 
-
+-- Save meta
+redis.call("SET", metaKey, cjson.encode(metaMap))
 
 return "OK"
 `
@@ -192,15 +192,15 @@ func (w *Writer) Rollback(ctx context.Context, catalog, pendingMember string) er
 }
 
 // Commit atomically commits a pending write
-func (w *Writer) Commit(ctx context.Context, catalog, pendingMember, committedMember string, score float64, metaMap map[string]any) error {
+func (w *Writer) Commit(ctx context.Context, catalog, pendingMember, committedMember string, score float64, meta []byte) error {
 	tr := trace.FromContext(ctx)
 	tr.RecordSpan("Commit.Start")
 	zaddKey := w.makeDeltaZsetKey(catalog)
 	metaKey := w.makeMetaKey(catalog)
-	metaMapJSON, err := json.Marshal(metaMap)
-	if err != nil {
-		return fmt.Errorf("failed to marshal updated map: %w", err)
-	}
+	// metaMapJSON, err := json.Marshal(metaMap)
+	// if err != nil {
+	// 	return fmt.Errorf("failed to marshal updated map: %w", err)
+	// }
 	tr.RecordSpan("Commit.MarshalUpdatedMap", map[string]any{
 		// "updatedMap":      updatedMap,
 		// "size":            len(updatedMapJSON),
@@ -209,11 +209,11 @@ func (w *Writer) Commit(ctx context.Context, catalog, pendingMember, committedMe
 		"pendingMember":   pendingMember,
 		"committedMember": committedMember,
 		"score":           fmt.Sprintf("%.6f", score),
-		"metaMapJSON":     string(metaMapJSON),
+		"metaMapJSON":     string(meta),
 	})
-	_, err = w.rdb.Eval(ctx, commitScript,
+	_, err := w.rdb.Eval(ctx, commitScript,
 		[]string{zaddKey, metaKey},
-		pendingMember, committedMember, score, string(metaMapJSON)).Result()
+		pendingMember, committedMember, score, string(meta)).Result()
 
 	return err
 }
