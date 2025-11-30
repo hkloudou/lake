@@ -8,7 +8,7 @@ import (
 )
 
 // AesGcmEncrypt encrypts plaintext using AES-GCM
-func AesGcmEncrypt(plaintext []byte, key []byte) (ciphertext []byte, err error) {
+func aesGcmEncrypt(plaintext []byte, key []byte) (ciphertext []byte, err error) {
 	paddedKey := padKey(key)
 	block, err := aes.NewCipher(paddedKey)
 	if err != nil {
@@ -30,7 +30,7 @@ func AesGcmEncrypt(plaintext []byte, key []byte) (ciphertext []byte, err error) 
 }
 
 // AesGcmDecrypt decrypts ciphertext using AES-GCM
-func AesGcmDecrypt(ciphertext []byte, key []byte) (plaintext []byte, err error) {
+func aesGcmDecrypt(ciphertext []byte, key []byte) (plaintext []byte, err error) {
 	paddedKey := padKey(key)
 	block, err := aes.NewCipher(paddedKey)
 	if err != nil {

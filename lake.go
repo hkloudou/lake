@@ -71,13 +71,13 @@ func NewLake(metaUrl string, opts ...func(*option)) *Client {
 	// Use provided cache or default to main Redis cache with 1 hour TTL
 	snapCache := option.SnapCacheProvider
 	if snapCache == nil {
-		snapCache = cache.NewRedisCache(rdb, 1*time.Hour)
+		snapCache = cache.NewRedisCache(rdb, 2*time.Hour)
 	}
 
-	// Use provided cache or default to memory cache with 10 minute TTL
+	// Use provided cache or default to memory cache with 1 minute TTL
 	deltaCache := option.DeltaCacheProvider
 	if deltaCache == nil {
-		deltaCache = cache.NewMemoryCache(10 * time.Minute)
+		deltaCache = cache.NewMemoryCache(1 * time.Minute) //only keep 1 minute of delta files in memory
 	}
 
 	client := &Client{

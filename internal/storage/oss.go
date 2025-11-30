@@ -52,6 +52,7 @@ import (
 	"sync"
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
+	"github.com/hkloudou/lake/v2/internal/encrypt"
 	"github.com/hkloudou/lake/v2/internal/index"
 )
 
@@ -123,7 +124,7 @@ func (s *ossStorage) Put(ctx context.Context, key string, data []byte) error {
 	s.mu.RUnlock()
 
 	// Compress and encrypt data
-	dataToWrite, err := compressAndEncrypt(data, aesKey)
+	dataToWrite, err := encrypt.Encrypt(data, aesKey)
 	if err != nil {
 		return err
 	}
@@ -150,7 +151,7 @@ func (s *ossStorage) Get(ctx context.Context, key string) ([]byte, error) {
 	}
 
 	// Decrypt and decompress data
-	return decryptAndDecompress(data, aesKey)
+	return encrypt.Decrypt(data, aesKey)
 }
 
 // Delete removes data by key
@@ -232,6 +233,14 @@ func (s *ossStorage) MakeDeltaKey(catalog string, tsSeqID index.TimeSeqID, merge
 func (s *ossStorage) MakeSnapKey(catalog string, startTsSeq, stopTsSeq index.TimeSeqID) string {
 	shardedPath := encodeOssCatalogPath(catalog, 4) // Default: 4-char MD5 prefix (65,536 dirs)
 	return fmt.Sprintf("%s/%s~%s.snap", shardedPath, startTsSeq.String(), stopTsSeq.String())
+}
+
+func (m *ossStorage) MakeFileKey(catalog string, path string) string {
+	// if strings.HasPrefix(path, "/") {
+	// 	path = path[1:]
+	// }
+	shardedPath := encodeOssCatalogPath(catalog, 4) // Default: 4-char MD5 prefix (65,536 dirs)
+	return fmt.Sprintf("%s/files/%s", shardedPath, encodeOssCatalogName(strings.TrimLeft(path, "/")))
 }
 
 // encodeOssCatalogPath generates OSS path with MD5 sharding

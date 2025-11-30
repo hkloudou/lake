@@ -40,6 +40,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/hkloudou/lake/v2/internal/encrypt"
 	"github.com/hkloudou/lake/v2/internal/index"
 )
 
@@ -86,7 +87,7 @@ func (s *fileStorage) Put(ctx context.Context, key string, data []byte) error {
 	s.mu.RUnlock()
 
 	// Compress and encrypt data
-	dataToWrite, err := compressAndEncrypt(data, aesKey)
+	dataToWrite, err := encrypt.Encrypt(data, aesKey)
 	if err != nil {
 		return err
 	}
@@ -128,7 +129,7 @@ func (s *fileStorage) Get(ctx context.Context, key string) ([]byte, error) {
 	}
 
 	// Decrypt and decompress data
-	return decryptAndDecompress(data, aesKey)
+	return encrypt.Decrypt(data, aesKey)
 }
 
 // Delete removes data by key
@@ -227,4 +228,13 @@ func (s *fileStorage) MakeSnapKey(catalog string, startTsSeq, stopTsSeq index.Ti
 	catalogEncoded := encodeOssCatalogName(catalog)
 	hash1, hash2, hash3 := getTimeHash(stopTsSeq)
 	return fmt.Sprintf("%s/%s/%s/%s/%s/%s~%s.snap", md5Prefix, catalogEncoded, hash1, hash2, hash3, startTsSeq.String(), stopTsSeq.String())
+}
+
+func (s *fileStorage) MakeFileKey(catalog string, path string) string {
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	md5Prefix := getCatalogMd5Prefix0xff(catalog)
+	catalogEncoded := encodeOssCatalogName(catalog)
+	return fmt.Sprintf("%s/%s%s", md5Prefix, catalogEncoded, path)
 }

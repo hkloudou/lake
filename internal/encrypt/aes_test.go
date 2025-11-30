@@ -10,13 +10,13 @@ func TestAesGcmEncryptDecrypt(t *testing.T) {
 	plaintext := []byte("Hello, World!")
 
 	// Encrypt
-	ciphertext, err := AesGcmEncrypt(plaintext, key)
+	ciphertext, err := aesGcmEncrypt(plaintext, key)
 	if err != nil {
 		t.Fatalf("Encrypt failed: %v", err)
 	}
 
 	// Decrypt
-	decrypted, err := AesGcmDecrypt(ciphertext, key)
+	decrypted, err := aesGcmDecrypt(ciphertext, key)
 	if err != nil {
 		t.Fatalf("Decrypt failed: %v", err)
 	}

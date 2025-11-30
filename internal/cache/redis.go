@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/hkloudou/lake/v2/internal/encode"
+	"github.com/hkloudou/lake/v2/internal/encrypt"
 	"github.com/hkloudou/lake/v2/internal/xsync"
 	"github.com/hkloudou/lake/v2/trace"
 	"github.com/redis/go-redis/v9"
@@ -52,7 +53,7 @@ func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader fun
 	return c.flight.Do(cacheKey, func() ([]byte, error) {
 		// time.Sleep(1 * time.Second) // for flight test to see if it works
 		// Try to get from Redis
-		cachedData, err := c.client.GetEx(ctx, cacheKey, c.ttl).Result()
+		cachedData, err := c.client.GetEx(ctx, cacheKey, c.ttl).Bytes()
 		if err == redis.Nil {
 			// Cache miss
 			c.stat.IncrementMiss()
@@ -72,7 +73,11 @@ func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader fun
 			})
 
 			// Write to Redis with TTL (data is already []byte, no need to marshal)
-			err = c.client.Set(ctx, cacheKey, data, c.ttl).Err()
+			encryptedData, err := encrypt.Encrypt(data, []byte("lake"))
+			if err != nil {
+				return nil, err
+			}
+			err = c.client.Set(ctx, cacheKey, encryptedData, c.ttl).Err()
 			if err != nil {
 			} else {
 			}
@@ -99,9 +104,13 @@ func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader fun
 			"key":  cacheKey,
 			"size": len(cachedData),
 		})
+		decryptedData, err := encrypt.Decrypt([]byte(cachedData), []byte("lake"))
+		if err != nil {
+			return nil, err
+		}
 
 		// Return cached data as []byte
-		return []byte(cachedData), nil
+		return decryptedData, nil
 	})
 }
 

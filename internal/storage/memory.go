@@ -96,3 +96,10 @@ func (s *memoryStorage) MakeDeltaKey(catalog string, tsSeqID index.TimeSeqID, me
 func (s *memoryStorage) MakeSnapKey(catalog string, startTsSeq, stopTsSeq index.TimeSeqID) string {
 	return fmt.Sprintf("%s/snap/%s~%s.snap", catalog, startTsSeq.String(), stopTsSeq.String())
 }
+
+func (m *memoryStorage) MakeFileKey(catalog string, path string) string {
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return fmt.Sprintf("%s%s", catalog, path)
+}
