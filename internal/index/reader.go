@@ -356,3 +356,35 @@ func (c *Reader) Meta(ctx context.Context, catalog string) (string, error) {
 	}
 	return val, nil
 }
+
+func (c *Reader) BatchMeta(ctx context.Context, catalogs []string) (map[string]string, error) {
+	tr := trace.FromContext(ctx)
+	metaKeys := make([]string, len(catalogs))
+	for i, catalog := range catalogs {
+		metaKeys[i] = c.MakeMetaKey(catalog)
+	}
+	tr.RecordSpan("Reader.BatchMeta", map[string]interface{}{
+		"count": len(catalogs),
+	})
+
+	results, err := c.rdb.MGet(ctx, metaKeys...).Result()
+	if err != nil && err != redis.Nil {
+		return nil, err
+	}
+
+	vals := make(map[string]string, len(catalogs))
+	for i, result := range results {
+		if result == nil {
+			// Redis key doesn't exist, return empty string
+			vals[catalogs[i]] = ""
+		} else {
+			// Type assertion to string
+			if str, ok := result.(string); ok {
+				vals[catalogs[i]] = str
+			} else {
+				vals[catalogs[i]] = ""
+			}
+		}
+	}
+	return vals, nil
+}
