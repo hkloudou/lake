@@ -139,7 +139,8 @@ func (c *Client) MotionSample(ctx context.Context, catalog string, indicator str
 	// Return sampleLastUpdated instead of lastUpdated because:
 	// - This score will be used externally as a version to redirect to different resources
 	// - If skipping sampling, should return the existing version number, not the currently calculated one
-	if sampleLastUpdated > 0 && sampleLastUpdated >= lastUpdated {
+	// if sampleLastUpdated > 0 && sampleLastUpdated >= lastUpdated {
+	if sampleLastUpdated >= lastUpdated {
 		tr.RecordSpan("MotionSample.Skipped", map[string]any{
 			"reason":            "sampleLastUpdated >= lastUpdated",
 			"sampleLastUpdated": sampleLastUpdated,
