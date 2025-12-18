@@ -18,6 +18,11 @@ import (
 // 4. Optimize trace calls (reduce trace in goroutines)
 // 5. Improve error handling logic
 func (c *Client) MotionSample(ctx context.Context, catalog string, indicator string, motionCatalogs []string, callBack func(map[string]*ListResult, float64) (float64, error)) (float64, error) {
+
+	// Ensure initialized before operation
+	if err := c.ensureInitialized(ctx); err != nil {
+		return 0, err
+	}
 	tr := trace.FromContext(ctx)
 	tr.RecordSpan("MotionSample.Start", map[string]any{
 		"catalog":        catalog,
@@ -50,7 +55,6 @@ func (c *Client) MotionSample(ctx context.Context, catalog string, indicator str
 	var mu sync.Mutex
 	var firstErr error
 	listResults := make(map[string]*ListResult, len(motionCatalogs))
-	lastUpdated := float64(0)
 
 	tr.RecordSpan("MotionSample.ListConcurrent.Start", map[string]any{
 		"count": len(motionCatalogs),
@@ -90,6 +94,7 @@ func (c *Client) MotionSample(ctx context.Context, catalog string, indicator str
 	}()
 
 	// Collect results
+	lastUpdated := float64(0)
 	for result := range resultChan {
 		mu.Lock()
 		listResults[result.catalog] = result.listResult
@@ -148,6 +153,11 @@ func (c *Client) MotionSample(ctx context.Context, catalog string, indicator str
 		})
 		return sampleLastUpdated, nil
 	}
+
+	tr.RecordSpan("MotionSample.Processing", map[string]any{
+		"sampleLastUpdated": sampleLastUpdated,
+		"lastUpdated":       lastUpdated,
+	})
 
 	// Use more precise key format to avoid precision loss
 	// Use %.6f instead of %6f to ensure precision
