@@ -17,7 +17,7 @@ import (
 // 3. Explicitly handle redis.Nil case (first sampling)
 // 4. Optimize trace calls (reduce trace in goroutines)
 // 5. Improve error handling logic
-func (c *Client) MotionSample(ctx context.Context, catalog string, indicator string, motionCatalogs []string, callBack func(map[string]*ListResult, float64) (float64, error)) (float64, error) {
+func (c *Client) MotionSample(ctx context.Context, catalog string, indicator string, motionCatalogs []string, shouldUpdated func(sampleTs, lakeTs float64) bool, callBack func(map[string]*ListResult, float64) (float64, error)) (float64, error) {
 
 	// Ensure initialized before operation
 	if err := c.ensureInitialized(ctx); err != nil {
@@ -145,7 +145,7 @@ func (c *Client) MotionSample(ctx context.Context, catalog string, indicator str
 	// - This score will be used externally as a version to redirect to different resources
 	// - If skipping sampling, should return the existing version number, not the currently calculated one
 	// if sampleLastUpdated > 0 && sampleLastUpdated >= lastUpdated {
-	if sampleLastUpdated >= lastUpdated {
+	if sampleLastUpdated >= lastUpdated && shouldUpdated(sampleLastUpdated, lastUpdated) == false {
 		tr.RecordSpan("MotionSample.Skipped", map[string]any{
 			"reason":            "sampleLastUpdated >= lastUpdated",
 			"sampleLastUpdated": sampleLastUpdated,
