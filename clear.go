@@ -25,9 +25,9 @@ func (c *Client) ClearHistory(ctx context.Context, catalog string) error {
 // Uses SingleFlight to prevent concurrent clear operations on the same catalog (avoids deletion traffic storm)
 func (c *Client) ClearHistoryWithRetention(ctx context.Context, catalog string, keepSnaps int) error {
 	// Use SingleFlight to prevent concurrent deletion on same catalog
-	key := fmt.Sprintf("%s_%d", catalog, keepSnaps)
+	key := fmt.Sprintf("%s", catalog)
 	_, err := c.clearFlight.Do(key, func() (struct{}, error) {
-		return struct{}{}, c.doClearHistoryWithRetention(ctx, catalog, keepSnaps)
+		return struct{}{}, c.doClearHistoryOptimized(ctx, catalog, keepSnaps)
 	})
 	return err
 }
@@ -35,7 +35,7 @@ func (c *Client) ClearHistoryWithRetention(ctx context.Context, catalog string, 
 // doClearHistoryWithRetention is the actual implementation (wrapped by SingleFlight)
 // Uses optimized version: batch Redis delete + concurrent Storage delete (10x performance improvement)
 // See implementation in clear_optimized.go
-func (c *Client) doClearHistoryWithRetention(ctx context.Context, catalog string, keepSnaps int) error {
-	// Use optimized version (batch delete)
-	return c.doClearHistoryOptimized(ctx, catalog, keepSnaps)
-}
+// func (c *Client) doClearHistoryWithRetention(ctx context.Context, catalog string, keepSnaps int) error {
+// 	// Use optimized version (batch delete)
+// 	return c.doClearHistoryOptimized(ctx, catalog, keepSnaps)
+// }

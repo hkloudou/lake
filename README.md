@@ -519,17 +519,84 @@ data, _ := lake.ReadMap(ctx, list)
 - Next read will regenerate snapshot
 - Data consistency maintained (snapshots can be rebuilt)
 
-### Pending Cleanup Strategy
+### Write Safety & Orphan File Handling
 
-**Current**: No automatic cleanup of old pending records.
+Lake V2's two-phase commit ensures **zero data loss** even in failure scenarios. Here's how each failure case is handled:
 
-**Rationale**:
-- Pending records are rare (only during write failures)
-- Manual cleanup through bulk data deletion (planned for future versions)
-- Simplicity over complexity
-- Avoiding background tasks and their overhead
+#### Failure Scenarios
 
-**Future**: Unified cleanup when deleting data older than N days.
+| Failure Point | State After Failure | Cleanup Method |
+|---------------|---------------------|----------------|
+| PreCommit fails | Clean - no dirty data | None needed |
+| StoragePut fails | `pending` in Redis, no file | Rollback removes `pending` ✓ |
+| Commit fails | `pending` in Redis + file in storage | `ClearHistory` handles it ✓ |
+| Process crash (after StoragePut, before Commit) | `pending` in Redis + file in storage | `ClearHistory` handles it ✓ |
+
+#### Why No Immediate Cleanup on Commit Failure?
+
+When Commit fails, the system intentionally **does not** immediately delete the orphan file. This design is safer:
+
+1. **Commit failure may be transient** - Network glitch, Redis failover, etc.
+2. **Pending acts as a protection** - Read operations detect `pending` and return an error, preventing inconsistent reads
+3. **ClearHistory is the correct cleanup point** - User explicitly calls cleanup when historical data is no longer needed, ensuring sufficient time has passed
+
+#### How ClearHistory Cleans Orphan Files
+
+The `ClearHistory` API handles all cleanup scenarios:
+
+```go
+// ClearHistory removes old deltas and snapshots
+// This also cleans up any orphan files from failed commits
+client.ClearHistory(ctx, "users")
+```
+
+**Internal flow:**
+1. `ReadSafeRemoveRange` returns all delta members (including `pending` members)
+2. For each delta/pending member, derive the storage path using `MakeDeltaKey(catalog, tsSeq, mergeType)`
+3. Delete storage files in parallel (10 workers)
+4. Batch delete Redis members via `ZREM`
+
+**Key insight**: The `pending` member contains all information needed to reconstruct the storage file path:
+```
+pending|delta|{mergeType}|{path}|{timestamp}_{seqid}
+              ↓              ↓
+          mergeType        tsSeq
+```
+
+Combined with `catalog` (from the ZSet key), we can call:
+```go
+storageDeltaKey := storage.MakeDeltaKey(catalog, tsSeq, mergeType)
+storage.Delete(ctx, storageDeltaKey)
+```
+
+#### No Fragment Tracking Needed
+
+Unlike traditional two-phase commit systems, Lake V2 **does not require** a separate fragment/orphan tracking table because:
+
+1. **Pending member IS the fragment tracker** - Contains all info to locate orphan files
+2. **ClearHistory is comprehensive** - Cleans both committed deltas and uncommitted pending entries
+3. **Simpler architecture** - No additional Redis keys or background cleanup tasks
+
+#### Read Safety During Pending State
+
+When a `pending` member exists:
+- **Age < 120 seconds**: Read returns error (write in progress, client should retry)
+- **Age > 120 seconds**: `pending` is ignored (considered abandoned, will be cleaned by `ClearHistory`)
+
+```go
+list := client.List(ctx, "users")
+if list.HasPending {
+    // Active write in progress, retry later
+    return fmt.Errorf("pending write detected: %w", list.Err)
+}
+```
+
+#### Best Practices
+
+1. **Call `ClearHistory` periodically** - This is the unified cleanup mechanism
+2. **Use `ClearHistoryWithRetention`** - Keep recent snapshots for performance
+3. **Don't worry about orphan files** - They will be cleaned when you call `ClearHistory`
+4. **Trust the pending mechanism** - It prevents inconsistent reads during failures
 
 ### Error Handling
 
