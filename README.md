@@ -53,11 +53,219 @@ func main() {
     // List catalog entries
     list := client.List(ctx, "users")
     
-    // Read merged data
-    data, _ := lake.ReadMap(ctx, list)
-    fmt.Printf("Data: %+v\n", data)
+    // Read merged data (⭐ ReadString is most common)
+    jsonStr, _ := lake.ReadString(ctx, list)
+    fmt.Printf("Data: %s\n", jsonStr)
 }
 ```
+
+## 📚 API Reference
+
+> This section provides precise API signatures and file locations for AI assistants and automation tools.
+
+### Package Import
+
+```go
+import "github.com/hkloudou/lake/v2"
+```
+
+### Client Creation
+
+| Function | File | Description |
+|----------|------|-------------|
+| `NewLake(metaUrl string, opts ...func(*option)) *Client` | [lake.go:48](lake.go#L48) | Create client with Redis URL |
+| `WithStorage(storage storage.Storage) func(*option)` | [lake.go:133](lake.go#L133) | Use custom storage |
+| `WithSnapCacheMetaURL(metaUrl string, ttl time.Duration) func(*option)` | [lake.go:108](lake.go#L108) | Use separate Redis for snapshot cache |
+| `WithDeltaCacheMetaURL(metaUrl string, ttl time.Duration) func(*option)` | [lake.go:124](lake.go#L124) | Use separate Redis for delta cache |
+
+### Write Operations
+
+| Function | File | Description |
+|----------|------|-------------|
+| `(*Client) Write(ctx, WriteRequest) error` | [write.go:53](write.go#L53) | Write JSON data with merge strategy |
+| `(*Client) WriteFile(ctx, WriteFileRequest) error` | [file.go:21](file.go#L21) | Write binary file to catalog |
+
+**WriteRequest struct** ([write.go:14](write.go#L14)):
+```go
+type WriteRequest struct {
+    Catalog   string    // Document namespace (e.g., "users", "orders")
+    Path      string    // JSON path starting with "/" (e.g., "/profile", "/settings/theme")
+    Body      []byte    // JSON data as raw bytes
+    MergeType MergeType // lake.MergeTypeReplace, lake.MergeTypeRFC7396, or lake.MergeTypeRFC6902
+    Meta      []byte    // Optional metadata
+}
+```
+
+**MergeType constants** ([internal/index/encoding.go:13](internal/index/encoding.go#L13)):
+```go
+lake.MergeTypeReplace  // = 1: Simple field replacement
+lake.MergeTypeRFC7396  // = 2: RFC 7396 JSON Merge Patch (null removes field)
+lake.MergeTypeRFC6902  // = 3: RFC 6902 JSON Patch (operations array)
+```
+
+### Read Operations
+
+| Function | File | Description |
+|----------|------|-------------|
+| `(*Client) List(ctx, catalog string) *ListResult` | [list.go:101](list.go#L101) | Get catalog metadata and delta list |
+| `ReadBytes(ctx, *ListResult) ([]byte, error)` | [helpers.go:11](helpers.go#L11) | Read as raw bytes |
+| `ReadString(ctx, *ListResult) (string, error)` | [helpers.go:15](helpers.go#L15) | Read as JSON string ⭐ Most common |
+| `ReadMap(ctx, *ListResult) (map[string]any, error)` | [helpers.go:24](helpers.go#L24) | Read as map |
+| `Read[T any](ctx, *ListResult) (*T, error)` | [helpers.go:38](helpers.go#L38) | Read with generic type |
+
+**Common Read Pattern** (⭐ Most important):
+```go
+// Recommended: Read as string (most common)
+list := client.List(ctx, "users")
+if list.Err != nil {
+    return list.Err
+}
+jsonStr, err := lake.ReadString(ctx, list)
+
+// Alternative: Read with type inference
+list := client.List(ctx, "users")
+user, err := lake.Read[User](ctx, list)
+
+// Alternative: Read as map
+list := client.List(ctx, "users")
+data, err := lake.ReadMap(ctx, list)
+```
+
+**ListResult struct** ([list.go:13](list.go#L13)):
+```go
+type ListResult struct {
+    Err        error  // Non-nil if pending writes detected or other error
+    HasPending bool   // True if write in progress (< 120s)
+}
+
+// Key methods:
+func (m ListResult) Exist() bool         // Returns true if data exists
+func (m ListResult) LastUpdated() float64 // Returns timestamp of last update
+```
+
+### Metadata Operations
+
+| Function | File | Description |
+|----------|------|-------------|
+| `(*Client) Meta(ctx, catalog string) (string, error)` | [meta.go:7](meta.go#L7) | Get catalog metadata |
+| `(*Client) BatchMeta(ctx, catalogs []string) (map[string]string, error)` | [meta.go:14](meta.go#L14) | Get multiple catalog metadata |
+
+### File Operations
+
+| Function | File | Description |
+|----------|------|-------------|
+| `(*Client) WriteFile(ctx, WriteFileRequest) error` | [file.go:21](file.go#L21) | Write binary file |
+| `(*Client) FileExists(ctx, catalog, path string) (bool, error)` | [file.go:63](file.go#L63) | Check if file exists |
+| `(*Client) FilesAndMeta(ctx, catalog string) (string, error)` | [file.go:75](file.go#L75) | Get all files and metadata |
+
+### Cleanup Operations
+
+| Function | File | Description |
+|----------|------|-------------|
+| `(*Client) ClearHistory(ctx, catalog string) error` | [clear.go:10](clear.go#L10) | Clear all history, keep latest snapshot |
+| `(*Client) ClearHistoryWithRetention(ctx, catalog string, keepSnaps int) error` | [clear.go:26](clear.go#L26) | Clear history, keep N snapshots |
+
+### Sampling (Advanced)
+
+| Function | File | Description |
+|----------|------|-------------|
+| `(*Client) MotionSample(ctx, catalog, indicator string, motionCatalogs []string, shouldUpdated func, callback func) (float64, error)` | [sample.go:20](sample.go#L20) | Incremental sampling with change detection |
+
+### Complete Usage Examples
+
+**Basic Write and Read**:
+```go
+client := lake.NewLake("redis://localhost:6379")
+ctx := context.Background()
+
+// Write
+err := client.Write(ctx, lake.WriteRequest{
+    Catalog:   "users",
+    Path:      "/profile",
+    Body:      []byte(`{"name":"Alice","age":30}`),
+    MergeType: lake.MergeTypeReplace,
+})
+
+// Read (⭐ most common pattern)
+list := client.List(ctx, "users")
+if list.Err != nil {
+    log.Fatal(list.Err)
+}
+jsonStr, err := lake.ReadString(ctx, list)
+```
+
+**RFC 7396 Merge Patch** (partial update, null removes field):
+```go
+err := client.Write(ctx, lake.WriteRequest{
+    Catalog:   "users",
+    Path:      "/profile",
+    Body:      []byte(`{"age":31,"city":"NYC","oldField":null}`),
+    MergeType: lake.MergeTypeRFC7396,
+})
+```
+
+**RFC 6902 JSON Patch** (operations):
+```go
+err := client.Write(ctx, lake.WriteRequest{
+    Catalog:   "users",
+    Path:      "/",
+    Body:      []byte(`[{"op":"add","path":"/tags","value":["vip"]}]`),
+    MergeType: lake.MergeTypeRFC6902,
+})
+```
+
+**Read with Type**:
+```go
+type UserProfile struct {
+    Name string `json:"name"`
+    Age  int    `json:"age"`
+}
+
+list := client.List(ctx, "users")
+profile, err := lake.Read[UserProfile](ctx, list)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("Name: %s, Age: %d\n", profile.Name, profile.Age)
+```
+
+**Handle Pending Writes**:
+```go
+list := client.List(ctx, "users")
+if list.HasPending {
+    // Write in progress, retry after delay
+    time.Sleep(100 * time.Millisecond)
+    list = client.List(ctx, "users")
+}
+if list.Err != nil {
+    return list.Err
+}
+data, err := lake.ReadString(ctx, list)
+```
+
+### File Structure
+
+```
+lake/
+├── lake.go          # Client creation, options
+├── write.go         # Write(), WriteRequest
+├── read.go          # Internal read implementation
+├── list.go          # List(), ListResult
+├── helpers.go       # ReadBytes, ReadString, ReadMap, Read[T]
+├── file.go          # WriteFile, FileExists, FilesAndMeta
+├── clear.go         # ClearHistory, ClearHistoryWithRetention
+├── meta.go          # Meta, BatchMeta
+├── sample.go        # MotionSample
+├── snapshot.go      # Internal snapshot management
+└── internal/
+    ├── index/       # Redis index operations
+    ├── storage/     # OSS, File, Memory storage
+    ├── merge/       # RFC 7396, RFC 6902 merge
+    ├── cache/       # Redis, Memory cache
+    └── config/      # Configuration management
+```
+
+## ⚙️ Configuration
 
 ### With Caching
 
