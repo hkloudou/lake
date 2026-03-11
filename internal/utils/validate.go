@@ -8,11 +8,11 @@ import (
 // fieldPathRegex validates that field path:
 //   - Starts with /
 //   - Does not end with /
-//   - Each segment can contain letters, digits, _, $, . (can start with any of these including digits)
+//   - Each segment must start with letter, _, or $ (digits not allowed as first character)
 //   - CRITICAL: Does NOT allow | (pipe) character - it's used as member delimiter in Redis
 //     Member format: delta|{mergeType}|{fieldPath}|{tsSeq}
 //     If | was allowed in fieldPath, strings.Split would break member parsing
-var fieldPathRegex = regexp.MustCompile(`^/([a-zA-Z0-9_$.]+(/[a-zA-Z0-9_$.]+)*)?$`)
+var fieldPathRegex = regexp.MustCompile(`^/([a-zA-Z_$][a-zA-Z0-9_$.]*(/[a-zA-Z_$][a-zA-Z0-9_$.]*)*)?$`)
 
 // filePathRegex validates file path (allows segments starting with digits):
 //   - Starts with /
