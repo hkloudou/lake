@@ -258,6 +258,7 @@ func (r *Reader) readRange(ctx context.Context, catalog string, min, max string)
 	// ts := time.Now().Unix()
 	var lastError error
 	var hasPending bool
+	var hasUnresolvedPending bool
 	for _, z := range results {
 		member := z.Member.(string)
 
@@ -275,8 +276,12 @@ func (r *Reader) readRange(ctx context.Context, catalog string, min, max string)
 			}
 			// Pending write in progress (age < timeout)
 			lastError = fmt.Errorf("pending write detected: %s (age: %ds < %ds)", member, ageSeconds, timeoutThreshold)
-			hasPending = true
+			hasUnresolvedPending = true
 			continue
+		}
+		// A delta after a pending means the read may have incomplete data
+		if hasUnresolvedPending {
+			hasPending = true
 		}
 
 		// Only delta members should remain at this point
