@@ -259,6 +259,8 @@ func (r *Reader) readRange(ctx context.Context, catalog string, min, max string)
 	var lastError error
 	var hasPending bool
 	var hasUnresolvedPending bool
+	var lastPendingMember string
+	var lastPendingAge int64
 	for _, z := range results {
 		member := z.Member.(string)
 
@@ -275,13 +277,15 @@ func (r *Reader) readRange(ctx context.Context, catalog string, min, max string)
 				continue
 			}
 			// Pending write in progress (age < timeout)
-			lastError = fmt.Errorf("pending write detected: %s (age: %ds < %ds)", member, ageSeconds, timeoutThreshold)
+			lastPendingMember = member
+			lastPendingAge = ageSeconds
 			hasUnresolvedPending = true
 			continue
 		}
 		// A delta after a pending means the read may have incomplete data
 		if hasUnresolvedPending {
 			hasPending = true
+			lastError = fmt.Errorf("pending write detected before delta: %s (age: %ds < %ds), next delta: %s", lastPendingMember, lastPendingAge, timeoutThreshold, member)
 		}
 
 		// Only delta members should remain at this point
@@ -304,17 +308,11 @@ func (r *Reader) readRange(ctx context.Context, catalog string, min, max string)
 		"hasPending": hasPending,
 		"error":      lastError,
 	})
-	// Only propagate lastError when there's no hasPending;
-	// hasPending is a retriable signal, not a hard error
-	var retErr error
-	if !hasPending {
-		retErr = lastError
-	}
 	return &ReadIndexResult{
 		Catalog:    catalog,
 		Deltas:     entries,
 		HasPending: hasPending,
-		Err:        retErr,
+		Err:        lastError,
 	}
 }
 
