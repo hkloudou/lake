@@ -318,7 +318,7 @@ func (c *Reader) startRedisTimeUnixUpdater() {
 			timestamp, err := c.getTimeUnix(context.Background())
 			if err != nil {
 				time.Sleep(5 * time.Second)
-				return
+				continue
 			}
 			c.redisTimeUnix = timestamp
 			time.Sleep(5 * time.Second)

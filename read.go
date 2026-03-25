@@ -20,7 +20,10 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 
 	// If pending writes detected, return error
 	if list.HasPending {
-		return nil, fmt.Errorf("pending writes detected: %w", list.Err)
+		if list.Err != nil {
+			return nil, fmt.Errorf("pending writes detected: %w", list.Err)
+		}
+		return nil, fmt.Errorf("pending writes detected")
 	}
 
 	// Ensure initialized before operation
