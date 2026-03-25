@@ -304,11 +304,17 @@ func (r *Reader) readRange(ctx context.Context, catalog string, min, max string)
 		"hasPending": hasPending,
 		"error":      lastError,
 	})
+	// Only propagate lastError when there's no hasPending;
+	// hasPending is a retriable signal, not a hard error
+	var retErr error
+	if !hasPending {
+		retErr = lastError
+	}
 	return &ReadIndexResult{
 		Catalog:    catalog,
 		Deltas:     entries,
 		HasPending: hasPending,
-		Err:        lastError,
+		Err:        retErr,
 	}
 }
 
