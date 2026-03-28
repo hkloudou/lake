@@ -254,13 +254,10 @@ func (r *Reader) readRange(ctx context.Context, catalog string, min, max string)
 	var entries []DeltaInfo
 	// var lastCommittedTimestamp float64
 	// // First pass: collect committed entries and find latest timestamp
-	var timeoutThreshold = int64(120) // 1 minute in seconds
+	var timeoutThreshold = int64(120) // 2 minutes in seconds
 	// ts := time.Now().Unix()
-	var lastError error
 	var hasPending bool
 	var hasUnresolvedPending bool
-	var lastPendingMember string
-	var lastPendingAge int64
 	for _, z := range results {
 		member := z.Member.(string)
 
@@ -277,15 +274,12 @@ func (r *Reader) readRange(ctx context.Context, catalog string, min, max string)
 				continue
 			}
 			// Pending write in progress (age < timeout)
-			lastPendingMember = member
-			lastPendingAge = ageSeconds
 			hasUnresolvedPending = true
 			continue
 		}
 		// A delta after a pending means the read may have incomplete data
 		if hasUnresolvedPending {
 			hasPending = true
-			lastError = fmt.Errorf("pending write detected before delta: %s (age: %ds < %ds), next delta: %s", lastPendingMember, lastPendingAge, timeoutThreshold, member)
 		}
 
 		// Only delta members should remain at this point
@@ -306,13 +300,11 @@ func (r *Reader) readRange(ctx context.Context, catalog string, min, max string)
 		"range":      fmt.Sprintf("%s ~ %s", min, max),
 		"count":      fmt.Sprintf("%d/%d", len(entries), len(results)),
 		"hasPending": hasPending,
-		"error":      lastError,
 	})
 	return &ReadIndexResult{
 		Catalog:    catalog,
 		Deltas:     entries,
 		HasPending: hasPending,
-		Err:        lastError,
 	}
 }
 

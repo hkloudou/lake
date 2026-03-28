@@ -16,7 +16,7 @@ type ListResult struct {
 	LatestSnap *index.SnapInfo   // Snapshot info (if generated or used)
 	Entries    []index.DeltaInfo // Raw entries (for debugging)
 	HasPending bool              // True if pending writes detected (< 60s)
-	Err        error             // Error if pending writes detected (non-fatal)
+	Err        error             // Error from index read (Redis/decode failures)
 }
 
 func (m ListResult) LastUpdated() float64 {

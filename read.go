@@ -13,16 +13,13 @@ import (
 func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error) {
 	tr := trace.FromContext(ctx)
 
-	// Check for pending writes error from List
+	// Check for read errors from List
 	if list.Err != nil {
 		return nil, list.Err
 	}
 
 	// If pending writes detected, return error
 	if list.HasPending {
-		if list.Err != nil {
-			return nil, fmt.Errorf("pending writes detected: %w", list.Err)
-		}
 		return nil, fmt.Errorf("pending writes detected")
 	}
 
