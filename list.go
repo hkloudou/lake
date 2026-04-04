@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/hkloudou/lake/v2/internal/index"
-	"github.com/hkloudou/lake/v2/trace"
+	"github.com/hkloudou/lake/v2/internal/tracer"
 )
 
 // ListResult represents the read result
@@ -118,7 +118,8 @@ func (c *Client) List(ctx context.Context, catalog string, opts ...ListOption) *
 	for _, o := range opts {
 		o(&opt)
 	}
-	tr := trace.FromContext(ctx)
+	ctx, span := tracer.Tracer.Start(ctx, "Lake.List")
+	defer span.End()
 
 	// Ensure initialized before operation
 	if err := c.ensureInitialized(ctx); err != nil {
@@ -128,7 +129,7 @@ func (c *Client) List(ctx context.Context, catalog string, opts ...ListOption) *
 			Err:     err,
 		}
 	}
-	tr.RecordSpan("List.Init")
+	tracer.RecordEvent(span, "List.Init")
 
 	// Try to get existing snapshot
 	snap, err := c.reader.GetLatestSnap(ctx, catalog)
@@ -139,21 +140,21 @@ func (c *Client) List(ctx context.Context, catalog string, opts ...ListOption) *
 			Err:     fmt.Errorf("failed to get snapshot: %w", err),
 		}
 	}
-	tr.RecordSpan("List.GetLatestSnap")
+	tracer.RecordEvent(span, "List.GetLatestSnap")
 
 	var readResult *index.ReadIndexResult
 
 	if snap != nil {
-		tr.RecordSpan("List.ReadSince", map[string]interface{}{
+		tracer.RecordEvent(span, "List.ReadSince", map[string]interface{}{
 			"since": snap.StopTsSeq.String(),
 		})
 		readResult = c.reader.ReadSince(ctx, catalog, snap.StopTsSeq.Score(), opt.strictPending)
 	} else {
 		// No snapshot, read all
-		tr.RecordSpan("List.ReadAll")
+		tracer.RecordEvent(span, "List.ReadAll")
 		readResult = c.reader.ReadAll(ctx, catalog, opt.strictPending)
 	}
-	tr.RecordSpan("List.ReadIndex", map[string]interface{}{
+	tracer.RecordEvent(span, "List.ReadIndex", map[string]interface{}{
 		"count":      len(readResult.Deltas),
 		"hasPending": readResult.HasPending,
 	})

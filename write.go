@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/hkloudou/lake/v2/internal/index"
+	"github.com/hkloudou/lake/v2/internal/tracer"
 	"github.com/hkloudou/lake/v2/internal/utils"
-	"github.com/hkloudou/lake/v2/trace"
 )
 
 func isNoopBody(mergeType MergeType, b []byte) bool {
@@ -59,7 +59,8 @@ type WriteRequest struct {
 //   - RFC7396 patch: []byte(`{"age":31,"city":null}`)
 //   - RFC6902 patch: []byte(`[{"op":"add","path":"/a","value":1}]`)
 func (c *Client) Write(ctx context.Context, req WriteRequest) error {
-	tr := trace.FromContext(ctx)
+	ctx, span := tracer.Tracer.Start(ctx, "Lake.Write")
+	defer span.End()
 
 	if err := utils.ValidateFieldPath(req.Path); err != nil {
 		return err
@@ -69,7 +70,7 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) error {
 	if err := c.ensureInitialized(ctx); err != nil {
 		return err
 	}
-	tr.RecordSpan("Write.Init")
+	tracer.RecordEvent(span, "Write.Init")
 
 	// Fast path: patch with empty body - no data change, only update meta
 	if isNoopBody(req.MergeType, req.Body) {
@@ -77,7 +78,7 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) error {
 		if err != nil {
 			return fmt.Errorf("failed to update meta: %w", err)
 		}
-		tr.RecordSpan("Write.MetaOnly")
+		tracer.RecordEvent(span, "Write.MetaOnly")
 		return nil
 	}
 
@@ -86,7 +87,7 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) error {
 	if err != nil {
 		return fmt.Errorf("failed to generate timeseq and precommit: %w", err)
 	}
-	tr.RecordSpan("Write.PreCommit", map[string]any{
+	tracer.RecordEvent(span, "Write.PreCommit", map[string]any{
 		"tsSeq":  tsSeq.String(),
 		"seqID":  tsSeq.SeqID,
 		"member": pendingMember,
@@ -101,14 +102,14 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) error {
 		// Rollback: remove pending member from Redis delta zset
 		// This prevents Read errors from detecting stale pending writes
 		if rollbackErr := c.writer.Rollback(ctx, req.Catalog, pendingMember); rollbackErr != nil {
-			tr.RecordSpan("Write.Rollback", map[string]any{"error": rollbackErr.Error()})
+			tracer.RecordEvent(span, "Write.Rollback", map[string]any{"error": rollbackErr.Error()})
 			// Log rollback error but return original storage error
 		} else {
-			tr.RecordSpan("Write.Rollback", map[string]any{"success": true})
+			tracer.RecordEvent(span, "Write.Rollback", map[string]any{"success": true})
 		}
 		return fmt.Errorf("failed to write to storage: %w", err)
 	}
-	tr.RecordSpan("Write.StoragePut", map[string]any{
+	tracer.RecordEvent(span, "Write.StoragePut", map[string]any{
 		"key":  storageDeltaKey,
 		"size": len(req.Body),
 	})
@@ -127,7 +128,7 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) error {
 	if err != nil {
 		return fmt.Errorf("failed to commit: %w", err)
 	}
-	tr.RecordSpan("Write.Commit")
+	tracer.RecordEvent(span, "Write.Commit")
 
 	return nil
 }

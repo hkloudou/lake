@@ -5,7 +5,8 @@ import (
 	"fmt"
 
 	"github.com/hkloudou/lake/v2/internal/encode"
-	"github.com/hkloudou/lake/v2/trace"
+	"github.com/hkloudou/lake/v2/internal/tracer"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 // Lua script to atomically generate TimeSeqID and pre-commit to Redis
@@ -217,15 +218,15 @@ func (w *Writer) Rollback(ctx context.Context, catalog, pendingMember string) er
 
 // Commit atomically commits a pending write
 func (w *Writer) Commit(ctx context.Context, catalog, pendingMember, committedMember string, score float64, meta []byte) error {
-	tr := trace.FromContext(ctx)
-	tr.RecordSpan("Commit.Start")
+	span := oteltrace.SpanFromContext(ctx)
+	tracer.RecordEvent(span, "Commit.Start")
 	zaddKey := w.MakeDeltaZsetKey(catalog)
 	metaKey := w.MakeMetaKey(catalog)
 	// metaMapJSON, err := json.Marshal(metaMap)
 	// if err != nil {
 	// 	return fmt.Errorf("failed to marshal updated map: %w", err)
 	// }
-	tr.RecordSpan("Commit.MarshalUpdatedMap", map[string]any{
+	tracer.RecordEvent(span, "Commit.MarshalUpdatedMap", map[string]any{
 		// "updatedMap":      updatedMap,
 		// "size":            len(updatedMapJSON),
 		"zaddKey":         zaddKey,

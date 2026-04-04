@@ -7,7 +7,8 @@ import (
 	"github.com/hkloudou/lake/v2/internal/encode"
 	"github.com/hkloudou/lake/v2/internal/encrypt"
 	"github.com/hkloudou/lake/v2/internal/xsync"
-	"github.com/hkloudou/lake/v2/trace"
+	"github.com/hkloudou/lake/v2/internal/tracer"
+	oteltrace "go.opentelemetry.io/otel/trace"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -42,8 +43,8 @@ func NewRedisCacheWithURL(metaUrl string, ttl time.Duration) (*RedisCache, error
 
 // Take implements Cache interface with SingleFlight to prevent cache stampede
 func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader func() ([]byte, error)) ([]byte, error) {
-	tr := trace.FromContext(ctx)
-	tr.RecordSpan("RedisCache.Take", map[string]any{
+	span := oteltrace.SpanFromContext(ctx)
+	tracer.RecordEvent(span,"RedisCache.Take", map[string]any{
 		"namespace": namespace,
 		"key":       key,
 	})
@@ -57,18 +58,18 @@ func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader fun
 		if err == redis.Nil {
 			// Cache miss
 			c.stat.IncrementMiss()
-			tr.RecordSpan("RedisCache.Miss")
+			tracer.RecordEvent(span,"RedisCache.Miss")
 
 			// Call loader function to get []byte
 			data, err := loader()
 			if err != nil {
-				tr.RecordSpan("RedisCache.LoaderFailed", map[string]any{
+				tracer.RecordEvent(span,"RedisCache.LoaderFailed", map[string]any{
 					"error": err.Error(),
 				})
 				return nil, err
 			}
 
-			tr.RecordSpan("RedisCache.Loaded", map[string]any{
+			tracer.RecordEvent(span,"RedisCache.Loaded", map[string]any{
 				"size": len(data),
 			})
 
@@ -85,12 +86,12 @@ func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader fun
 			return data, nil
 		} else if err != nil {
 			// Redis error, fallback to loader
-			tr.RecordSpan("RedisCache.ErrorAndLoad", map[string]any{
+			tracer.RecordEvent(span,"RedisCache.ErrorAndLoad", map[string]any{
 				"error": err.Error(),
 			})
 			data, err := loader()
 			if err != nil {
-				tr.RecordSpan("RedisCache.LoaderFailed", map[string]any{
+				tracer.RecordEvent(span,"RedisCache.LoaderFailed", map[string]any{
 					"error": err.Error(),
 				})
 				return nil, err
@@ -100,7 +101,7 @@ func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader fun
 
 		// Cache hit
 		c.stat.IncrementHit()
-		tr.RecordSpan("RedisCache.Hit", map[string]any{
+		tracer.RecordEvent(span,"RedisCache.Hit", map[string]any{
 			"key":  cacheKey,
 			"size": len(cachedData),
 		})

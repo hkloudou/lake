@@ -7,7 +7,7 @@ import (
 	"math"
 	"sync"
 
-	"github.com/hkloudou/lake/v2/trace"
+	"github.com/hkloudou/lake/v2/internal/tracer"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -23,8 +23,9 @@ func (c *Client) MotionSample(ctx context.Context, catalog string, indicator str
 	if err := c.ensureInitialized(ctx); err != nil {
 		return 0, err
 	}
-	tr := trace.FromContext(ctx)
-	tr.RecordSpan("MotionSample.Start", map[string]any{
+	ctx, span := tracer.Tracer.Start(ctx, "Lake.MotionSample")
+	defer span.End()
+	tracer.RecordEvent(span, "MotionSample.Start", map[string]any{
 		"catalog":        catalog,
 		"indicator":      indicator,
 		"motionCatalogs": motionCatalogs,
@@ -33,7 +34,7 @@ func (c *Client) MotionSample(ctx context.Context, catalog string, indicator str
 	// Get last sample time
 	sampleLastUpdated, err := c.reader.GetSampleScore(ctx, catalog, indicator)
 	if err != nil && !errors.Is(err, redis.Nil) {
-		tr.RecordSpan("MotionSample.GetSampleScoreFailed", map[string]any{
+		tracer.RecordEvent(span, "MotionSample.GetSampleScoreFailed", map[string]any{
 			"error": err.Error(),
 		})
 		return 0, err
@@ -45,7 +46,7 @@ func (c *Client) MotionSample(ctx context.Context, catalog string, indicator str
 		motionCatalogs = []string{catalog}
 	}
 
-	tr.RecordSpan("MotionSample.GetSampleScore", map[string]any{
+	tracer.RecordEvent(span, "MotionSample.GetSampleScore", map[string]any{
 		"sampleLastUpdated": sampleLastUpdated,
 		"motionCatalogs":    motionCatalogs,
 	})
@@ -56,7 +57,7 @@ func (c *Client) MotionSample(ctx context.Context, catalog string, indicator str
 	var firstErr error
 	listResults := make(map[string]*ListResult, len(motionCatalogs))
 
-	tr.RecordSpan("MotionSample.ListConcurrent.Start", map[string]any{
+	tracer.RecordEvent(span, "MotionSample.ListConcurrent.Start", map[string]any{
 		"count": len(motionCatalogs),
 	})
 
@@ -109,23 +110,23 @@ func (c *Client) MotionSample(ctx context.Context, catalog string, indicator str
 
 		// Trace called in main goroutine to avoid concurrency issues
 		if result.err != nil {
-			tr.RecordSpan("MotionSample.List.Error", map[string]any{
+			tracer.RecordEvent(span, "MotionSample.List.Error", map[string]any{
 				"catalog": result.catalog,
 				"error":   result.err.Error(),
 			})
 		} else if result.lastUpdated > 0 {
-			tr.RecordSpan("MotionSample.List.Success", map[string]any{
+			tracer.RecordEvent(span, "MotionSample.List.Success", map[string]any{
 				"catalog":     result.catalog,
 				"lastUpdated": result.lastUpdated,
 			})
 		} else {
-			tr.RecordSpan("MotionSample.List.Empty", map[string]any{
+			tracer.RecordEvent(span, "MotionSample.List.Empty", map[string]any{
 				"catalog": result.catalog,
 			})
 		}
 	}
 
-	tr.RecordSpan("MotionSample.ListConcurrent.Done", map[string]any{
+	tracer.RecordEvent(span, "MotionSample.ListConcurrent.Done", map[string]any{
 		"sampleLastUpdated": sampleLastUpdated,
 		"lastUpdated":       lastUpdated,
 		"resultCount":       len(listResults),
@@ -133,7 +134,7 @@ func (c *Client) MotionSample(ctx context.Context, catalog string, indicator str
 
 	// Error handling
 	if firstErr != nil {
-		tr.RecordSpan("MotionSample.Error", map[string]any{
+		tracer.RecordEvent(span, "MotionSample.Error", map[string]any{
 			"error": firstErr.Error(),
 		})
 		return 0, firstErr
@@ -146,7 +147,7 @@ func (c *Client) MotionSample(ctx context.Context, catalog string, indicator str
 	// - If skipping sampling, should return the existing version number, not the currently calculated one
 	// if sampleLastUpdated > 0 && sampleLastUpdated >= lastUpdated {
 	if sampleLastUpdated >= lastUpdated && shouldUpdated(sampleLastUpdated, lastUpdated) == false {
-		tr.RecordSpan("MotionSample.Skipped", map[string]any{
+		tracer.RecordEvent(span, "MotionSample.Skipped", map[string]any{
 			"reason":            "sampleLastUpdated >= lastUpdated",
 			"sampleLastUpdated": sampleLastUpdated,
 			"lastUpdated":       lastUpdated,
@@ -154,7 +155,7 @@ func (c *Client) MotionSample(ctx context.Context, catalog string, indicator str
 		return sampleLastUpdated, nil
 	}
 
-	tr.RecordSpan("MotionSample.Processing", map[string]any{
+	tracer.RecordEvent(span, "MotionSample.Processing", map[string]any{
 		"sampleLastUpdated": sampleLastUpdated,
 		"lastUpdated":       lastUpdated,
 	})
@@ -162,49 +163,49 @@ func (c *Client) MotionSample(ctx context.Context, catalog string, indicator str
 	// Use more precise key format to avoid precision loss
 	// Use %.6f instead of %6f to ensure precision
 	singleFlightKey := fmt.Sprintf("%s:%s:%.6f", catalog, indicator, lastUpdated)
-	tr.RecordSpan("MotionSample.SingleFlight.Start", map[string]any{
+	tracer.RecordEvent(span, "MotionSample.SingleFlight.Start", map[string]any{
 		"key": singleFlightKey,
 	})
 
 	score, err := c.sampleFlight.Do(singleFlightKey, func() (float64, error) {
-		tr.RecordSpan("MotionSample.Callback.Start", map[string]any{
+		tracer.RecordEvent(span, "MotionSample.Callback.Start", map[string]any{
 			"lastUpdated": lastUpdated,
 		})
 		score, err := callBack(listResults, lastUpdated)
 		if err != nil {
-			tr.RecordSpan("MotionSample.Callback.Error", map[string]any{
+			tracer.RecordEvent(span, "MotionSample.Callback.Error", map[string]any{
 				"error": err.Error(),
 			})
 			return 0, err
 		}
-		tr.RecordSpan("MotionSample.Callback.Done", map[string]any{
+		tracer.RecordEvent(span, "MotionSample.Callback.Done", map[string]any{
 			"score": score,
 		})
 
-		tr.RecordSpan("MotionSample.UpdateSampleScore.Start", map[string]any{
+		tracer.RecordEvent(span, "MotionSample.UpdateSampleScore.Start", map[string]any{
 			"catalog":   catalog,
 			"indicator": indicator,
 			"score":     score,
 		})
 		err = c.writer.UpdateSampleScore(ctx, catalog, indicator, score)
 		if err != nil {
-			tr.RecordSpan("MotionSample.UpdateSampleScore.Error", map[string]any{
+			tracer.RecordEvent(span, "MotionSample.UpdateSampleScore.Error", map[string]any{
 				"error": err.Error(),
 			})
 			return 0, err
 		}
-		tr.RecordSpan("MotionSample.UpdateSampleScore.Done")
+		tracer.RecordEvent(span, "MotionSample.UpdateSampleScore.Done")
 		return score, nil
 	})
 
 	if err != nil {
-		tr.RecordSpan("MotionSample.Failed", map[string]any{
+		tracer.RecordEvent(span, "MotionSample.Failed", map[string]any{
 			"error": err.Error(),
 		})
 		return 0, err
 	}
 
-	tr.RecordSpan("MotionSample.Success", map[string]any{
+	tracer.RecordEvent(span, "MotionSample.Success", map[string]any{
 		"score": score,
 	})
 	return score, nil

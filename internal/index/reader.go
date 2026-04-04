@@ -6,8 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hkloudou/lake/v2/trace"
+	"github.com/hkloudou/lake/v2/internal/tracer"
 	"github.com/redis/go-redis/v9"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 // Reader handles reading from Redis ZADD index
@@ -57,8 +58,8 @@ type SampleInfo struct {
 
 // ReadAll reads all entries from the catalog
 func (r *Reader) ReadAll(ctx context.Context, catalog string, strictPending bool) *ReadIndexResult {
-	tr := trace.FromContext(ctx)
-	tr.RecordSpan("Read.ReadAll", map[string]interface{}{
+	span := oteltrace.SpanFromContext(ctx)
+	tracer.RecordEvent(span, "Read.ReadAll", map[string]interface{}{
 		"catalog": catalog,
 	})
 	return r.readRange(ctx, catalog, "-inf", "+inf", strictPending)
@@ -241,7 +242,7 @@ func (m SnapInfo) Dump() string {
 
 func (r *Reader) readRange(ctx context.Context, catalog string, min, max string, strictPending bool) *ReadIndexResult {
 	key := r.MakeDeltaZsetKey(catalog)
-	tr := trace.FromContext(ctx)
+	span := oteltrace.SpanFromContext(ctx)
 	results, err := r.rdb.ZRangeByScoreWithScores(ctx, key, &redis.ZRangeBy{
 		Min: min,
 		Max: max,
@@ -299,7 +300,7 @@ func (r *Reader) readRange(ctx context.Context, catalog string, min, max string,
 		entries = append(entries, *deltaInfo)
 	}
 
-	tr.RecordSpan("Read.ReadRange", map[string]interface{}{
+	tracer.RecordEvent(span, "Read.ReadRange", map[string]interface{}{
 		"range":      fmt.Sprintf("%s ~ %s", min, max),
 		"count":      fmt.Sprintf("%d/%d", len(entries), len(results)),
 		"hasPending": hasPending,
@@ -348,9 +349,9 @@ return tonumber(timestamp)`,
 }
 
 func (c *Reader) Meta(ctx context.Context, catalog string) (string, error) {
-	tr := trace.FromContext(ctx)
+	span := oteltrace.SpanFromContext(ctx)
 	metaKey := c.MakeMetaKey(catalog)
-	tr.RecordSpan("Reader.Meta", map[string]interface{}{
+	tracer.RecordEvent(span, "Reader.Meta", map[string]interface{}{
 		"catalog": catalog,
 		"metaKey": metaKey,
 	})
@@ -362,12 +363,12 @@ func (c *Reader) Meta(ctx context.Context, catalog string) (string, error) {
 }
 
 func (c *Reader) BatchMeta(ctx context.Context, catalogs []string) (map[string]string, error) {
-	tr := trace.FromContext(ctx)
+	span := oteltrace.SpanFromContext(ctx)
 	metaKeys := make([]string, len(catalogs))
 	for i, catalog := range catalogs {
 		metaKeys[i] = c.MakeMetaKey(catalog)
 	}
-	tr.RecordSpan("Reader.BatchMeta", map[string]interface{}{
+	tracer.RecordEvent(span, "Reader.BatchMeta", map[string]interface{}{
 		"count": len(catalogs),
 	})
 

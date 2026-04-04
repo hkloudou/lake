@@ -6,7 +6,8 @@ import (
 	"time"
 
 	"github.com/hkloudou/lake/v2/internal/xsync"
-	"github.com/hkloudou/lake/v2/trace"
+	"github.com/hkloudou/lake/v2/internal/tracer"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 // MemoryCache implements Cache interface using in-memory map with TTL
@@ -38,9 +39,9 @@ func NewMemoryCache(ttl time.Duration) *MemoryCache {
 
 // Take implements Cache interface with SingleFlight
 func (c *MemoryCache) Take(ctx context.Context, namespace, key string, loader func() ([]byte, error)) ([]byte, error) {
-	tr := trace.FromContext(ctx)
+	span := oteltrace.SpanFromContext(ctx)
 	cacheKey := namespace + ":" + key
-	tr.RecordSpan("MemoryCache.Take", map[string]any{
+	tracer.RecordEvent(span,"MemoryCache.Take", map[string]any{
 		"namespace": namespace,
 		"key":       key,
 	})
@@ -52,7 +53,7 @@ func (c *MemoryCache) Take(ctx context.Context, namespace, key string, loader fu
 			if time.Now().Before(entry.expireTime) {
 				// Cache hit
 				c.mu.RUnlock()
-				tr.RecordSpan("MemoryCache.Hit", map[string]any{
+				tracer.RecordEvent(span,"MemoryCache.Hit", map[string]any{
 					"key":  cacheKey,
 					"size": len(entry.value),
 				})
@@ -61,12 +62,12 @@ func (c *MemoryCache) Take(ctx context.Context, namespace, key string, loader fu
 		}
 		c.mu.RUnlock()
 
-		tr.RecordSpan("MemoryCache.Miss")
+		tracer.RecordEvent(span,"MemoryCache.Miss")
 
 		// Cache miss, call loader
 		data, err := loader()
 		if err != nil {
-			tr.RecordSpan("MemoryCache.LoaderFailed", map[string]any{
+			tracer.RecordEvent(span,"MemoryCache.LoaderFailed", map[string]any{
 				"error": err.Error(),
 			})
 			return nil, err
@@ -80,7 +81,7 @@ func (c *MemoryCache) Take(ctx context.Context, namespace, key string, loader fu
 		}
 		c.mu.Unlock()
 
-		tr.RecordSpan("MemoryCache.Loaded", map[string]any{
+		tracer.RecordEvent(span,"MemoryCache.Loaded", map[string]any{
 			"size": len(data),
 		})
 

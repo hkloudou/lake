@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/hkloudou/lake/v2/internal/merge"
+	"github.com/hkloudou/lake/v2/internal/tracer"
 	"github.com/hkloudou/lake/v2/internal/utils"
-	"github.com/hkloudou/lake/v2/trace"
 	"github.com/tidwall/sjson"
 )
 
@@ -21,10 +21,11 @@ type WriteFileRequest struct {
 func (c *Client) WriteFile(ctx context.Context, req WriteFileRequest) error {
 	// shardedPath := encode.EncodeOssCatalogPath(catalog, 4) // Default: 4-char MD5 prefix (65,536 dirs)
 	// return c.storage.Put(ctx, shardedPath+"/"+filename, data)
-	tr := trace.FromContext(ctx)
-	tr.RecordSpan("WriteFile.Init")
+	ctx, span := tracer.Tracer.Start(ctx, "Lake.WriteFile")
+	defer span.End()
+	tracer.RecordEvent(span, "WriteFile.Init")
 
-	tr.RecordSpan("WriteFile.ValidateFieldPath", map[string]any{
+	tracer.RecordEvent(span, "WriteFile.ValidateFieldPath", map[string]any{
 		"path":    req.Path,
 		"catalog": req.Catalog,
 		"meta":    string(req.Meta),
@@ -44,7 +45,7 @@ func (c *Client) WriteFile(ctx context.Context, req WriteFileRequest) error {
 	if err := c.storage.Put(ctx, storageFileKey, req.Body); err != nil {
 		return fmt.Errorf("failed to write file: %w", err)
 	}
-	tr.RecordSpan("WriteFile.StoragePut", map[string]any{
+	tracer.RecordEvent(span, "WriteFile.StoragePut", map[string]any{
 		"key":  storageFileKey,
 		"size": len(req.Body),
 	})
@@ -53,7 +54,7 @@ func (c *Client) WriteFile(ctx context.Context, req WriteFileRequest) error {
 	if err := c.rdb.HSet(ctx, fileHmacKey, req.Path, req.Meta).Err(); err != nil {
 		return fmt.Errorf("failed to write file hmac: %w", err)
 	}
-	tr.RecordSpan("WriteFile.RedisHSet", map[string]any{
+	tracer.RecordEvent(span, "WriteFile.RedisHSet", map[string]any{
 		"key":  fileHmacKey,
 		"size": len(req.Meta),
 	})
