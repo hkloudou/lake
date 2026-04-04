@@ -33,19 +33,24 @@ package main
 import (
     "context"
     "fmt"
-    
+    "log"
+
     "github.com/hkloudou/lake/v2"
+    "go.opentelemetry.io/otel"
 )
 
-func main() {
-    // Create client (config loaded lazily)
-    client := lake.NewLake("redis://localhost:6379")
-    ctx := context.Background()
+var appTracer = otel.Tracer("my-app")
 
-    // Write data
+func main() {
+    client := lake.NewLake("redis://localhost:6379")
+
+    ctx, span := appTracer.Start(context.Background(), "main")
+    defer span.End()
+
+    // Write data (creates child span: Lake.Write)
     err := client.Write(ctx, lake.WriteRequest{
         Catalog:   "users",
-        Path:      "/profile",  // Path format: starts with /
+        Path:      "/profile",
         Body:      []byte(`{"name":"Alice","age":30}`),
         MergeType: lake.MergeTypeReplace,
     })
@@ -53,10 +58,8 @@ func main() {
         log.Fatal(err)
     }
 
-    // List catalog entries
+    // Read merged data (creates child spans: Lake.List, Lake.Read)
     list := client.List(ctx, "users")
-
-    // Read merged data (⭐ ReadString is most common)
     jsonStr, _ := lake.ReadString(ctx, list)
     fmt.Printf("Data: %s\n", jsonStr)
 }
@@ -180,7 +183,9 @@ func (m ListResult) LastUpdated() float64 // Returns timestamp of last update
 **Basic Write and Read**:
 ```go
 client := lake.NewLake("redis://localhost:6379")
-ctx := context.Background()
+
+ctx, span := otel.Tracer("my-app").Start(context.Background(), "BasicExample")
+defer span.End()
 
 // Write
 err := client.Write(ctx, lake.WriteRequest{
