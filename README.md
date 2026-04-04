@@ -13,7 +13,7 @@
 - **⚡ High Performance** - 999,999 writes/sec per catalog, parallel I/O, worker pool optimization
 - **💾 Smart Caching** - Redis-based cache with namespace isolation (~90% hit ratio)
 - **🎯 Intelligent Encoding** - MD5-based sharding, case-insensitive safe paths
-- **🔍 Built-in Tracing** - Context-based performance monitoring (zero overhead when disabled)
+- **🔍 OpenTelemetry Tracing** - Native OTel spans for all operations (zero overhead when no TracerProvider configured)
 - **🔐 AES Encryption** - Optional AES-GCM encryption with minimal overhead (<0.05ms)
 - **📊 Snapshot System** - Time-range based snapshots for efficient incremental reads
 
@@ -450,23 +450,83 @@ master:
 | Max Data Loss | All (OK) | 1 second |
 | Recovery Time | Fast (rebuild) | Instant (AOF) |
 
-### With Performance Tracing
+### 🔍 OpenTelemetry Tracing
+
+Lake uses [OpenTelemetry](https://opentelemetry.io/) natively — no custom trace package needed. Spans are automatically created for all core operations: `Lake.Write`, `Lake.Read`, `Lake.List`, `Lake.WriteFile`, `Lake.MotionSample`, and `Lake.ClearHistory`.
+
+**Integrating with Grafana Tempo (gRPC):**
 
 ```go
-import "github.com/hkloudou/lake/v2/trace"
+import (
+    "go.opentelemetry.io/otel"
+    "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+    "go.opentelemetry.io/otel/sdk/resource"
+    sdktrace "go.opentelemetry.io/otel/sdk/trace"
+    semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+)
 
-ctx := trace.WithTrace(context.Background(), "Write")
-client.Write(ctx, req)
-
-tr := trace.FromContext(ctx)
-fmt.Println(tr.Dump())
-// Output:
-// === Trace [Write]: Total 248ms ===
-// [1] Init: 14.84ms
-// [2] PreCommit: 2.14ms {tsSeq:..., seqID:1}
-// [3] StoragePut: 203.48ms {key:..., size:5}
-// [4] Commit: 2.57ms
+func initTracer() func() {
+    exporter, _ := otlptracegrpc.New(context.Background(),
+        otlptracegrpc.WithEndpoint("tempo:4317"),
+        otlptracegrpc.WithInsecure(),
+    )
+    tp := sdktrace.NewTracerProvider(
+        sdktrace.WithBatcher(exporter),
+        sdktrace.WithResource(resource.NewWithAttributes(
+            semconv.SchemaURL,
+            semconv.ServiceNameKey.String("my-service"),
+        )),
+    )
+    otel.SetTracerProvider(tp)
+    return func() { tp.Shutdown(context.Background()) }
+}
 ```
+
+**Integrating with Grafana Tempo (HTTP):**
+
+```go
+import "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+
+exporter, _ := otlptracehttp.New(context.Background(),
+    otlptracehttp.WithEndpoint("tempo:4318"),
+    otlptracehttp.WithInsecure(),
+)
+// Then use exporter with sdktrace.NewTracerProvider as above
+```
+
+> **Note:** `otel.Tracer("lake")` (instrumentation library name) and `semconv.ServiceNameKey.String("my-service")` (service name) are different concepts and do not conflict. The service name identifies *your* application; the tracer name identifies the lake library. In Tempo they appear as `service.name=my-service` and `otel.library.name=lake`.
+
+**Usage:**
+
+```go
+// Initialize tracer (once at startup)
+shutdown := initTracer()
+defer shutdown()
+
+// All lake operations automatically create spans
+client := lake.NewLake("redis://localhost:6379")
+ctx := context.Background()
+
+// This creates a "Lake.Write" span with child spans
+err := client.Write(ctx, lake.WriteRequest{...})
+
+// This creates "Lake.List" and "Lake.Read" spans
+list := client.List(ctx, "users")
+data, _ := lake.ReadString(ctx, list)
+```
+
+**Span Hierarchy:**
+
+| Parent Span | Child Spans |
+|-------------|-------------|
+| `Lake.Write` | `Index.Commit` |
+| `Lake.Read` | `Lake.FillDeltasBody`, `Cache.Redis.Take`, `Cache.Memory.Take` |
+| `Lake.List` | `Index.ReadRange` |
+| `Lake.MotionSample` | `Index.GetSampleScore`, `Index.UpdateSampleScore`, `Lake.List` |
+| `Lake.ClearHistory` | — |
+| `Lake.WriteFile` | — |
+
+> 💡 If no `TracerProvider` is configured, OpenTelemetry uses a noop tracer with zero overhead.
 
 ## 📖 Core Concepts
 
@@ -680,6 +740,7 @@ Read (Parallel + Async):
 
 ### What's New in v2.3.x
 
+- **OpenTelemetry Migration**: Replaced custom `trace` package with native OpenTelemetry instrumentation — spans are automatically created for all core operations (`Lake.Write`, `Lake.Read`, `Lake.List`, etc.)
 - **Pending/Error Separation**: `HasPending` and `Err` are now independent — `Err` is only for real errors, pending state is conveyed solely via `HasPending`
 - **Position-Aware Pending Detection**: By default, only pending members that appear before a delta trigger `HasPending` (tail pending is harmless and ignored)
 - **`WithStrictPending()` Option**: Opt-in strict mode where any pending triggers `HasPending`, for strong consistency scenarios
@@ -703,8 +764,8 @@ Read (Parallel + Async):
 # Run all tests
 go test ./...
 
-# Run with trace
-go test -v -run TestWriteWithTrace
+# Run with verbose output
+go test -v
 
 # Specific package
 go test -v ./internal/merge
@@ -745,7 +806,7 @@ data, _ := lake.ReadMap(ctx, list)
 
 **Behavior**:
 - Snapshot save failure **does not fail Read operation**
-- Error recorded in trace for debugging
+- Error recorded as a span event for debugging (visible in OTel traces)
 - Next read will regenerate snapshot
 - Data consistency maintained (snapshots can be rebuilt)
 
@@ -839,7 +900,6 @@ if list.HasPending {
 ## 📚 Examples
 
 - [Basic Examples](./example_test.go) - Write, Read, RFC patches
-- [Trace Examples](./trace_example_test.go) - Performance monitoring
 - [Cache Examples](./cache_example_test.go) - Redis caching setup
 
 ## 🤝 Contributing
