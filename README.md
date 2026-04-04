@@ -627,7 +627,16 @@ SyncJob                      (root span, self-generated traceID)
 | `Lake.ClearHistory` | — |
 | `Lake.WriteFile` | — |
 
-> 💡 If no `TracerProvider` is configured, OpenTelemetry uses a noop tracer with zero overhead.
+> 💡 **No `TracerProvider` configured?** OpenTelemetry defaults to a noop tracer — zero overhead, no spans created, no data sent.
+>
+> 💡 **Only trace requests with upstream traceID?** Use `ParentBased(NeverSample())` as sampler — spans are only created when a parent span exists in the context (e.g. from `traceparent` header):
+> ```go
+> tp := sdktrace.NewTracerProvider(
+>     sdktrace.WithBatcher(exporter),
+>     sdktrace.WithResource(res),
+>     sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.NeverSample())),
+> )
+> ```
 
 ## 📖 Core Concepts
 
