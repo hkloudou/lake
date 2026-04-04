@@ -5,7 +5,6 @@ import (
 
 	"github.com/hkloudou/lake/v2/internal/tracer"
 	"github.com/redis/go-redis/v9"
-	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 // func (r *Reader) ShouldSample(ctx context.Context, catalog string, indicator string, motionCatalogs []string) error {
@@ -19,39 +18,37 @@ import (
 // }
 
 func (r *Reader) GetSampleScore(ctx context.Context, catalog, indicatorMember string) (float64, error) {
-	span := oteltrace.SpanFromContext(ctx)
+	_, span := tracer.Tracer.Start(ctx, "Index.GetSampleScore")
+	defer span.End()
 	key := r.makeSampleKey(catalog)
-	tracer.RecordEvent(span, "Sample.GetSampleScore", map[string]interface{}{
-		"catalog":         catalog,
-		"indicatorMember": indicatorMember,
-		"key":             key,
-	})
+	span.SetAttributes(tracer.Attrs(map[string]any{
+		"index.catalog":   catalog,
+		"index.indicator": indicatorMember,
+		"index.key":       key,
+	})...)
 	score, err := r.rdb.ZScore(ctx, key, indicatorMember).Result()
 	if err != nil {
 		return 0, err
 	}
-	tracer.RecordEvent(span, "Sample.GetSampleScore.Done", map[string]interface{}{
-		"score": score,
-	})
+	span.SetAttributes(tracer.Attrs(map[string]any{
+		"index.score": score,
+	})...)
 	return score, nil
 }
 
 func (r *Writer) UpdateSampleScore(ctx context.Context, catalog, indicatorMember string, score float64) error {
-	span := oteltrace.SpanFromContext(ctx)
+	_, span := tracer.Tracer.Start(ctx, "Index.UpdateSampleScore")
+	defer span.End()
 	key := r.makeSampleKey(catalog)
-	tracer.RecordEvent(span, "Sample.UpdateSampleScore", map[string]interface{}{
-		"catalog":         catalog,
-		"indicatorMember": indicatorMember,
-		"score":           score,
-		"key":             key,
-	})
+	span.SetAttributes(tracer.Attrs(map[string]any{
+		"index.catalog":   catalog,
+		"index.indicator": indicatorMember,
+		"index.score":     score,
+		"index.key":       key,
+	})...)
 	err := r.rdb.ZAdd(ctx, key, redis.Z{
 		Score:  score,
 		Member: indicatorMember,
 	}).Err()
-	if err != nil {
-		return err
-	}
-	tracer.RecordEvent(span, "Sample.UpdateSampleScore.Done")
-	return nil
+	return err
 }

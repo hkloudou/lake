@@ -8,7 +8,6 @@ import (
 	"github.com/hkloudou/lake/v2/internal/encrypt"
 	"github.com/hkloudou/lake/v2/internal/xsync"
 	"github.com/hkloudou/lake/v2/internal/tracer"
-	oteltrace "go.opentelemetry.io/otel/trace"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -43,11 +42,12 @@ func NewRedisCacheWithURL(metaUrl string, ttl time.Duration) (*RedisCache, error
 
 // Take implements Cache interface with SingleFlight to prevent cache stampede
 func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader func() ([]byte, error)) ([]byte, error) {
-	span := oteltrace.SpanFromContext(ctx)
-	tracer.RecordEvent(span,"RedisCache.Take", map[string]any{
-		"namespace": namespace,
-		"key":       key,
-	})
+	_, span := tracer.Tracer.Start(ctx, "Cache.Redis.Take")
+	defer span.End()
+	span.SetAttributes(tracer.Attrs(map[string]any{
+		"cache.namespace": namespace,
+		"cache.key":       key,
+	})...)
 	cacheKey := "lake_cache:" + encode.EncodeRedisCatalogName(namespace+":"+key)
 
 	// Use SingleFlight to prevent multiple concurrent requests for same key

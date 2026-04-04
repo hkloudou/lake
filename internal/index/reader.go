@@ -8,7 +8,6 @@ import (
 
 	"github.com/hkloudou/lake/v2/internal/tracer"
 	"github.com/redis/go-redis/v9"
-	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 // Reader handles reading from Redis ZADD index
@@ -58,10 +57,6 @@ type SampleInfo struct {
 
 // ReadAll reads all entries from the catalog
 func (r *Reader) ReadAll(ctx context.Context, catalog string, strictPending bool) *ReadIndexResult {
-	span := oteltrace.SpanFromContext(ctx)
-	tracer.RecordEvent(span, "Read.ReadAll", map[string]interface{}{
-		"catalog": catalog,
-	})
 	return r.readRange(ctx, catalog, "-inf", "+inf", strictPending)
 }
 
@@ -241,8 +236,14 @@ func (m SnapInfo) Dump() string {
 }
 
 func (r *Reader) readRange(ctx context.Context, catalog string, min, max string, strictPending bool) *ReadIndexResult {
+	ctx, span := tracer.Tracer.Start(ctx, "Index.ReadRange")
+	defer span.End()
 	key := r.MakeDeltaZsetKey(catalog)
-	span := oteltrace.SpanFromContext(ctx)
+	span.SetAttributes(tracer.Attrs(map[string]any{
+		"index.catalog": catalog,
+		"index.min":     min,
+		"index.max":     max,
+	})...)
 	results, err := r.rdb.ZRangeByScoreWithScores(ctx, key, &redis.ZRangeBy{
 		Min: min,
 		Max: max,
@@ -349,12 +350,13 @@ return tonumber(timestamp)`,
 }
 
 func (c *Reader) Meta(ctx context.Context, catalog string) (string, error) {
-	span := oteltrace.SpanFromContext(ctx)
+	_, span := tracer.Tracer.Start(ctx, "Index.Meta")
+	defer span.End()
 	metaKey := c.MakeMetaKey(catalog)
-	tracer.RecordEvent(span, "Reader.Meta", map[string]interface{}{
-		"catalog": catalog,
-		"metaKey": metaKey,
-	})
+	span.SetAttributes(tracer.Attrs(map[string]any{
+		"index.catalog":  catalog,
+		"index.meta_key": metaKey,
+	})...)
 	val, err := c.rdb.Get(ctx, metaKey).Result()
 	if err != nil && err != redis.Nil {
 		return "", err
@@ -363,14 +365,15 @@ func (c *Reader) Meta(ctx context.Context, catalog string) (string, error) {
 }
 
 func (c *Reader) BatchMeta(ctx context.Context, catalogs []string) (map[string]string, error) {
-	span := oteltrace.SpanFromContext(ctx)
+	_, span := tracer.Tracer.Start(ctx, "Index.BatchMeta")
+	defer span.End()
 	metaKeys := make([]string, len(catalogs))
 	for i, catalog := range catalogs {
 		metaKeys[i] = c.MakeMetaKey(catalog)
 	}
-	tracer.RecordEvent(span, "Reader.BatchMeta", map[string]interface{}{
-		"count": len(catalogs),
-	})
+	span.SetAttributes(tracer.Attrs(map[string]any{
+		"index.count": len(catalogs),
+	})...)
 
 	results, err := c.rdb.MGet(ctx, metaKeys...).Result()
 	if err != nil && err != redis.Nil {

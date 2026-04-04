@@ -13,6 +13,11 @@ import (
 func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error) {
 	ctx, span := tracer.Tracer.Start(ctx, "Lake.Read")
 	defer span.End()
+	span.SetAttributes(tracer.Attrs(map[string]any{
+		"lake.catalog":     list.catalog,
+		"lake.has_pending": list.HasPending,
+		"lake.entry_count": len(list.Entries),
+	})...)
 
 	// Check for read errors from List
 	if list.Err != nil {
@@ -137,6 +142,12 @@ func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []in
 	if len(deltas) == 0 {
 		return nil
 	}
+	ctx, span := tracer.Tracer.Start(ctx, "Lake.FillDeltasBody")
+	defer span.End()
+	span.SetAttributes(tracer.Attrs(map[string]any{
+		"lake.catalog":     catalog,
+		"lake.delta_count": len(deltas),
+	})...)
 
 	// Channel for work distribution
 	type job struct {

@@ -27,6 +27,15 @@ func RecordEvent(span oteltrace.Span, name string, details ...map[string]any) {
 	span.AddEvent(name, oteltrace.WithAttributes(attrs...))
 }
 
+// Attrs converts a map[string]any to []attribute.KeyValue for span.SetAttributes.
+func Attrs(m map[string]any) []attribute.KeyValue {
+	attrs := make([]attribute.KeyValue, 0, len(m))
+	for k, v := range m {
+		attrs = append(attrs, toAttr(k, v))
+	}
+	return attrs
+}
+
 func toAttr(key string, val any) attribute.KeyValue {
 	switch v := val.(type) {
 	case string:

@@ -61,6 +61,12 @@ type WriteRequest struct {
 func (c *Client) Write(ctx context.Context, req WriteRequest) error {
 	ctx, span := tracer.Tracer.Start(ctx, "Lake.Write")
 	defer span.End()
+	span.SetAttributes(tracer.Attrs(map[string]any{
+		"lake.catalog":    req.Catalog,
+		"lake.path":       req.Path,
+		"lake.merge_type": int(req.MergeType),
+		"lake.body_size":  len(req.Body),
+	})...)
 
 	if err := utils.ValidateFieldPath(req.Path); err != nil {
 		return err

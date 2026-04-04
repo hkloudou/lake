@@ -7,7 +7,6 @@ import (
 
 	"github.com/hkloudou/lake/v2/internal/xsync"
 	"github.com/hkloudou/lake/v2/internal/tracer"
-	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 // MemoryCache implements Cache interface using in-memory map with TTL
@@ -39,12 +38,13 @@ func NewMemoryCache(ttl time.Duration) *MemoryCache {
 
 // Take implements Cache interface with SingleFlight
 func (c *MemoryCache) Take(ctx context.Context, namespace, key string, loader func() ([]byte, error)) ([]byte, error) {
-	span := oteltrace.SpanFromContext(ctx)
+	_, span := tracer.Tracer.Start(ctx, "Cache.Memory.Take")
+	defer span.End()
+	span.SetAttributes(tracer.Attrs(map[string]any{
+		"cache.namespace": namespace,
+		"cache.key":       key,
+	})...)
 	cacheKey := namespace + ":" + key
-	tracer.RecordEvent(span,"MemoryCache.Take", map[string]any{
-		"namespace": namespace,
-		"key":       key,
-	})
 	// Use SingleFlight to prevent cache stampede
 	return c.flight.Do(cacheKey, func() ([]byte, error) {
 		// Check cache first

@@ -120,6 +120,10 @@ func (c *Client) List(ctx context.Context, catalog string, opts ...ListOption) *
 	}
 	ctx, span := tracer.Tracer.Start(ctx, "Lake.List")
 	defer span.End()
+	span.SetAttributes(tracer.Attrs(map[string]any{
+		"lake.catalog":        catalog,
+		"lake.strict_pending": opt.strictPending,
+	})...)
 
 	// Ensure initialized before operation
 	if err := c.ensureInitialized(ctx); err != nil {
