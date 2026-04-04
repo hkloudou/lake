@@ -496,23 +496,66 @@ exporter, _ := otlptracehttp.New(context.Background(),
 
 > **Note:** `otel.Tracer("lake")` (instrumentation library name) and `semconv.ServiceNameKey.String("my-service")` (service name) are different concepts and do not conflict. The service name identifies *your* application; the tracer name identifies the lake library. In Tempo they appear as `service.name=my-service` and `otel.library.name=lake`.
 
-**Usage:**
+**Usage 1: Gin Middleware (recommended for HTTP services)**
+
+Extract traceID from upstream request headers (`traceparent`), lake spans become children of the HTTP span:
 
 ```go
-// Initialize tracer (once at startup)
+import "go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
+
+func main() {
+    shutdown := initTracer()
+    defer shutdown()
+
+    r := gin.Default()
+    r.Use(otelgin.Middleware("my-service")) // creates root span from request headers
+
+    r.GET("/api/users", func(c *gin.Context) {
+        ctx := c.Request.Context() // ctx already has parent span from middleware
+        
+        // Lake.List and Lake.Read automatically become child spans
+        list := client.List(ctx, "users")
+        data, _ := lake.ReadString(ctx, list)
+        c.String(200, data)
+    })
+}
+```
+
+Tempo trace structure:
+```
+HTTP GET /api/users          (root span, from upstream traceparent header)
+  └─ Lake.List               (child span)
+       └─ Index.ReadRange
+  └─ Lake.Read               (child span)
+       └─ Cache.Redis.Take
+```
+
+**Usage 2: Standalone (no HTTP, e.g. cron jobs, CLI tools)**
+
+Manually create a root span, lake spans become its children:
+
+```go
 shutdown := initTracer()
 defer shutdown()
 
-// All lake operations automatically create spans
 client := lake.NewLake("redis://localhost:6379")
-ctx := context.Background()
 
-// This creates a "Lake.Write" span with child spans
-err := client.Write(ctx, lake.WriteRequest{...})
+// Create root span manually
+ctx, rootSpan := otel.Tracer("my-app").Start(context.Background(), "SyncJob")
+defer rootSpan.End()
 
-// This creates "Lake.List" and "Lake.Read" spans
+// Lake spans are children of SyncJob
 list := client.List(ctx, "users")
 data, _ := lake.ReadString(ctx, list)
+```
+
+Tempo trace structure:
+```
+SyncJob                      (root span, self-generated traceID)
+  └─ Lake.List
+       └─ Index.ReadRange
+  └─ Lake.Read
+       └─ Cache.Redis.Take
 ```
 
 **Span Hierarchy:**
