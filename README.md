@@ -107,7 +107,8 @@ lake.MergeTypeRFC6902  // = 3: RFC 6902 JSON Patch (operations array)
 
 | Function | File | Description |
 |----------|------|-------------|
-| `(*Client) List(ctx, catalog string) *ListResult` | [list.go:101](list.go#L101) | Get catalog metadata and delta list |
+| `(*Client) List(ctx, catalog string, opts ...ListOption) *ListResult` | [list.go:115](list.go#L115) | Get catalog metadata and delta list |
+| `WithStrictPending() ListOption` | [list.go:111](list.go#L111) | Any pending triggers HasPending (not just mid-delta) |
 | `ReadBytes(ctx, *ListResult) ([]byte, error)` | [helpers.go:11](helpers.go#L11) | Read as raw bytes |
 | `ReadString(ctx, *ListResult) (string, error)` | [helpers.go:15](helpers.go#L15) | Read as JSON string ⭐ Most common |
 | `ReadMap(ctx, *ListResult) (map[string]any, error)` | [helpers.go:24](helpers.go#L24) | Read as map |
@@ -134,8 +135,8 @@ data, err := lake.ReadMap(ctx, list)
 **ListResult struct** ([list.go:13](list.go#L13)):
 ```go
 type ListResult struct {
-    Err        error  // Non-nil if pending writes detected or other error
-    HasPending bool   // True if write in progress (< 120s)
+    Err        error  // Non-nil on read errors (Redis/decode failures)
+    HasPending bool   // True if pending write detected (< 120s)
 }
 
 // Key methods:
@@ -231,16 +232,29 @@ fmt.Printf("Name: %s, Age: %d\n", profile.Name, profile.Age)
 
 **Handle Pending Writes**:
 ```go
+// Default: only pending BEFORE delta triggers HasPending (tail pending is ignored)
 list := client.List(ctx, "users")
 if list.HasPending {
-    // Write in progress, retry after delay
     time.Sleep(100 * time.Millisecond)
     list = client.List(ctx, "users")
 }
-if list.Err != nil {
-    return list.Err
-}
 data, err := lake.ReadString(ctx, list)
+
+// Strict mode: ANY pending triggers HasPending (useful for strong consistency)
+list := client.List(ctx, "users", lake.WithStrictPending())
+```
+
+**Patch with Empty Body (Meta-Only Fast Path)**:
+```go
+// RFC7396/RFC6902 with empty body ({}, [], "") skips the 3-step write,
+// only updates metadata — no pending member, no storage write.
+err := client.Write(ctx, lake.WriteRequest{
+    Catalog:   "users",
+    Path:      "/",
+    Body:      []byte(`{}`),
+    Meta:      []byte(`{"updated":"2024-01-01"}`),
+    MergeType: lake.MergeTypeRFC7396,
+})
 ```
 
 ### File Structure
@@ -664,6 +678,13 @@ Read (Parallel + Async):
   4. Async: Save new snapshot (background, non-blocking) ✨ v2.2.0
 ```
 
+### What's New in v2.3.x
+
+- **Pending/Error Separation**: `HasPending` and `Err` are now independent — `Err` is only for real errors, pending state is conveyed solely via `HasPending`
+- **Position-Aware Pending Detection**: By default, only pending members that appear before a delta trigger `HasPending` (tail pending is harmless and ignored)
+- **`WithStrictPending()` Option**: Opt-in strict mode where any pending triggers `HasPending`, for strong consistency scenarios
+- **Meta-Only Fast Path**: Patch writes (RFC7396/RFC6902) with empty body (`{}`, `[]`, `""`) skip the 3-step write entirely, only updating metadata — no pending member created, no storage I/O
+
 ### What's New in v2.2.0
 
 - **Async Snapshot Save**: Read operations no longer wait for snapshot saves (2x faster!)
@@ -700,17 +721,18 @@ go test -v ./internal/merge
 - Phase 2: Write to OSS
 - Phase 3: Commit to `delta|` (atomic)
 
-**Read Behavior** (v2.2.0 - Optimized):
+**Read Behavior** (v2.3.x - Optimized):
 - Uses **Redis TIME** for accurate age calculation (avoids server clock skew)
-- Pending < 120s: **Error returned** (write in progress, client should retry)
 - Pending > 120s: **Ignored** (abandoned write, auto-cleaned)
-- Error stored in `ListResult.Err` (non-fatal, can be checked before Read)
+- Pending < 120s (default): **HasPending=true only when pending appears before a delta** (tail pending is harmless)
+- Pending < 120s (strict): **HasPending=true for any pending** (via `WithStrictPending()`)
+- `Err` is reserved for real errors (Redis/decode failures), pending state uses `HasPending` only
 - Background updater syncs Redis time every 5s (minimal overhead)
 
 ```go
 list := client.List(ctx, catalog)
-if list.Err != nil {
-    // Pending writes detected (age < 120s), retry later
+if list.HasPending {
+    // Pending writes detected, retry later
     time.Sleep(100 * time.Millisecond)
     list = client.List(ctx, catalog)
 }
@@ -795,7 +817,7 @@ When a `pending` member exists:
 list := client.List(ctx, "users")
 if list.HasPending {
     // Active write in progress, retry later
-    return fmt.Errorf("pending write detected: %w", list.Err)
+    return fmt.Errorf("pending write detected")
 }
 ```
 

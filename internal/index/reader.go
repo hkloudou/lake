@@ -56,23 +56,23 @@ type SampleInfo struct {
 }
 
 // ReadAll reads all entries from the catalog
-func (r *Reader) ReadAll(ctx context.Context, catalog string) *ReadIndexResult {
+func (r *Reader) ReadAll(ctx context.Context, catalog string, strictPending bool) *ReadIndexResult {
 	tr := trace.FromContext(ctx)
 	tr.RecordSpan("Read.ReadAll", map[string]interface{}{
 		"catalog": catalog,
 	})
-	return r.readRange(ctx, catalog, "-inf", "+inf")
+	return r.readRange(ctx, catalog, "-inf", "+inf", strictPending)
 }
 
 // ReadSince reads entries since the given timestamp (exclusive)
-func (r *Reader) ReadSince(ctx context.Context, catalog string, sinceTimestamp float64) *ReadIndexResult {
+func (r *Reader) ReadSince(ctx context.Context, catalog string, sinceTimestamp float64, strictPending bool) *ReadIndexResult {
 	// Use '(' to exclude the timestamp itself
-	return r.readRange(ctx, catalog, fmt.Sprintf("(%.6f", sinceTimestamp), "+inf")
+	return r.readRange(ctx, catalog, fmt.Sprintf("(%.6f", sinceTimestamp), "+inf", strictPending)
 }
 
 // ReadRange reads entries between timestamps
 func (r *Reader) ReadRange(ctx context.Context, catalog string, minTimestamp, maxTimestamp float64) *ReadIndexResult {
-	return r.readRange(ctx, catalog, fmt.Sprintf("%.6f", minTimestamp), fmt.Sprintf("%.6f", maxTimestamp))
+	return r.readRange(ctx, catalog, fmt.Sprintf("%.6f", minTimestamp), fmt.Sprintf("%.6f", maxTimestamp), false)
 }
 
 func (r *Reader) readSnapBefore(ctx context.Context, catalog string, beforeTimestamp float64) ([]SnapInfo, error) {
@@ -239,7 +239,7 @@ func (m SnapInfo) Dump() string {
 	return output.String()
 }
 
-func (r *Reader) readRange(ctx context.Context, catalog string, min, max string) *ReadIndexResult {
+func (r *Reader) readRange(ctx context.Context, catalog string, min, max string, strictPending bool) *ReadIndexResult {
 	key := r.MakeDeltaZsetKey(catalog)
 	tr := trace.FromContext(ctx)
 	results, err := r.rdb.ZRangeByScoreWithScores(ctx, key, &redis.ZRangeBy{
@@ -275,6 +275,9 @@ func (r *Reader) readRange(ctx context.Context, catalog string, min, max string)
 			}
 			// Pending write in progress (age < timeout)
 			hasUnresolvedPending = true
+			if strictPending {
+				hasPending = true
+			}
 			continue
 		}
 		// A delta after a pending means the read may have incomplete data

@@ -96,9 +96,28 @@ func (m ListResult) NextSnap() *index.SnapInfo {
 	}
 }
 
+type listOption struct {
+	strictPending bool
+}
+
+// ListOption configures List behavior
+type ListOption func(*listOption)
+
+// WithStrictPending makes List report HasPending=true for any pending member,
+// regardless of position. By default, only pending members followed by a delta trigger HasPending.
+func WithStrictPending() ListOption {
+	return func(o *listOption) {
+		o.strictPending = true
+	}
+}
+
 // List reads catalog metadata and returns ListResult
 // Errors (including pending writes) are stored in ListResult.Err
-func (c *Client) List(ctx context.Context, catalog string) *ListResult {
+func (c *Client) List(ctx context.Context, catalog string, opts ...ListOption) *ListResult {
+	var opt listOption
+	for _, o := range opts {
+		o(&opt)
+	}
 	tr := trace.FromContext(ctx)
 
 	// Ensure initialized before operation
@@ -128,11 +147,11 @@ func (c *Client) List(ctx context.Context, catalog string) *ListResult {
 		tr.RecordSpan("List.ReadSince", map[string]interface{}{
 			"since": snap.StopTsSeq.String(),
 		})
-		readResult = c.reader.ReadSince(ctx, catalog, snap.StopTsSeq.Score())
+		readResult = c.reader.ReadSince(ctx, catalog, snap.StopTsSeq.Score(), opt.strictPending)
 	} else {
 		// No snapshot, read all
 		tr.RecordSpan("List.ReadAll")
-		readResult = c.reader.ReadAll(ctx, catalog)
+		readResult = c.reader.ReadAll(ctx, catalog, opt.strictPending)
 	}
 	tr.RecordSpan("List.ReadIndex", map[string]interface{}{
 		"count":      len(readResult.Deltas),

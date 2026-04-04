@@ -185,6 +185,30 @@ func (w *Writer) GetTimeSeqIDAndPreCommit(ctx context.Context, catalog, fieldPat
 	return tsSeq, pendingMember, nil
 }
 
+const updateMetaOnlyScript = `
+local metaKey = KEYS[1]
+local updatedMap = cjson.decode(ARGV[1])
+local oldMeta = redis.call("GET", metaKey)
+local metaMap = {}
+if oldMeta then
+    metaMap = cjson.decode(oldMeta)
+end
+for key, value in pairs(updatedMap) do
+    metaMap[key] = value
+end
+redis.call("SET", metaKey, cjson.encode(metaMap))
+return "OK"
+`
+
+// UpdateMetaOnly updates only the meta key without creating any delta/pending members
+func (w *Writer) UpdateMetaOnly(ctx context.Context, catalog string, meta []byte) error {
+	metaKey := w.MakeMetaKey(catalog)
+	_, err := w.rdb.Eval(ctx, updateMetaOnlyScript,
+		[]string{metaKey},
+		string(meta)).Result()
+	return err
+}
+
 // Rollback removes a pending member from Redis (used when storage write fails)
 func (w *Writer) Rollback(ctx context.Context, catalog, pendingMember string) error {
 	zaddKey := w.MakeDeltaZsetKey(catalog)

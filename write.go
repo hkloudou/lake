@@ -10,6 +10,14 @@ import (
 	"github.com/hkloudou/lake/v2/trace"
 )
 
+func isNoopBody(mergeType MergeType, b []byte) bool {
+	if mergeType != MergeTypeRFC7396 && mergeType != MergeTypeRFC6902 {
+		return false
+	}
+	s := strings.TrimSpace(string(b))
+	return s == "" || s == "{}" || s == "[]"
+}
+
 // WriteRequest represents a write request
 type WriteRequest struct {
 	Catalog   string    // Catalog name
@@ -62,6 +70,16 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) error {
 		return err
 	}
 	tr.RecordSpan("Write.Init")
+
+	// Fast path: patch with empty body - no data change, only update meta
+	if isNoopBody(req.MergeType, req.Body) {
+		err := c.writer.UpdateMetaOnly(ctx, req.Catalog, req.Meta)
+		if err != nil {
+			return fmt.Errorf("failed to update meta: %w", err)
+		}
+		tr.RecordSpan("Write.MetaOnly")
+		return nil
+	}
 
 	// Step 1: Atomically get TimeSeqID and pre-commit to Redis (pending state)
 	tsSeq, pendingMember, err := c.writer.GetTimeSeqIDAndPreCommit(ctx, req.Catalog, req.Path, req.MergeType)
