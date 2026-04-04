@@ -627,16 +627,23 @@ SyncJob                      (root span, self-generated traceID)
 | `Lake.ClearHistory` | — |
 | `Lake.WriteFile` | — |
 
-> 💡 **No `TracerProvider` configured?** OpenTelemetry defaults to a noop tracer — zero overhead, no spans created, no data sent.
->
-> 💡 **Only trace requests with upstream traceID?** Use `ParentBased(NeverSample())` as sampler — spans are only created when a parent span exists in the context (e.g. from `traceparent` header):
-> ```go
-> tp := sdktrace.NewTracerProvider(
->     sdktrace.WithBatcher(exporter),
->     sdktrace.WithResource(res),
->     sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.NeverSample())),
-> )
-> ```
+**Sampling Modes:**
+
+| Mode | Config | Behavior |
+|------|--------|----------|
+| **Disabled** | No `TracerProvider` configured | Noop tracer, zero overhead, no spans created |
+| **Always** | `sdktrace.AlwaysSample()` | All requests produce traces, including those without upstream traceID |
+| **Parent-only** | `sdktrace.ParentBased(sdktrace.NeverSample())` | Only trace when request carries `traceparent` header; requests without upstream traceID produce no spans and send nothing to Tempo |
+
+**Recommended: Parent-only mode** — only traces requests that already have a traceID from upstream (e.g. API gateway, service mesh), avoiding noise from health checks, cron jobs, etc:
+
+```go
+tp := sdktrace.NewTracerProvider(
+    sdktrace.WithBatcher(exporter),
+    sdktrace.WithResource(res),
+    sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.NeverSample())),
+)
+```
 
 ## 📖 Core Concepts
 
