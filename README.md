@@ -466,15 +466,19 @@ Lake uses [OpenTelemetry](https://opentelemetry.io/) natively — no custom trac
 
 ```go
 import (
+    "context"
+
     "go.opentelemetry.io/otel"
     "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+    "go.opentelemetry.io/otel/propagation"
     "go.opentelemetry.io/otel/sdk/resource"
     sdktrace "go.opentelemetry.io/otel/sdk/trace"
     semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
 func initTracer() func() {
-    exporter, _ := otlptracegrpc.New(context.Background(),
+    ctx := context.Background()
+    exporter, _ := otlptracegrpc.New(ctx,
         otlptracegrpc.WithEndpoint("tempo:4317"),
         otlptracegrpc.WithInsecure(),
     )
@@ -486,18 +490,29 @@ func initTracer() func() {
         )),
     )
     otel.SetTracerProvider(tp)
+    otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+        propagation.TraceContext{},
+        propagation.Baggage{},
+    ))
     return func() { tp.Shutdown(context.Background()) }
 }
 ```
 
-**Integrating with Grafana Tempo (HTTP):**
+**Integrating with Grafana Tempo (HTTP/HTTPS):**
 
 ```go
 import "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 
-exporter, _ := otlptracehttp.New(context.Background(),
+// HTTP (insecure)
+exporter, _ := otlptracehttp.New(ctx,
     otlptracehttp.WithEndpoint("tempo:4318"),
     otlptracehttp.WithInsecure(),
+)
+
+// HTTPS (e.g. Grafana Cloud)
+exporter, _ := otlptracehttp.New(ctx,
+    otlptracehttp.WithEndpoint("tempo.grafana.net"),
+    otlptracehttp.WithURLPath("/otlp/v1/traces"),
 )
 // Then use exporter with sdktrace.NewTracerProvider as above
 ```
@@ -509,18 +524,53 @@ exporter, _ := otlptracehttp.New(context.Background(),
 Extract traceID from upstream request headers (`traceparent`), lake spans become children of the HTTP span:
 
 ```go
-import "go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
+import (
+    "go.opentelemetry.io/otel"
+    "go.opentelemetry.io/otel/attribute"
+    "go.opentelemetry.io/otel/codes"
+    "go.opentelemetry.io/otel/propagation"
+    "go.opentelemetry.io/otel/trace"
+)
+
+func TracingMiddleware() gin.HandlerFunc {
+    return func(c *gin.Context) {
+        // Extract trace context from upstream request headers (traceparent)
+        ctx := otel.GetTextMapPropagator().Extract(
+            c.Request.Context(),
+            propagation.HeaderCarrier(c.Request.Header),
+        )
+
+        spanName := c.Request.Method + " " + c.FullPath()
+        ctx, span := otel.Tracer("my-service").Start(ctx, spanName,
+            trace.WithSpanKind(trace.SpanKindServer),
+            trace.WithAttributes(
+                attribute.String("http.method", c.Request.Method),
+                attribute.String("http.target", c.Request.URL.Path),
+            ),
+        )
+        defer span.End()
+
+        // Inject span context back into request so handlers can access it
+        c.Request = c.Request.WithContext(ctx)
+        c.Next()
+
+        span.SetAttributes(attribute.Int("http.status_code", c.Writer.Status()))
+        if c.Writer.Status() >= 400 {
+            span.SetStatus(codes.Error, c.Errors.String())
+        }
+    }
+}
 
 func main() {
     shutdown := initTracer()
     defer shutdown()
 
     r := gin.Default()
-    r.Use(otelgin.Middleware("my-service")) // creates root span from request headers
+    r.Use(TracingMiddleware())
 
     r.GET("/api/users", func(c *gin.Context) {
-        ctx := c.Request.Context() // ctx already has parent span from middleware
-        
+        ctx := c.Request.Context() // ctx has parent span from middleware
+
         // Lake.List and Lake.Read automatically become child spans
         list := client.List(ctx, "users")
         data, _ := lake.ReadString(ctx, list)
@@ -531,10 +581,10 @@ func main() {
 
 Tempo trace structure:
 ```
-HTTP GET /api/users          (root span, from upstream traceparent header)
-  └─ Lake.List               (child span)
+GET /api/users               (root span, traceID from traceparent or auto-generated)
+  └─ Lake.List               (child span, library: lake)
        └─ Index.ReadRange
-  └─ Lake.Read               (child span)
+  └─ Lake.Read               (child span, library: lake)
        └─ Cache.Redis.Take
 ```
 
