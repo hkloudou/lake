@@ -41,7 +41,7 @@ func main() {
     // Create client (config loaded lazily)
     client := lake.NewLake("redis://localhost:6379")
     ctx := context.Background()
-    
+
     // Write data
     err := client.Write(ctx, lake.WriteRequest{
         Catalog:   "users",
@@ -49,10 +49,13 @@ func main() {
         Body:      []byte(`{"name":"Alice","age":30}`),
         MergeType: lake.MergeTypeReplace,
     })
-    
+    if err != nil {
+        log.Fatal(err)
+    }
+
     // List catalog entries
     list := client.List(ctx, "users")
-    
+
     // Read merged data (⭐ ReadString is most common)
     jsonStr, _ := lake.ReadString(ctx, list)
     fmt.Printf("Data: %s\n", jsonStr)
