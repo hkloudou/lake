@@ -38,6 +38,9 @@ func Sample[T any](ctx context.Context, list *ListResult, indicator string, load
 	if list.Err != nil {
 		return zero, list.Err
 	}
+	if list.HasPending {
+		return zero, fmt.Errorf("pending writes detected")
+	}
 
 	c := list.client
 	if err := c.ensureInitialized(ctx); err != nil {
