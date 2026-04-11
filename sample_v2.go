@@ -50,10 +50,10 @@ func Sample[T any](ctx context.Context, list *ListResult, indicator string, load
 	c.emitEvent(list.catalog, "Sample", map[string]any{"indicator": indicator})
 
 	lastUpdated := list.LastUpdated()
-	cacheKey := c.makeSampleCacheKey(list.catalog, indicator)
+	hashKey := c.makeSampleHashKey(list.catalog)
 
-	// Single GET: score + data are atomic
-	cached, err := c.rdb.Get(ctx, cacheKey).Bytes()
+	// Single HGET: score + data are atomic per indicator
+	cached, err := c.rdb.HGet(ctx, hashKey, indicator).Bytes()
 	if err == nil {
 		var entry sampleCache[T]
 		if json.Unmarshal(cached, &entry) == nil && entry.Score >= lastUpdated && entry.Score > 0 {
@@ -78,8 +78,8 @@ func Sample[T any](ctx context.Context, list *ListResult, indicator string, load
 			return "", fmt.Errorf("failed to marshal sample result: %w", err)
 		}
 
-		// Single SET: score + data atomic
-		c.rdb.Set(ctx, cacheKey, data, 0)
+		// Single HSET: score + data atomic per indicator
+		c.rdb.HSet(ctx, hashKey, indicator, data)
 
 		return string(data), nil
 	})
@@ -94,6 +94,6 @@ func Sample[T any](ctx context.Context, list *ListResult, indicator string, load
 	return entry.Data, nil
 }
 
-func (c *Client) makeSampleCacheKey(catalog, indicator string) string {
-	return fmt.Sprintf("%s:%s:sample_cache:%s", c.reader.Prefix(), catalog, indicator)
+func (c *Client) makeSampleHashKey(catalog string) string {
+	return fmt.Sprintf("%s:%s:sample", c.reader.Prefix(), catalog)
 }
