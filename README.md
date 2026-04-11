@@ -179,15 +179,15 @@ func (m ListResult) LastUpdated() float64 // Returns timestamp of last update
 
 | Function | File | Description |
 |----------|------|-------------|
-| `Sample[T any](ctx, *ListResult, indicator string, loader func(*ListResult) (*T, error)) (*T, error)` | [sample_v2.go](sample_v2.go) | Generic cached sampling with change detection |
+| `Sample[T any](ctx, *ListResult, indicator string, loader func(*ListResult) (T, error)) (T, error)` | [sample_v2.go](sample_v2.go) | Generic cached sampling with change detection |
 | ~~`(*Client) MotionSample(...)`~~ | [sample.go](sample.go) | **Deprecated** — use `Sample[T]` instead |
 
 **Sample Usage:**
 ```go
 list := client.List(ctx, "users")
-report, err := lake.Sample[Report](ctx, list, "daily", func(list *ListResult) (*Report, error) {
+report, err := lake.Sample[Report](ctx, list, "daily", func(list *ListResult) (Report, error) {
     data, err := lake.ReadMap(ctx, list)
-    if err != nil { return nil, err }
+    if err != nil { return Report{}, err }
     return buildReport(data), nil
 })
 // Data unchanged → 1x Redis GET, return cached Report

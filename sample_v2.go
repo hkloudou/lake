@@ -28,19 +28,20 @@ type sampleCache[T any] struct {
 // Usage:
 //
 //	list := client.List(ctx, "users")
-//	report, err := lake.Sample[Report](ctx, list, "daily", func(list *ListResult) (*Report, error) {
+//	report, err := lake.Sample[Report](ctx, list, "daily", func(list *ListResult) (Report, error) {
 //	    data, err := lake.ReadMap(ctx, list)
-//	    if err != nil { return nil, err }
+//	    if err != nil { return Report{}, err }
 //	    return buildReport(data), nil
 //	})
-func Sample[T any](ctx context.Context, list *ListResult, indicator string, loader func(*ListResult) (*T, error)) (*T, error) {
+func Sample[T any](ctx context.Context, list *ListResult, indicator string, loader func(*ListResult) (T, error)) (T, error) {
+	var zero T
 	if list.Err != nil {
-		return nil, list.Err
+		return zero, list.Err
 	}
 
 	c := list.client
 	if err := c.ensureInitialized(ctx); err != nil {
-		return nil, err
+		return zero, err
 	}
 
 	c.emitEvent(list.catalog, "Sample", map[string]any{"indicator": indicator})
@@ -53,11 +54,11 @@ func Sample[T any](ctx context.Context, list *ListResult, indicator string, load
 	if err == nil {
 		var entry sampleCache[T]
 		if json.Unmarshal(cached, &entry) == nil && entry.Score >= lastUpdated && entry.Score > 0 {
-			return &entry.Data, nil
+			return entry.Data, nil
 		}
 		// Score stale or unmarshal failed, fall through to reload
 	} else if err != redis.Nil {
-		return nil, err
+		return zero, err
 	}
 
 	// Data changed or no cache — call loader with SingleFlight
@@ -68,7 +69,7 @@ func Sample[T any](ctx context.Context, list *ListResult, indicator string, load
 			return "", err
 		}
 
-		entry := sampleCache[T]{Score: lastUpdated, Data: *result}
+		entry := sampleCache[T]{Score: lastUpdated, Data: result}
 		data, err := json.Marshal(entry)
 		if err != nil {
 			return "", fmt.Errorf("failed to marshal sample result: %w", err)
@@ -80,14 +81,14 @@ func Sample[T any](ctx context.Context, list *ListResult, indicator string, load
 		return string(data), nil
 	})
 	if err != nil {
-		return nil, err
+		return zero, err
 	}
 
 	var entry sampleCache[T]
 	if err := json.Unmarshal([]byte(resultBytes), &entry); err != nil {
-		return nil, err
+		return zero, err
 	}
-	return &entry.Data, nil
+	return entry.Data, nil
 }
 
 func (c *Client) makeSampleCacheKey(catalog, indicator string) string {
