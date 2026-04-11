@@ -10,12 +10,19 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// MotionSample performs sampling based on catalog updates with optimizations:
-// 1. SingleFlight key uses more precise format (avoid precision loss)
-// 2. Early return: if sampleLastUpdated >= lastUpdated, skip List operations
-// 3. Explicitly handle redis.Nil case (first sampling)
-// 4. Optimize trace calls (reduce trace in goroutines)
-// 5. Improve error handling logic
+// Deprecated: Use the generic Sample[T] function instead, which provides
+// type-safe caching, atomic score+data consistency, and a simpler API.
+//
+//	// Old:
+//	score, err := client.MotionSample(ctx, catalog, indicator, motionCatalogs, shouldUpdated, callback)
+//
+//	// New:
+//	list := client.List(ctx, "users")
+//	result, err := lake.Sample[Report](ctx, list, "daily", func(list *ListResult) (*Report, error) {
+//	    data, err := lake.ReadMap(ctx, list)
+//	    if err != nil { return nil, err }
+//	    return buildReport(data), nil
+//	})
 func (c *Client) MotionSample(ctx context.Context, catalog string, indicator string, motionCatalogs []string, shouldUpdated func(sampleTs, lakeTs float64) bool, callBack func(map[string]*ListResult, float64) (float64, error)) (float64, error) {
 
 	c.emitEvent(catalog, "MotionSample", map[string]any{"indicator": indicator, "motionCatalogs": motionCatalogs})

@@ -175,11 +175,24 @@ func (m ListResult) LastUpdated() float64 // Returns timestamp of last update
 | `(*Client) ClearHistory(ctx, catalog string) error` | [clear.go:10](clear.go#L10) | Clear all history, keep latest snapshot |
 | `(*Client) ClearHistoryWithRetention(ctx, catalog string, keepSnaps int) error` | [clear.go:26](clear.go#L26) | Clear history, keep N snapshots |
 
-### Sampling (Advanced)
+### Sampling
 
 | Function | File | Description |
 |----------|------|-------------|
-| `(*Client) MotionSample(ctx, catalog, indicator string, motionCatalogs []string, shouldUpdated func, callback func) (float64, error)` | [sample.go:20](sample.go#L20) | Incremental sampling with change detection |
+| `Sample[T any](ctx, *ListResult, indicator string, loader func(*ListResult) (*T, error)) (*T, error)` | [sample_v2.go](sample_v2.go) | Generic cached sampling with change detection |
+| ~~`(*Client) MotionSample(...)`~~ | [sample.go](sample.go) | **Deprecated** — use `Sample[T]` instead |
+
+**Sample Usage:**
+```go
+list := client.List(ctx, "users")
+report, err := lake.Sample[Report](ctx, list, "daily", func(list *ListResult) (*Report, error) {
+    data, err := lake.ReadMap(ctx, list)
+    if err != nil { return nil, err }
+    return buildReport(data), nil
+})
+// Data unchanged → 1x Redis GET, return cached Report
+// Data changed   → call loader, cache result in Redis
+```
 
 ### Complete Usage Examples
 
@@ -279,7 +292,8 @@ lake/
 ├── file.go          # WriteFile, FileExists, FilesAndMeta
 ├── clear.go         # ClearHistory, ClearHistoryWithRetention
 ├── meta.go          # Meta, BatchMeta
-├── sample.go        # MotionSample
+├── sample.go        # MotionSample (deprecated)
+├── sample_v2.go     # Sample[T] — generic cached sampling
 ├── snapshot.go      # Internal snapshot management
 └── internal/
     ├── index/       # Redis index operations
@@ -488,7 +502,7 @@ client.Use(func(catalog, event string, attrs map[string]any) {
 | `BatchList` | — | Per-catalog event in batch list |
 | `Write` | `path`, `mergeType` | Write data |
 | `WriteFile` | `path` | Write binary file |
-| `MotionSample` | `indicator`, `motionCatalogs` | Sampling operation |
+| `Sample` | `indicator` | Generic cached sampling |
 | `ClearHistory` | `keepSnaps` | History cleanup |
 
 > **Note:** For distributed tracing (OpenTelemetry), instrument at the Redis/OSS client level (e.g. `redisotel.InstrumentTracing`) rather than in Lake itself. This gives automatic span coverage for all Redis commands and storage operations.
@@ -705,6 +719,7 @@ Read (Parallel + Async):
 
 ### What's New in v2.4.x
 
+- **`Sample[T]` generic sampling**: Type-safe cached sampling — data unchanged = 1x Redis GET; score+data stored atomically in a single key, no consistency issues. Replaces `MotionSample` (now deprecated)
 - **Event Middleware**: Replaced OpenTelemetry tracing with lightweight `client.Use(EventHandler)` — zero dependencies, register callbacks for operation logging
 - **BatchList**: Pipeline-based batch List for N catalogs in 2 Redis round-trips (vs 2N)
 - **Removed otel dependency**: No more `go.opentelemetry.io/otel` in `go.mod`; for distributed tracing, instrument at the Redis/OSS client level

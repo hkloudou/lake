@@ -51,3 +51,8 @@ func (w *indexIO) makeSampleKey(catalog string) string {
 func (w *indexIO) SetPrefix(prefix string) {
 	w.prefix = prefix
 }
+
+// Prefix returns the current key prefix
+func (w *indexIO) Prefix() string {
+	return w.prefix
+}
