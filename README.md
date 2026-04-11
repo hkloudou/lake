@@ -13,7 +13,7 @@
 - **⚡ High Performance** - 999,999 writes/sec per catalog, parallel I/O, worker pool optimization
 - **💾 Smart Caching** - Redis-based cache with namespace isolation (~90% hit ratio)
 - **🎯 Intelligent Encoding** - MD5-based sharding, case-insensitive safe paths
-- **🔍 OpenTelemetry Tracing** - Native OTel spans for all operations (zero overhead when no TracerProvider configured)
+- **🔍 Event Middleware** - `client.Use()` hooks for operation logging/monitoring
 - **🔐 AES Encryption** - Optional AES-GCM encryption with minimal overhead (<0.05ms)
 - **📊 Snapshot System** - Time-range based snapshots for efficient incremental reads
 
@@ -36,18 +36,19 @@ import (
     "log"
 
     "github.com/hkloudou/lake/v2"
-    "go.opentelemetry.io/otel"
 )
-
-var appTracer = otel.Tracer("my-app")
 
 func main() {
     client := lake.NewLake("redis://localhost:6379")
 
-    ctx, span := appTracer.Start(context.Background(), "main")
-    defer span.End()
+    // Optional: register event handler for logging
+    client.Use(func(catalog, event string, attrs map[string]any) {
+        log.Printf("[lake] %s %s %v", catalog, event, attrs)
+    })
 
-    // Write data (creates child span: Lake.Write)
+    ctx := context.Background()
+
+    // Write data
     err := client.Write(ctx, lake.WriteRequest{
         Catalog:   "users",
         Path:      "/profile",
@@ -58,7 +59,7 @@ func main() {
         log.Fatal(err)
     }
 
-    // Read merged data (creates child spans: Lake.List, Lake.Read)
+    // Read merged data
     list := client.List(ctx, "users")
     jsonStr, _ := lake.ReadString(ctx, list)
     fmt.Printf("Data: %s\n", jsonStr)
@@ -83,6 +84,7 @@ import "github.com/hkloudou/lake/v2"
 | `WithStorage(storage storage.Storage) func(*option)` | [lake.go:133](lake.go#L133) | Use custom storage |
 | `WithSnapCacheMetaURL(metaUrl string, ttl time.Duration) func(*option)` | [lake.go:108](lake.go#L108) | Use separate Redis for snapshot cache |
 | `WithDeltaCacheMetaURL(metaUrl string, ttl time.Duration) func(*option)` | [lake.go:124](lake.go#L124) | Use separate Redis for delta cache |
+| `(*Client) Use(handler EventHandler)` | [middleware.go](middleware.go) | Register event handler for operation logging |
 
 ### Write Operations
 
@@ -113,8 +115,9 @@ lake.MergeTypeRFC6902  // = 3: RFC 6902 JSON Patch (operations array)
 
 | Function | File | Description |
 |----------|------|-------------|
-| `(*Client) List(ctx, catalog string, opts ...ListOption) *ListResult` | [list.go:115](list.go#L115) | Get catalog metadata and delta list |
-| `WithStrictPending() ListOption` | [list.go:111](list.go#L111) | Any pending triggers HasPending (not just mid-delta) |
+| `(*Client) List(ctx, catalog string, opts ...ListOption) *ListResult` | [list.go](list.go) | Get catalog metadata and delta list |
+| `(*Client) BatchList(ctx, catalogs []string, opts ...ListOption) map[string]*ListResult` | [list.go](list.go) | Batch List for N catalogs in 2 Redis round-trips |
+| `WithStrictPending() ListOption` | [list.go](list.go) | Any pending triggers HasPending (not just mid-delta) |
 | `ReadBytes(ctx, *ListResult) ([]byte, error)` | [helpers.go:11](helpers.go#L11) | Read as raw bytes |
 | `ReadString(ctx, *ListResult) (string, error)` | [helpers.go:15](helpers.go#L15) | Read as JSON string ⭐ Most common |
 | `ReadMap(ctx, *ListResult) (map[string]any, error)` | [helpers.go:24](helpers.go#L24) | Read as map |
@@ -183,9 +186,7 @@ func (m ListResult) LastUpdated() float64 // Returns timestamp of last update
 **Basic Write and Read**:
 ```go
 client := lake.NewLake("redis://localhost:6379")
-
-ctx, span := otel.Tracer("my-app").Start(context.Background(), "BasicExample")
-defer span.End()
+ctx := context.Background()
 
 // Write
 err := client.Write(ctx, lake.WriteRequest{
@@ -270,9 +271,10 @@ err := client.Write(ctx, lake.WriteRequest{
 ```
 lake/
 ├── lake.go          # Client creation, options
+├── middleware.go     # Use(), EventHandler
 ├── write.go         # Write(), WriteRequest
 ├── read.go          # Internal read implementation
-├── list.go          # List(), ListResult
+├── list.go          # List(), BatchList(), ListResult
 ├── helpers.go       # ReadBytes, ReadString, ReadMap, Read[T]
 ├── file.go          # WriteFile, FileExists, FilesAndMeta
 ├── clear.go         # ClearHistory, ClearHistoryWithRetention
@@ -458,192 +460,38 @@ master:
 | Max Data Loss | All (OK) | 1 second |
 | Recovery Time | Fast (rebuild) | Instant (AOF) |
 
-### 🔍 OpenTelemetry Tracing
+### 🔍 Event Middleware
 
-Lake uses [OpenTelemetry](https://opentelemetry.io/) natively — no custom trace package needed. Spans are automatically created for all core operations: `Lake.Write`, `Lake.Read`, `Lake.List`, `Lake.WriteFile`, `Lake.MotionSample`, and `Lake.ClearHistory`.
-
-**Integrating with Grafana Tempo (gRPC):**
+Lake provides a lightweight event middleware via `client.Use()` for operation logging and monitoring. No external dependencies required.
 
 ```go
-import (
-    "context"
-
-    "go.opentelemetry.io/otel"
-    "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-    "go.opentelemetry.io/otel/propagation"
-    "go.opentelemetry.io/otel/sdk/resource"
-    sdktrace "go.opentelemetry.io/otel/sdk/trace"
-    semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
-)
-
-func initTracer() func() {
-    ctx := context.Background()
-    exporter, _ := otlptracegrpc.New(ctx,
-        otlptracegrpc.WithEndpoint("tempo:4317"),
-        otlptracegrpc.WithInsecure(),
-    )
-    tp := sdktrace.NewTracerProvider(
-        sdktrace.WithBatcher(exporter),
-        sdktrace.WithResource(resource.NewWithAttributes(
-            semconv.SchemaURL,
-            semconv.ServiceNameKey.String("my-service"),
-        )),
-    )
-    otel.SetTracerProvider(tp)
-    otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-        propagation.TraceContext{},
-        propagation.Baggage{},
-    ))
-    return func() { tp.Shutdown(context.Background()) }
-}
+// EventHandler signature:
+type EventHandler func(catalog string, event string, attrs map[string]any)
 ```
 
-**Integrating with Grafana Tempo (HTTP/HTTPS):**
+**Usage:**
 
 ```go
-import "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
-
-// HTTP (insecure)
-exporter, _ := otlptracehttp.New(ctx,
-    otlptracehttp.WithEndpoint("tempo:4318"),
-    otlptracehttp.WithInsecure(),
-)
-
-// HTTPS (e.g. Grafana Cloud)
-exporter, _ := otlptracehttp.New(ctx,
-    otlptracehttp.WithEndpoint("tempo.grafana.net"),
-    otlptracehttp.WithURLPath("/otlp/v1/traces"),
-)
-// Then use exporter with sdktrace.NewTracerProvider as above
-```
-
-> **Note:** `otel.Tracer("lake")` (instrumentation library name) and `semconv.ServiceNameKey.String("my-service")` (service name) are different concepts and do not conflict. The service name identifies *your* application; the tracer name identifies the lake library. In Tempo they appear as `service.name=my-service` and `otel.library.name=lake`.
-
-**Usage 1: Gin Middleware (recommended for HTTP services)**
-
-Extract traceID from upstream request headers (`traceparent`), lake spans become children of the HTTP span:
-
-```go
-import (
-    "go.opentelemetry.io/otel"
-    "go.opentelemetry.io/otel/attribute"
-    "go.opentelemetry.io/otel/codes"
-    "go.opentelemetry.io/otel/propagation"
-    "go.opentelemetry.io/otel/trace"
-)
-
-func TracingMiddleware() gin.HandlerFunc {
-    return func(c *gin.Context) {
-        // Extract trace context from upstream request headers (traceparent)
-        ctx := otel.GetTextMapPropagator().Extract(
-            c.Request.Context(),
-            propagation.HeaderCarrier(c.Request.Header),
-        )
-
-        spanName := c.Request.Method + " " + c.FullPath()
-        ctx, span := otel.Tracer("my-service").Start(ctx, spanName,
-            trace.WithSpanKind(trace.SpanKindServer),
-            trace.WithAttributes(
-                attribute.String("http.method", c.Request.Method),
-                attribute.String("http.target", c.Request.URL.Path),
-            ),
-        )
-        defer span.End()
-
-        // Inject span context back into request so handlers can access it
-        c.Request = c.Request.WithContext(ctx)
-        c.Next()
-
-        span.SetAttributes(attribute.Int("http.status_code", c.Writer.Status()))
-        if c.Writer.Status() >= 400 {
-            span.SetStatus(codes.Error, c.Errors.String())
-        }
-    }
-}
-
-func main() {
-    shutdown := initTracer()
-    defer shutdown()
-
-    r := gin.Default()
-    r.Use(TracingMiddleware())
-
-    r.GET("/api/users", func(c *gin.Context) {
-        ctx := c.Request.Context() // ctx has parent span from middleware
-
-        // Lake.List and Lake.Read automatically become child spans
-        list := client.List(ctx, "users")
-        data, _ := lake.ReadString(ctx, list)
-        c.String(200, data)
-    })
-}
-```
-
-Tempo trace structure:
-```
-GET /api/users               (root span, traceID from traceparent or auto-generated)
-  └─ Lake.List               (child span, library: lake)
-       └─ Index.ReadRange
-  └─ Lake.Read               (child span, library: lake)
-       └─ Cache.Redis.Take
-```
-
-**Usage 2: Standalone (no HTTP, e.g. cron jobs, CLI tools)**
-
-Manually create a root span, lake spans become its children:
-
-```go
-shutdown := initTracer()
-defer shutdown()
-
 client := lake.NewLake("redis://localhost:6379")
 
-// Create root span manually
-ctx, rootSpan := otel.Tracer("my-app").Start(context.Background(), "SyncJob")
-defer rootSpan.End()
-
-// Lake spans are children of SyncJob
-list := client.List(ctx, "users")
-data, _ := lake.ReadString(ctx, list)
+// Register event handler
+client.Use(func(catalog, event string, attrs map[string]any) {
+    log.Printf("[lake] %s %s %v", catalog, event, attrs)
+})
 ```
 
-Tempo trace structure:
-```
-SyncJob                      (root span, self-generated traceID)
-  └─ Lake.List
-       └─ Index.ReadRange
-  └─ Lake.Read
-       └─ Cache.Redis.Take
-```
+**Events emitted:**
 
-**Span Hierarchy:**
+| Event | Attrs | Description |
+|-------|-------|-------------|
+| `List` | — | Single catalog list |
+| `BatchList` | — | Per-catalog event in batch list |
+| `Write` | `path`, `mergeType` | Write data |
+| `WriteFile` | `path` | Write binary file |
+| `MotionSample` | `indicator`, `motionCatalogs` | Sampling operation |
+| `ClearHistory` | `keepSnaps` | History cleanup |
 
-| Parent Span | Child Spans |
-|-------------|-------------|
-| `Lake.Write` | `Index.Commit` |
-| `Lake.Read` | `Lake.FillDeltasBody`, `Cache.Redis.Take`, `Cache.Memory.Take` |
-| `Lake.List` | `Index.ReadRange` |
-| `Lake.MotionSample` | `Index.GetSampleScore`, `Index.UpdateSampleScore`, `Lake.List` |
-| `Lake.ClearHistory` | — |
-| `Lake.WriteFile` | — |
-
-**Sampling Modes:**
-
-| Mode | Config | Behavior |
-|------|--------|----------|
-| **Disabled** | No `TracerProvider` configured | Noop tracer, zero overhead, no spans created |
-| **Always** | `sdktrace.AlwaysSample()` | All requests produce traces, including those without upstream traceID |
-| **Parent-only** | `sdktrace.ParentBased(sdktrace.NeverSample())` | Only trace when request carries `traceparent` header; requests without upstream traceID produce no spans and send nothing to Tempo |
-
-**Recommended: Parent-only mode** — only traces requests that already have a traceID from upstream (e.g. API gateway, service mesh), avoiding noise from health checks, cron jobs, etc:
-
-```go
-tp := sdktrace.NewTracerProvider(
-    sdktrace.WithBatcher(exporter),
-    sdktrace.WithResource(res),
-    sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.NeverSample())),
-)
-```
+> **Note:** For distributed tracing (OpenTelemetry), instrument at the Redis/OSS client level (e.g. `redisotel.InstrumentTracing`) rather than in Lake itself. This gives automatic span coverage for all Redis commands and storage operations.
 
 ## 📖 Core Concepts
 
@@ -855,9 +703,14 @@ Read (Parallel + Async):
   4. Async: Save new snapshot (background, non-blocking) ✨ v2.2.0
 ```
 
+### What's New in v2.4.x
+
+- **Event Middleware**: Replaced OpenTelemetry tracing with lightweight `client.Use(EventHandler)` — zero dependencies, register callbacks for operation logging
+- **BatchList**: Pipeline-based batch List for N catalogs in 2 Redis round-trips (vs 2N)
+- **Removed otel dependency**: No more `go.opentelemetry.io/otel` in `go.mod`; for distributed tracing, instrument at the Redis/OSS client level
+
 ### What's New in v2.3.x
 
-- **OpenTelemetry Migration**: Replaced custom `trace` package with native OpenTelemetry instrumentation — spans are automatically created for all core operations (`Lake.Write`, `Lake.Read`, `Lake.List`, etc.)
 - **Pending/Error Separation**: `HasPending` and `Err` are now independent — `Err` is only for real errors, pending state is conveyed solely via `HasPending`
 - **Position-Aware Pending Detection**: By default, only pending members that appear before a delta trigger `HasPending` (tail pending is harmless and ignored)
 - **`WithStrictPending()` Option**: Opt-in strict mode where any pending triggers `HasPending`, for strong consistency scenarios
@@ -923,7 +776,6 @@ data, _ := lake.ReadMap(ctx, list)
 
 **Behavior**:
 - Snapshot save failure **does not fail Read operation**
-- Error recorded as a span event for debugging (visible in OTel traces)
 - Next read will regenerate snapshot
 - Data consistency maintained (snapshots can be rebuilt)
 
