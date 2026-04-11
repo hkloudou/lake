@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/hkloudou/lake/v2/internal/index"
-	"github.com/hkloudou/lake/v2/internal/tracer"
 )
 
 // ListResult represents the read result
@@ -38,8 +37,6 @@ func (m ListResult) Exist() bool {
 func (m ListResult) Dump() string {
 	var output strings.Builder
 
-	// output.WriteString("=== List Result Debug Info ===\n")
-
 	// Snapshot info
 	if m.LatestSnap != nil {
 		output.WriteString("Latest Snapshot:\n")
@@ -52,11 +49,8 @@ func (m ListResult) Dump() string {
 		output.WriteString("No snapshot found\n")
 	}
 
-	// output.WriteString("\n")
-
 	// Entries info
 	if len(m.Entries) > 0 {
-		// output.WriteString(fmt.Sprintf("Entries: %d total\n", len(m.Entries)))
 		for i, entry := range m.Entries {
 			output.WriteString(fmt.Sprintf("\n[%d/%d] --------------------------------\n", i+1, len(m.Entries)))
 			output.WriteString(fmt.Sprintf("  Path: %s\n", entry.Path))
@@ -67,8 +61,6 @@ func (m ListResult) Dump() string {
 	} else {
 		output.WriteString("No entries found\n")
 	}
-
-	// output.WriteString("\n=============================")
 
 	return output.String()
 }
@@ -85,14 +77,12 @@ func (m ListResult) NextSnap() *index.SnapInfo {
 		return &index.SnapInfo{
 			StartTsSeq: index.TimeSeqID{Timestamp: 0, SeqID: 0},
 			StopTsSeq:  m.Entries[len(m.Entries)-1].TsSeq,
-			// Score:      m.Entries[len(m.Entries)-1].TsSeq.Score(),
 		}
 	}
 
 	return &index.SnapInfo{
 		StartTsSeq: m.LatestSnap.StopTsSeq,
 		StopTsSeq:  m.Entries[len(m.Entries)-1].TsSeq,
-		// Score:      m.Entries[len(m.Entries)-1].TsSeq.Score(),
 	}
 }
 
@@ -111,6 +101,50 @@ func WithStrictPending() ListOption {
 	}
 }
 
+// BatchList performs List operations for multiple catalogs in 2 Redis round-trips.
+// Each catalog's result is independent — one catalog's error does not affect others.
+func (c *Client) BatchList(ctx context.Context, catalogs []string, opts ...ListOption) map[string]*ListResult {
+	var opt listOption
+	for _, o := range opts {
+		o(&opt)
+	}
+
+	result := make(map[string]*ListResult, len(catalogs))
+
+	for _, catalog := range catalogs {
+		c.emitEvent(catalog, "BatchList", nil)
+	}
+
+	if err := c.ensureInitialized(ctx); err != nil {
+		for _, catalog := range catalogs {
+			result[catalog] = &ListResult{client: c, catalog: catalog, Err: err}
+		}
+		return result
+	}
+
+	batchResults := c.reader.BatchList(ctx, catalogs, opt.strictPending)
+
+	for _, catalog := range catalogs {
+		br := batchResults[catalog]
+		lr := &ListResult{
+			client:  c,
+			catalog: catalog,
+		}
+		if br.ReadResult != nil && br.ReadResult.Err != nil {
+			lr.Err = br.ReadResult.Err
+		} else {
+			lr.LatestSnap = br.Snap
+			if br.ReadResult != nil {
+				lr.Entries = br.ReadResult.Deltas
+				lr.HasPending = br.ReadResult.HasPending
+			}
+		}
+		result[catalog] = lr
+	}
+
+	return result
+}
+
 // List reads catalog metadata and returns ListResult
 // Errors (including pending writes) are stored in ListResult.Err
 func (c *Client) List(ctx context.Context, catalog string, opts ...ListOption) *ListResult {
@@ -118,12 +152,6 @@ func (c *Client) List(ctx context.Context, catalog string, opts ...ListOption) *
 	for _, o := range opts {
 		o(&opt)
 	}
-	ctx, span := tracer.Tracer.Start(ctx, "Lake.List")
-	defer span.End()
-	span.SetAttributes(tracer.Attrs(map[string]any{
-		"lake.catalog":        catalog,
-		"lake.strict_pending": opt.strictPending,
-	})...)
 
 	// Ensure initialized before operation
 	if err := c.ensureInitialized(ctx); err != nil {
@@ -133,7 +161,8 @@ func (c *Client) List(ctx context.Context, catalog string, opts ...ListOption) *
 			Err:     err,
 		}
 	}
-	tracer.RecordEvent(span, "List.Init")
+
+	c.emitEvent(catalog, "List", nil)
 
 	// Try to get existing snapshot
 	snap, err := c.reader.GetLatestSnap(ctx, catalog)
@@ -144,24 +173,14 @@ func (c *Client) List(ctx context.Context, catalog string, opts ...ListOption) *
 			Err:     fmt.Errorf("failed to get snapshot: %w", err),
 		}
 	}
-	tracer.RecordEvent(span, "List.GetLatestSnap")
 
 	var readResult *index.ReadIndexResult
 
 	if snap != nil {
-		tracer.RecordEvent(span, "List.ReadSince", map[string]interface{}{
-			"since": snap.StopTsSeq.String(),
-		})
 		readResult = c.reader.ReadSince(ctx, catalog, snap.StopTsSeq.Score(), opt.strictPending)
 	} else {
-		// No snapshot, read all
-		tracer.RecordEvent(span, "List.ReadAll")
 		readResult = c.reader.ReadAll(ctx, catalog, opt.strictPending)
 	}
-	tracer.RecordEvent(span, "List.ReadIndex", map[string]interface{}{
-		"count":      len(readResult.Deltas),
-		"hasPending": readResult.HasPending,
-	})
 
 	return &ListResult{
 		client:     c,

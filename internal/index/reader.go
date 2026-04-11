@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hkloudou/lake/v2/internal/tracer"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -236,14 +235,7 @@ func (m SnapInfo) Dump() string {
 }
 
 func (r *Reader) readRange(ctx context.Context, catalog string, min, max string, strictPending bool) *ReadIndexResult {
-	ctx, span := tracer.Tracer.Start(ctx, "Index.ReadRange")
-	defer span.End()
 	key := r.MakeDeltaZsetKey(catalog)
-	span.SetAttributes(tracer.Attrs(map[string]any{
-		"index.catalog": catalog,
-		"index.min":     min,
-		"index.max":     max,
-	})...)
 	results, err := r.rdb.ZRangeByScoreWithScores(ctx, key, &redis.ZRangeBy{
 		Min: min,
 		Max: max,
@@ -253,11 +245,16 @@ func (r *Reader) readRange(ctx context.Context, catalog string, min, max string,
 		return &ReadIndexResult{Err: err}
 	}
 
+	result := r.processZMembers(catalog, results, strictPending)
+
+	return result
+}
+
+// processZMembers processes raw Redis Z members into ReadIndexResult.
+// Shared by readRange and BatchList.
+func (r *Reader) processZMembers(catalog string, results []redis.Z, strictPending bool) *ReadIndexResult {
 	var entries []DeltaInfo
-	// var lastCommittedTimestamp float64
-	// // First pass: collect committed entries and find latest timestamp
 	var timeoutThreshold = int64(120) // 2 minutes in seconds
-	// ts := time.Now().Unix()
 	var hasPending bool
 	var hasUnresolvedPending bool
 	for _, z := range results {
@@ -301,16 +298,110 @@ func (r *Reader) readRange(ctx context.Context, catalog string, min, max string,
 		entries = append(entries, *deltaInfo)
 	}
 
-	tracer.RecordEvent(span, "Read.ReadRange", map[string]interface{}{
-		"range":      fmt.Sprintf("%s ~ %s", min, max),
-		"count":      fmt.Sprintf("%d/%d", len(entries), len(results)),
-		"hasPending": hasPending,
-	})
 	return &ReadIndexResult{
 		Catalog:    catalog,
 		Deltas:     entries,
 		HasPending: hasPending,
 	}
+}
+
+// BatchListResult holds the combined snap + delta results for one catalog
+type BatchListResult struct {
+	Snap       *SnapInfo
+	ReadResult *ReadIndexResult
+}
+
+// BatchList performs List operations for multiple catalogs using Redis Pipeline.
+// Phase 1: pipeline all snap queries (1 round-trip)
+// Phase 2: pipeline all delta queries using snap results (1 round-trip)
+// Total: 2 round-trips regardless of catalog count.
+func (r *Reader) BatchList(ctx context.Context, catalogs []string, strictPending bool) map[string]*BatchListResult {
+	results := make(map[string]*BatchListResult, len(catalogs))
+	if len(catalogs) == 0 {
+		return results
+	}
+
+	// Initialize results
+	for _, catalog := range catalogs {
+		results[catalog] = &BatchListResult{}
+	}
+
+	// Phase 1: Pipeline all snap queries
+	snapPipe := r.rdb.Pipeline()
+	snapCmds := make(map[string]*redis.ZSliceCmd, len(catalogs))
+	for _, catalog := range catalogs {
+		key := r.MakeSnapZsetKey(catalog)
+		snapCmds[catalog] = snapPipe.ZRevRangeByScoreWithScores(ctx, key, &redis.ZRangeBy{
+			Min:    "-inf",
+			Max:    "+inf",
+			Offset: 0,
+			Count:  1,
+		})
+	}
+	snapPipe.Exec(ctx)
+
+	// Process snap results
+	for _, catalog := range catalogs {
+		zs, err := snapCmds[catalog].Result()
+		if err != nil && err != redis.Nil {
+			results[catalog].ReadResult = &ReadIndexResult{
+				Catalog: catalog,
+				Err:     fmt.Errorf("failed to get snapshot: %w", err),
+			}
+			continue
+		}
+		if len(zs) > 0 {
+			startTsSeq, stopTsSeq, err := DecodeSnapMember(zs[0].Member.(string))
+			if err != nil {
+				results[catalog].ReadResult = &ReadIndexResult{
+					Catalog: catalog,
+					Err:     fmt.Errorf("failed to decode snapshot: %w", err),
+				}
+				continue
+			}
+			results[catalog].Snap = &SnapInfo{
+				Member:     zs[0].Member.(string),
+				Score:      zs[0].Score,
+				StartTsSeq: startTsSeq,
+				StopTsSeq:  stopTsSeq,
+			}
+		}
+	}
+
+	// Phase 2: Pipeline all delta queries
+	deltaPipe := r.rdb.Pipeline()
+	deltaCmds := make(map[string]*redis.ZSliceCmd, len(catalogs))
+	for _, catalog := range catalogs {
+		// Skip catalogs that already failed in phase 1
+		if results[catalog].ReadResult != nil && results[catalog].ReadResult.Err != nil {
+			continue
+		}
+		key := r.MakeDeltaZsetKey(catalog)
+		min := "-inf"
+		if snap := results[catalog].Snap; snap != nil {
+			min = fmt.Sprintf("(%.6f", snap.StopTsSeq.Score())
+		}
+		deltaCmds[catalog] = deltaPipe.ZRangeByScoreWithScores(ctx, key, &redis.ZRangeBy{
+			Min: min,
+			Max: "+inf",
+		})
+	}
+	deltaPipe.Exec(ctx)
+
+	// Process delta results
+	for catalog, cmd := range deltaCmds {
+		zs, err := cmd.Result()
+		if err != nil && err != redis.Nil {
+			results[catalog].ReadResult = &ReadIndexResult{
+				Catalog: catalog,
+				Err:     fmt.Errorf("failed to read deltas: %w", err),
+			}
+			continue
+		}
+		results[catalog].ReadResult = r.processZMembers(catalog, zs, strictPending)
+	}
+
+	return results
 }
 
 func (c *Reader) startRedisTimeUnixUpdater() {
@@ -350,13 +441,7 @@ return tonumber(timestamp)`,
 }
 
 func (c *Reader) Meta(ctx context.Context, catalog string) (string, error) {
-	_, span := tracer.Tracer.Start(ctx, "Index.Meta")
-	defer span.End()
 	metaKey := c.MakeMetaKey(catalog)
-	span.SetAttributes(tracer.Attrs(map[string]any{
-		"index.catalog":  catalog,
-		"index.meta_key": metaKey,
-	})...)
 	val, err := c.rdb.Get(ctx, metaKey).Result()
 	if err != nil && err != redis.Nil {
 		return "", err
@@ -365,15 +450,10 @@ func (c *Reader) Meta(ctx context.Context, catalog string) (string, error) {
 }
 
 func (c *Reader) BatchMeta(ctx context.Context, catalogs []string) (map[string]string, error) {
-	_, span := tracer.Tracer.Start(ctx, "Index.BatchMeta")
-	defer span.End()
 	metaKeys := make([]string, len(catalogs))
 	for i, catalog := range catalogs {
 		metaKeys[i] = c.MakeMetaKey(catalog)
 	}
-	span.SetAttributes(tracer.Attrs(map[string]any{
-		"index.count": len(catalogs),
-	})...)
 
 	results, err := c.rdb.MGet(ctx, metaKeys...).Result()
 	if err != nil && err != redis.Nil {

@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/hkloudou/lake/v2/internal/encode"
-	"github.com/hkloudou/lake/v2/internal/tracer"
 )
 
 // Lua script to atomically generate TimeSeqID and pre-commit to Redis
@@ -67,7 +66,6 @@ local score = tonumber(ARGV[3])
 redis.call("ZADD", key, score, committedMember)
 redis.call("ZREM", key, pendingMember)
 
-
 -- KEYS[2]: Redis meta key
 -- ARGV[4]: updatedMap
 local metaKey = KEYS[2]
@@ -91,7 +89,6 @@ return "OK"
 
 /*
 DELETED CODE:
-
 
 -- ARGV[4]: updatedMap
 local updatedMap = cjson.decode(ARGV[4])
@@ -217,17 +214,8 @@ func (w *Writer) Rollback(ctx context.Context, catalog, pendingMember string) er
 
 // Commit atomically commits a pending write
 func (w *Writer) Commit(ctx context.Context, catalog, pendingMember, committedMember string, score float64, meta []byte) error {
-	_, span := tracer.Tracer.Start(ctx, "Index.Commit")
-	defer span.End()
 	zaddKey := w.MakeDeltaZsetKey(catalog)
 	metaKey := w.MakeMetaKey(catalog)
-	span.SetAttributes(tracer.Attrs(map[string]any{
-		"index.zaddKey":          zaddKey,
-		"index.metaKey":          metaKey,
-		"index.pending_member":   pendingMember,
-		"index.committed_member": committedMember,
-		"index.score":            fmt.Sprintf("%.6f", score),
-	})...)
 	_, err := w.rdb.Eval(ctx, commitScript,
 		[]string{zaddKey, metaKey},
 		pendingMember, committedMember, score, string(meta)).Result()

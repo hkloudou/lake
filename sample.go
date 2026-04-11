@@ -7,7 +7,6 @@ import (
 	"math"
 	"sync"
 
-	"github.com/hkloudou/lake/v2/internal/tracer"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -19,24 +18,16 @@ import (
 // 5. Improve error handling logic
 func (c *Client) MotionSample(ctx context.Context, catalog string, indicator string, motionCatalogs []string, shouldUpdated func(sampleTs, lakeTs float64) bool, callBack func(map[string]*ListResult, float64) (float64, error)) (float64, error) {
 
+	c.emitEvent(catalog, "MotionSample", map[string]any{"indicator": indicator, "motionCatalogs": motionCatalogs})
+
 	// Ensure initialized before operation
 	if err := c.ensureInitialized(ctx); err != nil {
 		return 0, err
 	}
-	ctx, span := tracer.Tracer.Start(ctx, "Lake.MotionSample")
-	defer span.End()
-	tracer.RecordEvent(span, "MotionSample.Start", map[string]any{
-		"catalog":        catalog,
-		"indicator":      indicator,
-		"motionCatalogs": motionCatalogs,
-	})
 
 	// Get last sample time
 	sampleLastUpdated, err := c.reader.GetSampleScore(ctx, catalog, indicator)
 	if err != nil && !errors.Is(err, redis.Nil) {
-		tracer.RecordEvent(span, "MotionSample.GetSampleScoreFailed", map[string]any{
-			"error": err.Error(),
-		})
 		return 0, err
 	}
 	// redis.Nil means first sampling, sampleLastUpdated is 0, which is normal
@@ -46,20 +37,11 @@ func (c *Client) MotionSample(ctx context.Context, catalog string, indicator str
 		motionCatalogs = []string{catalog}
 	}
 
-	tracer.RecordEvent(span, "MotionSample.GetSampleScore", map[string]any{
-		"sampleLastUpdated": sampleLastUpdated,
-		"motionCatalogs":    motionCatalogs,
-	})
-
 	// Execute List operations concurrently
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var firstErr error
 	listResults := make(map[string]*ListResult, len(motionCatalogs))
-
-	tracer.RecordEvent(span, "MotionSample.ListConcurrent.Start", map[string]any{
-		"count": len(motionCatalogs),
-	})
 
 	// Use channel to collect results, reduce trace calls in goroutines
 	type listResult struct {
@@ -108,35 +90,10 @@ func (c *Client) MotionSample(ctx context.Context, catalog string, indicator str
 		}
 		mu.Unlock()
 
-		// Trace called in main goroutine to avoid concurrency issues
-		if result.err != nil {
-			tracer.RecordEvent(span, "MotionSample.List.Error", map[string]any{
-				"catalog": result.catalog,
-				"error":   result.err.Error(),
-			})
-		} else if result.lastUpdated > 0 {
-			tracer.RecordEvent(span, "MotionSample.List.Success", map[string]any{
-				"catalog":     result.catalog,
-				"lastUpdated": result.lastUpdated,
-			})
-		} else {
-			tracer.RecordEvent(span, "MotionSample.List.Empty", map[string]any{
-				"catalog": result.catalog,
-			})
-		}
 	}
-
-	tracer.RecordEvent(span, "MotionSample.ListConcurrent.Done", map[string]any{
-		"sampleLastUpdated": sampleLastUpdated,
-		"lastUpdated":       lastUpdated,
-		"resultCount":       len(listResults),
-	})
 
 	// Error handling
 	if firstErr != nil {
-		tracer.RecordEvent(span, "MotionSample.Error", map[string]any{
-			"error": firstErr.Error(),
-		})
 		return 0, firstErr
 	}
 
@@ -147,66 +104,29 @@ func (c *Client) MotionSample(ctx context.Context, catalog string, indicator str
 	// - If skipping sampling, should return the existing version number, not the currently calculated one
 	// if sampleLastUpdated > 0 && sampleLastUpdated >= lastUpdated {
 	if sampleLastUpdated >= lastUpdated && shouldUpdated(sampleLastUpdated, lastUpdated) == false {
-		tracer.RecordEvent(span, "MotionSample.Skipped", map[string]any{
-			"reason":            "sampleLastUpdated >= lastUpdated",
-			"sampleLastUpdated": sampleLastUpdated,
-			"lastUpdated":       lastUpdated,
-		})
 		return sampleLastUpdated, nil
 	}
-
-	tracer.RecordEvent(span, "MotionSample.Processing", map[string]any{
-		"sampleLastUpdated": sampleLastUpdated,
-		"lastUpdated":       lastUpdated,
-	})
 
 	// Use more precise key format to avoid precision loss
 	// Use %.6f instead of %6f to ensure precision
 	singleFlightKey := fmt.Sprintf("%s:%s:%.6f", catalog, indicator, lastUpdated)
-	tracer.RecordEvent(span, "MotionSample.SingleFlight.Start", map[string]any{
-		"key": singleFlightKey,
-	})
 
 	score, err := c.sampleFlight.Do(singleFlightKey, func() (float64, error) {
-		tracer.RecordEvent(span, "MotionSample.Callback.Start", map[string]any{
-			"lastUpdated": lastUpdated,
-		})
 		score, err := callBack(listResults, lastUpdated)
 		if err != nil {
-			tracer.RecordEvent(span, "MotionSample.Callback.Error", map[string]any{
-				"error": err.Error(),
-			})
 			return 0, err
 		}
-		tracer.RecordEvent(span, "MotionSample.Callback.Done", map[string]any{
-			"score": score,
-		})
 
-		tracer.RecordEvent(span, "MotionSample.UpdateSampleScore.Start", map[string]any{
-			"catalog":   catalog,
-			"indicator": indicator,
-			"score":     score,
-		})
 		err = c.writer.UpdateSampleScore(ctx, catalog, indicator, score)
 		if err != nil {
-			tracer.RecordEvent(span, "MotionSample.UpdateSampleScore.Error", map[string]any{
-				"error": err.Error(),
-			})
 			return 0, err
 		}
-		tracer.RecordEvent(span, "MotionSample.UpdateSampleScore.Done")
 		return score, nil
 	})
 
 	if err != nil {
-		tracer.RecordEvent(span, "MotionSample.Failed", map[string]any{
-			"error": err.Error(),
-		})
 		return 0, err
 	}
 
-	tracer.RecordEvent(span, "MotionSample.Success", map[string]any{
-		"score": score,
-	})
 	return score, nil
 }

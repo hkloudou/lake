@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"github.com/hkloudou/lake/v2/internal/index"
-	"github.com/hkloudou/lake/v2/internal/tracer"
 )
 
 // doClearHistoryOptimized is the optimized version of history cleanup
@@ -15,16 +14,12 @@ import (
 // 2. Concurrent delete Storage files (10 workers in parallel)
 // 3. Separate Delta and Snap cleanup flows for independent control
 func (c *Client) doClearHistoryOptimized(ctx context.Context, catalog string, keepSnaps int) error {
-	ctx, span := tracer.Tracer.Start(ctx, "Lake.ClearHistory")
-	defer span.End()
+	c.emitEvent(catalog, "ClearHistory", map[string]any{"keepSnaps": keepSnaps})
 
 	// Ensure initialized before operation
 	if err := c.ensureInitialized(ctx); err != nil {
 		return err
 	}
-	tracer.RecordEvent(span, "ClearHistoryOptimized.Init", map[string]any{
-		"keepSnaps": keepSnaps,
-	})
 
 	snaps, readResult := c.reader.ReadSafeRemoveRangeWithRetention(ctx, catalog, keepSnaps)
 	if readResult.Err != nil {
@@ -34,27 +29,15 @@ func (c *Client) doClearHistoryOptimized(ctx context.Context, catalog string, ke
 	// Optimization 1: Batch delete Deltas
 	if len(readResult.Deltas) > 0 {
 		if err := c.clearDeltasBatch(ctx, catalog, readResult.Deltas); err != nil {
-			tracer.RecordEvent(span, "ClearHistoryOptimized.ClearDeltas.Error", map[string]any{
-				"error": err.Error(),
-			})
 			// Don't return, continue to clear snaps
 		} else {
-			tracer.RecordEvent(span, "ClearHistoryOptimized.ClearDeltas.Success", map[string]any{
-				"count": len(readResult.Deltas),
-			})
 		}
 	}
 
 	// Optimization 2: Batch delete Snaps
 	if len(snaps) > 0 {
 		if err := c.clearSnapsBatch(ctx, catalog, snaps); err != nil {
-			tracer.RecordEvent(span, "ClearHistoryOptimized.ClearSnaps.Error", map[string]any{
-				"error": err.Error(),
-			})
 		} else {
-			tracer.RecordEvent(span, "ClearHistoryOptimized.ClearSnaps.Success", map[string]any{
-				"count": len(snaps),
-			})
 		}
 	}
 

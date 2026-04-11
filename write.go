@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/hkloudou/lake/v2/internal/index"
-	"github.com/hkloudou/lake/v2/internal/tracer"
 	"github.com/hkloudou/lake/v2/internal/utils"
 )
 
@@ -59,14 +58,7 @@ type WriteRequest struct {
 //   - RFC7396 patch: []byte(`{"age":31,"city":null}`)
 //   - RFC6902 patch: []byte(`[{"op":"add","path":"/a","value":1}]`)
 func (c *Client) Write(ctx context.Context, req WriteRequest) error {
-	ctx, span := tracer.Tracer.Start(ctx, "Lake.Write")
-	defer span.End()
-	span.SetAttributes(tracer.Attrs(map[string]any{
-		"lake.catalog":    req.Catalog,
-		"lake.path":       req.Path,
-		"lake.merge_type": int(req.MergeType),
-		"lake.body_size":  len(req.Body),
-	})...)
+	c.emitEvent(req.Catalog, "Write", map[string]any{"path": req.Path, "mergeType": int(req.MergeType)})
 
 	if err := utils.ValidateFieldPath(req.Path); err != nil {
 		return err
@@ -76,7 +68,6 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) error {
 	if err := c.ensureInitialized(ctx); err != nil {
 		return err
 	}
-	tracer.RecordEvent(span, "Write.Init")
 
 	// Fast path: patch with empty body - no data change, only update meta
 	if isNoopBody(req.MergeType, req.Body) {
@@ -84,7 +75,6 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) error {
 		if err != nil {
 			return fmt.Errorf("failed to update meta: %w", err)
 		}
-		tracer.RecordEvent(span, "Write.MetaOnly")
 		return nil
 	}
 
@@ -93,11 +83,6 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) error {
 	if err != nil {
 		return fmt.Errorf("failed to generate timeseq and precommit: %w", err)
 	}
-	tracer.RecordEvent(span, "Write.PreCommit", map[string]any{
-		"tsSeq":  tsSeq.String(),
-		"seqID":  tsSeq.SeqID,
-		"member": pendingMember,
-	})
 
 	// Step 2: Write to storage
 	if c.storage == nil {
@@ -107,18 +92,9 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) error {
 	if err := c.storage.Put(ctx, storageDeltaKey, req.Body); err != nil {
 		// Rollback: remove pending member from Redis delta zset
 		// This prevents Read errors from detecting stale pending writes
-		if rollbackErr := c.writer.Rollback(ctx, req.Catalog, pendingMember); rollbackErr != nil {
-			tracer.RecordEvent(span, "Write.Rollback", map[string]any{"error": rollbackErr.Error()})
-			// Log rollback error but return original storage error
-		} else {
-			tracer.RecordEvent(span, "Write.Rollback", map[string]any{"success": true})
-		}
+		c.writer.Rollback(ctx, req.Catalog, pendingMember)
 		return fmt.Errorf("failed to write to storage: %w", err)
 	}
-	tracer.RecordEvent(span, "Write.StoragePut", map[string]any{
-		"key":  storageDeltaKey,
-		"size": len(req.Body),
-	})
 
 	// Step 3: Get hierarchical Updated Map
 	// hm := merge.NewHierarchicalUpdateMap()
@@ -134,7 +110,6 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) error {
 	if err != nil {
 		return fmt.Errorf("failed to commit: %w", err)
 	}
-	tracer.RecordEvent(span, "Write.Commit")
 
 	return nil
 }

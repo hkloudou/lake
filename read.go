@@ -7,17 +7,9 @@ import (
 
 	"github.com/hkloudou/lake/v2/internal/index"
 	"github.com/hkloudou/lake/v2/internal/merge"
-	"github.com/hkloudou/lake/v2/internal/tracer"
 )
 
 func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error) {
-	ctx, span := tracer.Tracer.Start(ctx, "Lake.Read")
-	defer span.End()
-	span.SetAttributes(tracer.Attrs(map[string]any{
-		"lake.catalog":     list.catalog,
-		"lake.has_pending": list.HasPending,
-		"lake.entry_count": len(list.Entries),
-	})...)
 
 	// Check for read errors from List
 	if list.Err != nil {
@@ -33,7 +25,6 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 	if err := c.ensureInitialized(ctx); err != nil {
 		return nil, err
 	}
-	tracer.RecordEvent(span, "Read.Init")
 
 	// Parallel execution: load snapshot base data and delta bodies concurrently
 	var baseData []byte
@@ -48,11 +39,6 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 		defer wg.Done()
 		if list.LatestSnap != nil {
 			storageKey := c.storage.MakeSnapKey(list.catalog, list.LatestSnap.StartTsSeq, list.LatestSnap.StopTsSeq)
-			tracer.RecordEvent(span, "Read.LoadSnapshot_Cache", map[string]interface{}{
-				"startTsSeq": list.LatestSnap.StartTsSeq,
-				"stopTsSeq":  list.LatestSnap.StopTsSeq,
-				"storageKey": storageKey,
-			})
 			namespace := c.storage.RedisPrefix()
 
 			// Use cache to load snapshot data with namespace
@@ -61,7 +47,6 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 				return c.storage.Get(ctx, storageKey)
 			})
 		} else {
-			tracer.RecordEvent(span, "Read.LoadSnapshot_Empty")
 			baseData = []byte("{}")
 		}
 	}()
@@ -84,50 +69,20 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 		return nil, fmt.Errorf("failed to load deltas: %w", deltasErr)
 	}
 
-	tracer.RecordEvent(span, "Read.LoadData")
-
 	// Merge entries with base data (pure CPU operation, all data loaded)
 	resultData, _, err := merge.Merge(list.catalog, baseData, list.Entries)
 	if err != nil {
 		return nil, err
 	}
-	for _, entry := range list.Entries {
-		tracer.RecordEvent(span, "Read.Merge.Entry", map[string]interface{}{
-			"path":      entry.Path,
-			"mergeType": entry.MergeType,
-			"tsSeq":     entry.TsSeq.String(),
-		})
-	}
-	tracer.RecordEvent(span, "Read.Merge.Done", map[string]interface{}{
-		"catalog": list.catalog,
-		"size":    len(resultData),
-	})
 
 	// Generate and save new snapshot asynchronously (non-blocking)
 	if nextSnap := list.NextSnap(); nextSnap != nil {
 		// Async snapshot save with SingleFlight (prevents duplicate saves)
-		tracer.RecordEvent(span, "Read.SnapshotSave_Async", map[string]interface{}{
-			"startTsSeq": nextSnap.StartTsSeq,
-			"stopTsSeq":  nextSnap.StopTsSeq,
-			"size":       len(resultData),
-			"hasNext":    nextSnap != nil,
-		})
 		go func() {
 			// Use background context (don't cancel with original context)
 			bgCtx := context.Background()
-			_, err := c.saveSnapshot(bgCtx, list.catalog, nextSnap.StartTsSeq, nextSnap.StopTsSeq, resultData)
-			if err != nil {
-				// Snapshot save failure is non-critical, just log
-				// Next read will regenerate snapshot
-				tracer.RecordEvent(span, "Read.SnapshotSave_Async", map[string]interface{}{
-					"success": false,
-					"error":   err.Error(),
-				})
-			} else {
-				tracer.RecordEvent(span, "Read.SnapshotSave_Async", map[string]interface{}{
-					"success": true,
-				})
-			}
+			// Snapshot save failure is non-critical, next read will regenerate
+			c.saveSnapshot(bgCtx, list.catalog, nextSnap.StartTsSeq, nextSnap.StopTsSeq, resultData)
 		}()
 	}
 
@@ -142,12 +97,6 @@ func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []in
 	if len(deltas) == 0 {
 		return nil
 	}
-	ctx, span := tracer.Tracer.Start(ctx, "Lake.FillDeltasBody")
-	defer span.End()
-	span.SetAttributes(tracer.Attrs(map[string]any{
-		"lake.catalog":     catalog,
-		"lake.delta_count": len(deltas),
-	})...)
 
 	// Channel for work distribution
 	type job struct {

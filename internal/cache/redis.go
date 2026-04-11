@@ -7,7 +7,6 @@ import (
 	"github.com/hkloudou/lake/v2/internal/encode"
 	"github.com/hkloudou/lake/v2/internal/encrypt"
 	"github.com/hkloudou/lake/v2/internal/xsync"
-	"github.com/hkloudou/lake/v2/internal/tracer"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -42,12 +41,6 @@ func NewRedisCacheWithURL(metaUrl string, ttl time.Duration) (*RedisCache, error
 
 // Take implements Cache interface with SingleFlight to prevent cache stampede
 func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader func() ([]byte, error)) ([]byte, error) {
-	_, span := tracer.Tracer.Start(ctx, "Cache.Redis.Take")
-	defer span.End()
-	span.SetAttributes(tracer.Attrs(map[string]any{
-		"cache.namespace": namespace,
-		"cache.key":       key,
-	})...)
 	cacheKey := "lake_cache:" + encode.EncodeRedisCatalogName(namespace+":"+key)
 
 	// Use SingleFlight to prevent multiple concurrent requests for same key
@@ -58,20 +51,12 @@ func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader fun
 		if err == redis.Nil {
 			// Cache miss
 			c.stat.IncrementMiss()
-			tracer.RecordEvent(span,"RedisCache.Miss")
 
 			// Call loader function to get []byte
 			data, err := loader()
 			if err != nil {
-				tracer.RecordEvent(span,"RedisCache.LoaderFailed", map[string]any{
-					"error": err.Error(),
-				})
 				return nil, err
 			}
-
-			tracer.RecordEvent(span,"RedisCache.Loaded", map[string]any{
-				"size": len(data),
-			})
 
 			// Write to Redis with TTL (data is already []byte, no need to marshal)
 			encryptedData, err := encrypt.Encrypt(data, []byte("lake"))
@@ -86,14 +71,8 @@ func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader fun
 			return data, nil
 		} else if err != nil {
 			// Redis error, fallback to loader
-			tracer.RecordEvent(span,"RedisCache.ErrorAndLoad", map[string]any{
-				"error": err.Error(),
-			})
 			data, err := loader()
 			if err != nil {
-				tracer.RecordEvent(span,"RedisCache.LoaderFailed", map[string]any{
-					"error": err.Error(),
-				})
 				return nil, err
 			}
 			return data, nil
@@ -101,10 +80,6 @@ func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader fun
 
 		// Cache hit
 		c.stat.IncrementHit()
-		tracer.RecordEvent(span,"RedisCache.Hit", map[string]any{
-			"key":  cacheKey,
-			"size": len(cachedData),
-		})
 		decryptedData, err := encrypt.Decrypt([]byte(cachedData), []byte("lake"))
 		if err != nil {
 			return nil, err

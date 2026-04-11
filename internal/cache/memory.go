@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/hkloudou/lake/v2/internal/xsync"
-	"github.com/hkloudou/lake/v2/internal/tracer"
 )
 
 // MemoryCache implements Cache interface using in-memory map with TTL
@@ -38,12 +37,6 @@ func NewMemoryCache(ttl time.Duration) *MemoryCache {
 
 // Take implements Cache interface with SingleFlight
 func (c *MemoryCache) Take(ctx context.Context, namespace, key string, loader func() ([]byte, error)) ([]byte, error) {
-	_, span := tracer.Tracer.Start(ctx, "Cache.Memory.Take")
-	defer span.End()
-	span.SetAttributes(tracer.Attrs(map[string]any{
-		"cache.namespace": namespace,
-		"cache.key":       key,
-	})...)
 	cacheKey := namespace + ":" + key
 	// Use SingleFlight to prevent cache stampede
 	return c.flight.Do(cacheKey, func() ([]byte, error) {
@@ -53,23 +46,14 @@ func (c *MemoryCache) Take(ctx context.Context, namespace, key string, loader fu
 			if time.Now().Before(entry.expireTime) {
 				// Cache hit
 				c.mu.RUnlock()
-				tracer.RecordEvent(span,"MemoryCache.Hit", map[string]any{
-					"key":  cacheKey,
-					"size": len(entry.value),
-				})
 				return entry.value, nil
 			}
 		}
 		c.mu.RUnlock()
 
-		tracer.RecordEvent(span,"MemoryCache.Miss")
-
 		// Cache miss, call loader
 		data, err := loader()
 		if err != nil {
-			tracer.RecordEvent(span,"MemoryCache.LoaderFailed", map[string]any{
-				"error": err.Error(),
-			})
 			return nil, err
 		}
 
@@ -80,10 +64,6 @@ func (c *MemoryCache) Take(ctx context.Context, namespace, key string, loader fu
 			expireTime: time.Now().Add(c.ttl),
 		}
 		c.mu.Unlock()
-
-		tracer.RecordEvent(span,"MemoryCache.Loaded", map[string]any{
-			"size": len(data),
-		})
 
 		return data, nil
 	})
