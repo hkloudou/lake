@@ -8,12 +8,27 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// sampleCache wraps the cached sample result with its score for atomic consistency.
-// Score and Data are stored together in a single Redis key,
-// so there's no window for inconsistency between score check and data read.
-type sampleCache[T any] struct {
-	Score float64 `json:"score"`
-	Data  T       `json:"data"`
+// marshalSampleCache serializes [score, data] as a JSON array.
+func marshalSampleCache[T any](score float64, data T) ([]byte, error) {
+	return json.Marshal([2]any{score, data})
+}
+
+// unmarshalSampleCache deserializes [score, data] from a JSON array.
+func unmarshalSampleCache[T any](raw []byte) (float64, T, error) {
+	var arr [2]json.RawMessage
+	var zero T
+	if err := json.Unmarshal(raw, &arr); err != nil {
+		return 0, zero, err
+	}
+	var score float64
+	if err := json.Unmarshal(arr[0], &score); err != nil {
+		return 0, zero, err
+	}
+	var data T
+	if err := json.Unmarshal(arr[1], &data); err != nil {
+		return 0, zero, err
+	}
+	return score, data, nil
 }
 
 // Sample reads cached sampling result of type T for the given catalog and indicator.
@@ -52,12 +67,12 @@ func Sample[T any](ctx context.Context, list *ListResult, indicator string, load
 	lastUpdated := list.LastUpdated()
 	hashKey := c.makeSampleHashKey(list.catalog)
 
-	// Single HGET: score + data are atomic per indicator
+	// Single HGET: [score, data] atomic per indicator
 	cached, err := c.rdb.HGet(ctx, hashKey, indicator).Bytes()
 	if err == nil {
-		var entry sampleCache[T]
-		if json.Unmarshal(cached, &entry) == nil && entry.Score >= lastUpdated && entry.Score > 0 {
-			return entry.Data, nil
+		score, data, unmarshalErr := unmarshalSampleCache[T](cached)
+		if unmarshalErr == nil && score >= lastUpdated && score > 0 {
+			return data, nil
 		}
 		// Score stale or unmarshal failed, fall through to reload
 	} else if err != redis.Nil {
@@ -72,13 +87,12 @@ func Sample[T any](ctx context.Context, list *ListResult, indicator string, load
 			return "", err
 		}
 
-		entry := sampleCache[T]{Score: lastUpdated, Data: result}
-		data, err := json.Marshal(entry)
+		data, err := marshalSampleCache(lastUpdated, result)
 		if err != nil {
 			return "", fmt.Errorf("failed to marshal sample result: %w", err)
 		}
 
-		// Single HSET: score + data atomic per indicator
+		// Single HSET: [score, data] atomic per indicator
 		c.rdb.HSet(ctx, hashKey, indicator, data)
 
 		return string(data), nil
@@ -87,11 +101,11 @@ func Sample[T any](ctx context.Context, list *ListResult, indicator string, load
 		return zero, err
 	}
 
-	var entry sampleCache[T]
-	if err := json.Unmarshal([]byte(resultBytes), &entry); err != nil {
+	_, result, err := unmarshalSampleCache[T]([]byte(resultBytes))
+	if err != nil {
 		return zero, err
 	}
-	return entry.Data, nil
+	return result, nil
 }
 
 func (c *Client) makeSampleHashKey(catalog string) string {
