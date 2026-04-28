@@ -88,8 +88,9 @@ func Sample[T any](ctx context.Context, list *ListResult, indicator string, load
 
 	// Data changed or no cache — invoke loader under SingleFlight to dedupe
 	// concurrent loaders for the same (catalog, indicator, score).
-	singleFlightKey := fmt.Sprintf("sample:%s:%s:%.6f", list.catalog, indicator, lastUpdated)
-	resultBytes, err := c.snapFlight.Do(singleFlightKey, func() (string, error) {
+	// sampleFlight has its own namespace, so no prefix is needed here.
+	singleFlightKey := fmt.Sprintf("%s:%s:%.6f", list.catalog, indicator, lastUpdated)
+	resultBytes, err := c.sampleFlight.Do(singleFlightKey, func() (string, error) {
 		result, err := loader(list)
 		if err != nil {
 			return "", err

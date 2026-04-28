@@ -34,7 +34,18 @@ type Client struct {
 	storage storage.Storage
 	config  *config.Config
 
-	snapFlight  xsync.SingleFlight[string]
+	// snapFlight dedupes concurrent snapshot Put attempts for the same
+	// {catalog, startTsSeq, stopTsSeq}; it stores the resulting storage
+	// key as the SingleFlight value.
+	snapFlight xsync.SingleFlight[string]
+
+	// sampleFlight dedupes concurrent Sample[T] loader invocations for the
+	// same {catalog, indicator, score}; it stores the marshalled
+	// [score, data] JSON bytes as the SingleFlight value. Kept separate
+	// from snapFlight so the two namespaces cannot collide and so the
+	// underlying mutex is not contended across unrelated work.
+	sampleFlight xsync.SingleFlight[string]
+
 	clearFlight xsync.SingleFlight[struct{}]
 
 	// snapWG accounts for in-flight async snapshot saves spawned by readData
@@ -94,8 +105,9 @@ func NewLake(metaUrl string, opts ...func(*option)) *Client {
 		storage:     option.Storage, // may be nil, loaded lazily
 		snapCache:   snapCache,
 		deltaCache:  deltaCache,
-		snapFlight:  xsync.NewSingleFlight[string](),
-		clearFlight: xsync.NewSingleFlight[struct{}](),
+		snapFlight:   xsync.NewSingleFlight[string](),
+		sampleFlight: xsync.NewSingleFlight[string](),
+		clearFlight:  xsync.NewSingleFlight[struct{}](),
 	}
 }
 
