@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/hkloudou/lake/v2/internal/index"
+	"github.com/hkloudou/lake/v3/internal/index"
 )
 
 func (m *Client) saveSnapshot(ctx context.Context, catalog string, startTsSeq, stopTsSeq index.TimeSeqID, snapData []byte) (string, error) {

@@ -6,11 +6,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hkloudou/lake/v2/internal/cache"
-	"github.com/hkloudou/lake/v2/internal/config"
-	"github.com/hkloudou/lake/v2/internal/index"
-	"github.com/hkloudou/lake/v2/internal/storage"
-	"github.com/hkloudou/lake/v2/internal/xsync"
+	"github.com/hkloudou/lake/v3/internal/cache"
+	"github.com/hkloudou/lake/v3/internal/config"
+	"github.com/hkloudou/lake/v3/internal/index"
+	"github.com/hkloudou/lake/v3/internal/storage"
+	"github.com/hkloudou/lake/v3/internal/xsync"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -31,9 +31,8 @@ type Client struct {
 	config  *config.Config
 	// redisTimeUnix int64
 
-	snapFlight   xsync.SingleFlight[string]
-	sampleFlight xsync.SingleFlight[float64]
-	clearFlight  xsync.SingleFlight[struct{}] // Prevents concurrent clear operations on same catalog
+	snapFlight  xsync.SingleFlight[string]
+	clearFlight xsync.SingleFlight[struct{}] // Prevents concurrent clear operations on same catalog
 
 	eventHandlers []EventHandler
 }
@@ -91,9 +90,8 @@ func NewLake(metaUrl string, opts ...func(*option)) *Client {
 		storage:      option.Storage, // May be nil, will be loaded lazily
 		snapCache:    snapCache,
 		deltaCache:   deltaCache,
-		snapFlight:   xsync.NewSingleFlight[string](),
-		sampleFlight: xsync.NewSingleFlight[float64](),
-		clearFlight:  xsync.NewSingleFlight[struct{}](),
+		snapFlight:  xsync.NewSingleFlight[string](),
+		clearFlight: xsync.NewSingleFlight[struct{}](),
 	}
 	// client.startRedisTimeUnixUpdater()
 	return client

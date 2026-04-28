@@ -1,4 +1,4 @@
-module github.com/hkloudou/lake/v2
+module github.com/hkloudou/lake/v3
 
 go 1.25.0
 

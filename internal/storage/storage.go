@@ -3,7 +3,7 @@ package storage
 import (
 	"context"
 
-	"github.com/hkloudou/lake/v2/internal/index"
+	"github.com/hkloudou/lake/v3/internal/index"
 )
 
 // Storage is the interface for object storage (OSS/S3/Local)
@@ -26,7 +26,6 @@ type Storage interface {
 	RedisPrefix() string
 	MakeDeltaKey(catalog string, tsSeqID index.TimeSeqID, mergeType int) string
 	MakeSnapKey(catalog string, startTsSeq, stopTsSeq index.TimeSeqID) string
-	MakeFileKey(catalog string, path string) string
 }
 
 // // MakeDeltaKey generates storage key for data files with MD5-sharded path

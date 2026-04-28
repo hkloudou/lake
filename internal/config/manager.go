@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/hkloudou/lake/v2/internal/storage"
-	"github.com/hkloudou/lake/v2/internal/xsync"
+	"github.com/hkloudou/lake/v3/internal/storage"
+	"github.com/hkloudou/lake/v3/internal/xsync"
 	"github.com/redis/go-redis/v9"
 )
 

@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/hkloudou/lake/v2/internal/encode"
-	"github.com/hkloudou/lake/v2/internal/encrypt"
-	"github.com/hkloudou/lake/v2/internal/xsync"
+	"github.com/hkloudou/lake/v3/internal/encode"
+	"github.com/hkloudou/lake/v3/internal/encrypt"
+	"github.com/hkloudou/lake/v3/internal/xsync"
 	"github.com/redis/go-redis/v9"
 )
 

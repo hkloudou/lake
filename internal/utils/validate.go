@@ -5,31 +5,17 @@ import (
 	"regexp"
 )
 
-// fieldPathRegex validates that field path:
+// fieldPathRegex validates a JSON field path used in delta members.
 //   - Starts with /
 //   - Does not end with /
-//   - Each segment must start with letter, _, or $ (digits not allowed as first character)
-//   - CRITICAL: Does NOT allow | (pipe) character - it's used as member delimiter in Redis
-//     Member format: delta|{mergeType}|{fieldPath}|{tsSeq}
-//     If | was allowed in fieldPath, strings.Split would break member parsing
+//   - Each segment must start with letter, _, or $ (digits not allowed as first char)
+//   - CRITICAL: '|' (pipe) is not allowed — it is the delimiter inside the
+//     delta member encoding "delta|{mergeType}|{fieldPath}|{tsSeq}".
 var fieldPathRegex = regexp.MustCompile(`^/([a-zA-Z_$][a-zA-Z0-9_$.]*(/[a-zA-Z_$][a-zA-Z0-9_$.]*)*)?$`)
-
-// filePathRegex validates file path (allows segments starting with digits):
-//   - Starts with /
-//   - Does not end with /
-//   - Each segment can contain letters, digits, _, $, . (can start with any of these including digits)
-var filePathRegex = regexp.MustCompile(`^/([a-zA-Z0-9_$.]+(/[a-zA-Z0-9_$.]+)*)?$`)
 
 func ValidateFieldPath(path string) error {
 	if !fieldPathRegex.MatchString(path) {
 		return fmt.Errorf("field must be a valid path: start with /, not end with /, and each segment must follow JavaScript variable naming rules")
-	}
-	return nil
-}
-
-func ValidateFilePath(path string) error {
-	if !filePathRegex.MatchString(path) {
-		return fmt.Errorf("file must be a valid path: start with /, not end with /, and each segment can be alphanumeric with _$. characters")
 	}
 	return nil
 }

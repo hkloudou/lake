@@ -1,7 +1,7 @@
 package lake
 
 import (
-	"github.com/hkloudou/lake/v2/internal/index"
+	"github.com/hkloudou/lake/v3/internal/index"
 )
 
 // MergeType defines how to merge values (re-exported from index for public API)

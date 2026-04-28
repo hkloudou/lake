@@ -4,16 +4,16 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/hkloudou/lake/v2/internal/encode"
+	"github.com/hkloudou/lake/v3/internal/encode"
 )
 
 // Lua script to atomically generate TimeSeqID and pre-commit to Redis
-// Returns: {timestamp, seqid}
+// Returns: {timestamp, seqid, member}
 // Side effect: ZADD with pending member
 const getTimeSeqIDAndPreCommitScript = `
--- KEYS[1]: base64 encoded catalog name (for seqid isolation)
--- KEYS[2]: Redis ZADD key (e.g., "oss:mylake:delta:users")
--- ARGV[1]: fieldPath (raw, not encoded - used in member value)
+-- KEYS[1]: encoded catalog name (for seqid isolation)
+-- KEYS[2]: delta zset key
+-- ARGV[1]: fieldPath (raw, used in member value)
 -- ARGV[2]: mergeType
 
 local catalog = KEYS[1]
@@ -21,7 +21,6 @@ local zaddKey = KEYS[2]
 local fieldPath = ARGV[1]
 local mergeType = ARGV[2]
 
--- Generate timestamp + seqid
 local timestamp = redis.call("TIME")[1]
 local seqKey = "lake:seqid:" .. catalog .. ":" .. timestamp
 
@@ -32,29 +31,24 @@ end
 
 local seqid = redis.call("INCR", seqKey)
 
--- Check seqid limit (max 999,999 for %.6f precision)
 if seqid > 999999 then
     return redis.error_reply("seqid overflow: " .. seqid .. " > 999999 (max writes per second reached)")
 end
 
--- Build pending member
 local tsSeq = timestamp .. "_" .. seqid
 local member = "pending|delta|" .. mergeType .. "|" .. fieldPath .. "|" .. tsSeq
 local score = tonumber(timestamp) + (tonumber(seqid) / 1000000.0)
 
--- Pre-commit to Redis (pending state)
 redis.call("ZADD", zaddKey, score, member)
 
 return {tonumber(timestamp), seqid, member}
 `
 
-// Lua script to commit: remove pending, add committed
-// This is atomic
+// commitScript atomically removes the pending member and adds the committed one.
 const commitScript = `
--- KEYS[1]: Redis ZADD key
-
+-- KEYS[1]: delta zset key
 -- ARGV[1]: pending member
--- ARGV[2]: committed member  
+-- ARGV[2]: committed member
 -- ARGV[3]: score
 
 local key = KEYS[1]
@@ -62,88 +56,18 @@ local pendingMember = ARGV[1]
 local committedMember = ARGV[2]
 local score = tonumber(ARGV[3])
 
--- Atomic: remove pending, add committed
 redis.call("ZADD", key, score, committedMember)
 redis.call("ZREM", key, pendingMember)
-
--- KEYS[2]: Redis meta key
--- ARGV[4]: updatedMap
-local metaKey = KEYS[2]
-local updatedMap = cjson.decode(ARGV[4])
-local oldMeta = redis.call("GET", metaKey)
-local metaMap = {}
-if oldMeta then
-    metaMap = cjson.decode(oldMeta)
-end
-
--- Merge updatedMap into metaMap
-for key, value in pairs(updatedMap) do
-    metaMap[key] = value
-end
-
--- Save meta
-redis.call("SET", metaKey, cjson.encode(metaMap))
 
 return "OK"
 `
 
-/*
-DELETED CODE:
-
--- ARGV[4]: updatedMap
-local updatedMap = cjson.decode(ARGV[4])
-
---------------------------------
--- Update meta map with updatedMap
-local meta = redis.call("GET", metaKey)
-local metaMap = {}
-if meta then
-    metaMap = cjson.decode(meta)
-end
-
--- Merge updatedMap into metaMap
-for key, value in pairs(updatedMap) do
-    metaMap[key] = value
-end
-
--- Save updated meta
-redis.call("SET", metaKey, cjson.encode(metaMap))
-
-return "OK"
-*/
-
-// func (w *Writer) GetTimeUnix(ctx context.Context) (int64, error) {
-// 	// encodedCatalog := encode.EncodeRedisCatalogName(catalog)
-// 	// Execute Lua script
-// 	result, err := w.rdb.Eval(ctx, `
-// local timeResult = redis.call("TIME")
-// local timestamp = timeResult[1]
-// return tonumber(timestamp)`,
-// 		[]string{},
-// 	).Result()
-
-// 	if err != nil {
-// 		return 0, fmt.Errorf("failed to get timeseq and precommit: %w", err)
-// 	}
-
-// 	// Parse result
-// 	timestamp, ok := result.(int64)
-// 	if !ok {
-// 		return 0, fmt.Errorf("invalid timestamp type: %T", result)
-// 	}
-// 	return timestamp, nil
-// }
-
-// GetTimeSeqIDAndPreCommit atomically generates TimeSeqID and pre-commits to Redis
-// Returns TimeSeqID and pending member string
+// GetTimeSeqIDAndPreCommit atomically generates TimeSeqID and pre-commits to Redis.
+// Returns TimeSeqID and pending member string.
 func (w *Writer) GetTimeSeqIDAndPreCommit(ctx context.Context, catalog, fieldPath string, mergeType MergeType) (TimeSeqID, string, error) {
 	encodedCatalog := encode.EncodeRedisCatalogName(catalog)
 	zaddKey := w.MakeDeltaZsetKey(catalog)
 
-	// Field is used as-is in member, no encoding needed
-	// (encoding is only for Redis keys, not member values)
-
-	// Execute Lua script
 	result, err := w.rdb.Eval(ctx, getTimeSeqIDAndPreCommitScript,
 		[]string{encodedCatalog, zaddKey},
 		fieldPath, int(mergeType)).Result()
@@ -152,7 +76,6 @@ func (w *Writer) GetTimeSeqIDAndPreCommit(ctx context.Context, catalog, fieldPat
 		return TimeSeqID{}, "", fmt.Errorf("failed to get timeseq and precommit: %w", err)
 	}
 
-	// Parse result
 	arr, ok := result.([]interface{})
 	if !ok || len(arr) != 3 {
 		return TimeSeqID{}, "", fmt.Errorf("unexpected result format: %v", result)
@@ -171,39 +94,7 @@ func (w *Writer) GetTimeSeqIDAndPreCommit(ctx context.Context, catalog, fieldPat
 		return TimeSeqID{}, "", fmt.Errorf("invalid pending member type: %T", arr[2])
 	}
 
-	// var timestamp int64
-	// fmt.Sscanf(tsStr, "%d", &timestamp)
-
-	tsSeq := TimeSeqID{
-		Timestamp: timestamp,
-		SeqID:     seqid,
-	}
-
-	return tsSeq, pendingMember, nil
-}
-
-const updateMetaOnlyScript = `
-local metaKey = KEYS[1]
-local updatedMap = cjson.decode(ARGV[1])
-local oldMeta = redis.call("GET", metaKey)
-local metaMap = {}
-if oldMeta then
-    metaMap = cjson.decode(oldMeta)
-end
-for key, value in pairs(updatedMap) do
-    metaMap[key] = value
-end
-redis.call("SET", metaKey, cjson.encode(metaMap))
-return "OK"
-`
-
-// UpdateMetaOnly updates only the meta key without creating any delta/pending members
-func (w *Writer) UpdateMetaOnly(ctx context.Context, catalog string, meta []byte) error {
-	metaKey := w.MakeMetaKey(catalog)
-	_, err := w.rdb.Eval(ctx, updateMetaOnlyScript,
-		[]string{metaKey},
-		string(meta)).Result()
-	return err
+	return TimeSeqID{Timestamp: timestamp, SeqID: seqid}, pendingMember, nil
 }
 
 // Rollback removes a pending member from Redis (used when storage write fails)
@@ -212,22 +103,11 @@ func (w *Writer) Rollback(ctx context.Context, catalog, pendingMember string) er
 	return w.rdb.ZRem(ctx, zaddKey, pendingMember).Err()
 }
 
-// Commit atomically commits a pending write
-func (w *Writer) Commit(ctx context.Context, catalog, pendingMember, committedMember string, score float64, meta []byte) error {
+// Commit atomically commits a pending write.
+func (w *Writer) Commit(ctx context.Context, catalog, pendingMember, committedMember string, score float64) error {
 	zaddKey := w.MakeDeltaZsetKey(catalog)
-	metaKey := w.MakeMetaKey(catalog)
 	_, err := w.rdb.Eval(ctx, commitScript,
-		[]string{zaddKey, metaKey},
-		pendingMember, committedMember, score, string(meta)).Result()
-
+		[]string{zaddKey},
+		pendingMember, committedMember, score).Result()
 	return err
 }
-
-// Helper functions
-// func encodeCatalog(catalog string) string {
-// 	return encode.EncodeRedisCatalogName(catalog)
-// }
-
-// func encodeField(field string) string {
-// 	return encode.EncodeRedisCatalogName(field)
-// }

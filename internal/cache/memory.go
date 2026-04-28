@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hkloudou/lake/v2/internal/xsync"
+	"github.com/hkloudou/lake/v3/internal/xsync"
 )
 
 // MemoryCache implements Cache interface using in-memory map with TTL

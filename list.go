@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/hkloudou/lake/v2/internal/index"
+	"github.com/hkloudou/lake/v3/internal/index"
 )
 
 // ListResult represents the read result

@@ -419,8 +419,6 @@ func (c *Reader) startRedisTimeUnixUpdater() {
 }
 
 func (w *Reader) getTimeUnix(ctx context.Context) (int64, error) {
-	// encodedCatalog := encode.EncodeRedisCatalogName(catalog)
-	// Execute Lua script
 	result, err := w.rdb.Eval(ctx, `
 local timeResult = redis.call("TIME")
 local timestamp = timeResult[1]
@@ -440,39 +438,3 @@ return tonumber(timestamp)`,
 	return timestamp, nil
 }
 
-func (c *Reader) Meta(ctx context.Context, catalog string) (string, error) {
-	metaKey := c.MakeMetaKey(catalog)
-	val, err := c.rdb.Get(ctx, metaKey).Result()
-	if err != nil && err != redis.Nil {
-		return "", err
-	}
-	return val, nil
-}
-
-func (c *Reader) BatchMeta(ctx context.Context, catalogs []string) (map[string]string, error) {
-	metaKeys := make([]string, len(catalogs))
-	for i, catalog := range catalogs {
-		metaKeys[i] = c.MakeMetaKey(catalog)
-	}
-
-	results, err := c.rdb.MGet(ctx, metaKeys...).Result()
-	if err != nil && err != redis.Nil {
-		return nil, err
-	}
-
-	vals := make(map[string]string, len(catalogs))
-	for i, result := range results {
-		if result == nil {
-			// Redis key doesn't exist, return empty string
-			vals[catalogs[i]] = ""
-		} else {
-			// Type assertion to string
-			if str, ok := result.(string); ok {
-				vals[catalogs[i]] = str
-			} else {
-				vals[catalogs[i]] = ""
-			}
-		}
-	}
-	return vals, nil
-}

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/hkloudou/lake/v2/internal/index"
+	"github.com/hkloudou/lake/v3/internal/index"
 )
 
 // doClearHistoryOptimized is the optimized version of history cleanup

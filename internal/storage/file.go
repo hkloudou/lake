@@ -40,8 +40,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/hkloudou/lake/v2/internal/encrypt"
-	"github.com/hkloudou/lake/v2/internal/index"
+	"github.com/hkloudou/lake/v3/internal/encrypt"
+	"github.com/hkloudou/lake/v3/internal/index"
 )
 
 // FileStorage implements Storage interface for local file system
@@ -230,11 +230,3 @@ func (s *fileStorage) MakeSnapKey(catalog string, startTsSeq, stopTsSeq index.Ti
 	return fmt.Sprintf("%s/%s/%s/%s/%s/%s~%s.snap", md5Prefix, catalogEncoded, hash1, hash2, hash3, startTsSeq.String(), stopTsSeq.String())
 }
 
-func (s *fileStorage) MakeFileKey(catalog string, path string) string {
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	md5Prefix := getCatalogMd5Prefix0xff(catalog)
-	catalogEncoded := encodeOssCatalogName(catalog)
-	return fmt.Sprintf("%s/%s%s", md5Prefix, catalogEncoded, path)
-}

@@ -1,60 +1,17 @@
 package encode
 
-import (
-	"encoding/base64"
-	"strings"
-)
-
-// EncodeRedisCatalogName encodes catalog name for Redis keys
-// Uses base64 URL encoding without padding (safe for Redis keys)
-func EncodeRedisCatalogName(catalog string) string {
-	if len(catalog) == 0 {
-		return "" // Return empty string for empty catalog
-	}
-	return catalog
-
-	// For Redis, if catalog is safe, use as-is with prefix
-	if IsRedisSafe(catalog) {
-		return "(" + catalog
-	}
-	// Use base64 URL encoding without padding
-	return base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString([]byte(catalog))
-}
-
-func DecodeRedisCatalogName(catalog string) (string, error) {
-	// For Redis, if catalog is safe, use as-is with prefix
-	// if IsRedisSafe(catalog) {
-	// 	return "(" + catalog
-	// }
-	if len(catalog) == 0 {
-		return "", nil
-	}
-	if strings.HasPrefix(catalog, "(") {
-		return catalog[1:], nil
-	}
-	// Use base64 URL encoding without padding
-	decoded, err := base64.URLEncoding.WithPadding(base64.NoPadding).DecodeString(catalog)
-	if err != nil {
-		return "", err
-	}
-	// fmt.Println("catalog", catalog, "decoded", string(decoded))
-	return string(decoded), nil
-}
-
-// IsRedisSafe checks if catalog is safe for Redis keys
-// Allows: a-z, A-Z, 0-9, -, _, :, .
-// Redis keys can handle more characters than OSS paths
-func IsRedisSafe(catalog string) bool {
-	if len(catalog) == 0 {
-		return false
-	}
-	for _, r := range catalog {
-		if !((r >= 'a' && r <= 'z') ||
-			(r >= 'A' && r <= 'Z') ||
-			(r >= '0' && r <= '9') ||
-			r == '-' || r == '_' || r == '/' || r == '.') {
-			return false
-		}
-	}
-	return true
+// EncodeRedisCatalogName is the canonical hook for transforming a catalog name
+// (or other user-supplied identifier such as a sample indicator) before it is
+// embedded inside a Redis key.
+//
+// At present the function is the identity — Redis keys store catalog names
+// verbatim. Callers must therefore ensure that catalog names do not contain
+// characters that would clash with the Redis key delimiter ":" or the delta
+// member delimiter "|".
+//
+// This function is preserved as the single chokepoint for any future encoding
+// scheme (base32, hex, base64-url, etc.). Adding encoding back means changing
+// this function and ensuring any reverse lookup also goes through it.
+func EncodeRedisCatalogName(s string) string {
+	return s
 }

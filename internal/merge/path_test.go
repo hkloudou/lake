@@ -3,7 +3,7 @@ package merge
 import (
 	"testing"
 
-	"github.com/hkloudou/lake/v2/internal/utils"
+	"github.com/hkloudou/lake/v3/internal/utils"
 )
 
 func TestToGjsonPath(t *testing.T) {

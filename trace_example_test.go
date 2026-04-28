@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hkloudou/lake/v2"
+	"github.com/hkloudou/lake/v3"
 )
 
 func TestReadSimple(t *testing.T) {

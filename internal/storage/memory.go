@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/hkloudou/lake/v2/internal/index"
+	"github.com/hkloudou/lake/v3/internal/index"
 )
 
 // MemoryStorage is an in-memory implementation of Storage (for testing)
@@ -97,9 +97,3 @@ func (s *memoryStorage) MakeSnapKey(catalog string, startTsSeq, stopTsSeq index.
 	return fmt.Sprintf("%s/snap/%s~%s.snap", catalog, startTsSeq.String(), stopTsSeq.String())
 }
 
-func (m *memoryStorage) MakeFileKey(catalog string, path string) string {
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	return fmt.Sprintf("%s%s", catalog, path)
-}

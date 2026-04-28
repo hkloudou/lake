@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/hkloudou/lake/v2/internal/index"
-	"github.com/hkloudou/lake/v2/internal/merge"
+	"github.com/hkloudou/lake/v3/internal/index"
+	"github.com/hkloudou/lake/v3/internal/merge"
 )
 
 func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error) {
@@ -70,7 +70,7 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 	}
 
 	// Merge entries with base data (pure CPU operation, all data loaded)
-	resultData, _, err := merge.Merge(list.catalog, baseData, list.Entries)
+	resultData, err := merge.Merge(baseData, list.Entries)
 	if err != nil {
 		return nil, err
 	}

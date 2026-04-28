@@ -22,7 +22,7 @@
 ### Installation
 
 ```bash
-go get github.com/hkloudou/lake/v2@latest
+go get github.com/hkloudou/lake/v3@latest
 ```
 
 ### Basic Usage
@@ -35,7 +35,7 @@ import (
     "fmt"
     "log"
 
-    "github.com/hkloudou/lake/v2"
+    "github.com/hkloudou/lake/v3"
 )
 
 func main() {
@@ -73,7 +73,7 @@ func main() {
 ### Package Import
 
 ```go
-import "github.com/hkloudou/lake/v2"
+import "github.com/hkloudou/lake/v3"
 ```
 
 ### Client Creation
@@ -614,7 +614,7 @@ Store configuration in Redis at key `lake.setting`:
 ### Custom Storage
 
 ```go
-import "github.com/hkloudou/lake/v2/internal/storage"
+import "github.com/hkloudou/lake/v3/internal/storage"
 
 client := lake.NewLake(
     "redis://localhost:6379",
