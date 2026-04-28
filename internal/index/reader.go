@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -15,23 +16,33 @@ import (
 // redisTimeUnix is updated periodically from Redis TIME and read concurrently
 // from request goroutines (pending-write age, snapshot freshness checks). It
 // must be accessed only via Load/Store to remain race-free.
+//
+// Close stops the background time-sync goroutine. It must be called when the
+// owning Client is shut down; otherwise the goroutine leaks.
 type Reader struct {
 	rdb           *redis.Client
 	redisTimeUnix atomic.Int64
+	done          chan struct{}
+	closeOnce     sync.Once
 	indexIO
 }
 
-// NewReader creates a new index reader
+// NewReader creates a new index reader.
 func NewReader(rdb *redis.Client) *Reader {
 	reader := &Reader{
-		rdb: rdb,
-		indexIO: indexIO{
-			prefix: "lake",
-		}, // Will be set later via SetPrefix
+		rdb:     rdb,
+		done:    make(chan struct{}),
+		indexIO: indexIO{prefix: "lake"}, // overridden later via SetPrefix
 	}
 	reader.startRedisTimeUnixUpdater()
-
 	return reader
+}
+
+// Close stops the background updater. Idempotent.
+func (r *Reader) Close() {
+	r.closeOnce.Do(func() {
+		close(r.done)
+	})
 }
 
 // DeltaInfo represents delta information (with optional body data)
@@ -410,14 +421,21 @@ func (r *Reader) BatchList(ctx context.Context, catalogs []string, strictPending
 
 func (c *Reader) startRedisTimeUnixUpdater() {
 	go func() {
+		// Initial fetch so the first read sees a real value rather than 0.
+		if ts, err := c.getTimeUnix(context.Background()); err == nil {
+			c.redisTimeUnix.Store(ts)
+		}
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
 		for {
-			timestamp, err := c.getTimeUnix(context.Background())
-			if err != nil {
-				time.Sleep(5 * time.Second)
-				continue
+			select {
+			case <-c.done:
+				return
+			case <-ticker.C:
+				if ts, err := c.getTimeUnix(context.Background()); err == nil {
+					c.redisTimeUnix.Store(ts)
+				}
 			}
-			c.redisTimeUnix.Store(timestamp)
-			time.Sleep(5 * time.Second)
 		}
 	}()
 }

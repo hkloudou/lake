@@ -8,12 +8,15 @@ import (
 	"github.com/hkloudou/lake/v3/internal/xsync"
 )
 
-// MemoryCache implements Cache interface using in-memory map with TTL
+// MemoryCache implements Cache interface using an in-memory map with TTL.
+// Implements io.Closer-style Close for graceful shutdown.
 type MemoryCache struct {
-	mu     sync.RWMutex
-	data   map[string]*cacheEntry
-	ttl    time.Duration
-	flight xsync.SingleFlight[[]byte]
+	mu        sync.RWMutex
+	data      map[string]*cacheEntry
+	ttl       time.Duration
+	flight    xsync.SingleFlight[[]byte]
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 type cacheEntry struct {
@@ -21,18 +24,24 @@ type cacheEntry struct {
 	expireTime time.Time
 }
 
-// NewMemoryCache creates a new memory cache with TTL support
+// NewMemoryCache creates a new memory cache with TTL support.
 func NewMemoryCache(ttl time.Duration) *MemoryCache {
 	c := &MemoryCache{
 		data:   make(map[string]*cacheEntry),
 		ttl:    ttl,
 		flight: xsync.NewSingleFlight[[]byte](),
+		done:   make(chan struct{}),
 	}
-
-	// Start cleanup goroutine
 	go c.cleanupLoop()
-
 	return c
+}
+
+// Close stops the background cleanup goroutine. Idempotent.
+func (c *MemoryCache) Close() error {
+	c.closeOnce.Do(func() {
+		close(c.done)
+	})
+	return nil
 }
 
 // Take implements Cache interface with SingleFlight
@@ -69,13 +78,17 @@ func (c *MemoryCache) Take(ctx context.Context, namespace, key string, loader fu
 	})
 }
 
-// cleanupLoop periodically removes expired entries
+// cleanupLoop periodically removes expired entries until Close is called.
 func (c *MemoryCache) cleanupLoop() {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
-
-	for range ticker.C {
-		c.cleanup()
+	for {
+		select {
+		case <-c.done:
+			return
+		case <-ticker.C:
+			c.cleanup()
+		}
 	}
 }
 

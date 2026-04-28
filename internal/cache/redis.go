@@ -10,12 +10,15 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// RedisCache implements Cache interface using Redis
+// RedisCache implements Cache interface using Redis. Implements Close for
+// graceful shutdown of its stat logger and (when applicable) its owned
+// redis.Client.
 type RedisCache struct {
-	client *redis.Client
-	ttl    time.Duration
-	stat   *CacheStat
-	flight xsync.SingleFlight[[]byte]
+	client     *redis.Client
+	ttl        time.Duration
+	stat       *CacheStat
+	flight     xsync.SingleFlight[[]byte]
+	ownsClient bool // true when the redis.Client was created internally and Close should release it
 }
 
 // NewRedisCache creates a new Redis cache instance
@@ -30,13 +33,31 @@ func NewRedisCache(client *redis.Client, ttl time.Duration) *RedisCache {
 	}
 }
 
-// NewRedisCacheWithURL creates Redis cache from URL
+// NewRedisCacheWithURL creates Redis cache from URL.
+//
+// Note: the redis.Client created here is owned by the cache and will be
+// closed by Close.
 func NewRedisCacheWithURL(metaUrl string, ttl time.Duration) (*RedisCache, error) {
 	redisOpt, err := redis.ParseURL(metaUrl)
 	if err != nil {
 		return nil, err
 	}
-	return NewRedisCache(redis.NewClient(redisOpt), ttl), nil
+	c := NewRedisCache(redis.NewClient(redisOpt), ttl)
+	c.ownsClient = true
+	return c, nil
+}
+
+// Close stops the stat logger. If this RedisCache owns its redis.Client
+// (i.e., it was created via NewRedisCacheWithURL), the client is also
+// closed. Idempotent.
+func (c *RedisCache) Close() error {
+	if c.stat != nil {
+		c.stat.Close()
+	}
+	if c.ownsClient && c.client != nil {
+		return c.client.Close()
+	}
+	return nil
 }
 
 // Take implements Cache interface with SingleFlight to prevent cache stampede

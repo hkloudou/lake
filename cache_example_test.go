@@ -16,6 +16,7 @@ func TestWithCacheHelper(t *testing.T) {
 	client := lake.NewLake(
 		"redis://lake-redis-master.cs:6379/2",
 	)
+	defer client.Close()
 
 	ctx := context.Background()
 	// Write some data
@@ -76,6 +77,7 @@ func TestWithRedisCache(t *testing.T) {
 		"redis://localhost:6379/15",
 		lake.WithSnapCache(redisCache),
 	)
+	defer client.Close()
 
 	catalog := "test_cache"
 
@@ -121,6 +123,7 @@ func TestWithRedisCache(t *testing.T) {
 func TestWithNoOpCache(t *testing.T) {
 	// Default behavior: no caching
 	client := lake.NewLake("redis://localhost:6379/15")
+	defer client.Close()
 
 	// This client uses NoOpCache by default (always loads from storage)
 	ctx := context.Background()

@@ -75,13 +75,18 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 		return nil, err
 	}
 
-	// Generate and save new snapshot asynchronously (non-blocking)
+	// Generate and save new snapshot asynchronously (non-blocking).
+	//
+	// We deliberately use context.Background() so an aborted Read does not
+	// cancel a snapshot that is already paying off for everyone else;
+	// SingleFlight inside saveSnapshot dedupes concurrent attempts.
+	//
+	// snapWG accounts for these goroutines so Client.Close can drain them.
 	if nextSnap := list.NextSnap(); nextSnap != nil {
-		// Async snapshot save with SingleFlight (prevents duplicate saves)
+		c.snapWG.Add(1)
 		go func() {
-			// Use background context (don't cancel with original context)
+			defer c.snapWG.Done()
 			bgCtx := context.Background()
-			// Snapshot save failure is non-critical, next read will regenerate
 			c.saveSnapshot(bgCtx, list.catalog, nextSnap.StartTsSeq, nextSnap.StopTsSeq, resultData)
 		}()
 	}

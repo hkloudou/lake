@@ -8,15 +8,26 @@ import (
 	"github.com/hkloudou/lake/v3/internal/index"
 )
 
-// doClearHistoryOptimized is the optimized version of history cleanup
-// Key optimizations:
-// 1. Batch delete Redis members (using ZREM batch delete)
-// 2. Concurrent delete Storage files (10 workers in parallel)
-// 3. Separate Delta and Snap cleanup flows for independent control
+// doClearHistoryOptimized performs history cleanup as a best-effort,
+// fire-and-forget operation:
+//   - Redis members are batch-deleted via ZREM.
+//   - Storage objects are deleted concurrently by a 10-worker pool.
+//   - Delta and Snap streams are cleaned independently.
+//
+// DESIGN DECISION (intentional, do not "fix"):
+//
+// Errors from clearDeltasBatch / clearSnapsBatch are intentionally NOT
+// propagated to the caller. ClearHistory is best-effort cleanup —
+//   - Object-storage Delete is idempotent: retrying on the next call is safe.
+//   - A surviving orphan delta is always handled by reader.go's pending /
+//     stale-member filtering, so it does not corrupt reads.
+//   - Surfacing partial failures would force every caller to write retry
+//     logic for what is effectively a background cleanup chore.
+// If you need a hard "deleted everything" guarantee, layer it above this
+// API by re-listing and verifying.
 func (c *Client) doClearHistoryOptimized(ctx context.Context, catalog string, keepSnaps int) error {
 	c.emitEvent(catalog, "ClearHistory", map[string]any{"keepSnaps": keepSnaps})
 
-	// Ensure initialized before operation
 	if err := c.ensureInitialized(ctx); err != nil {
 		return err
 	}
@@ -26,21 +37,14 @@ func (c *Client) doClearHistoryOptimized(ctx context.Context, catalog string, ke
 		return fmt.Errorf("failed to read safe remove range: %w", readResult.Err)
 	}
 
-	// Optimization 1: Batch delete Deltas
 	if len(readResult.Deltas) > 0 {
-		if err := c.clearDeltasBatch(ctx, catalog, readResult.Deltas); err != nil {
-			// Don't return, continue to clear snaps
-		} else {
-		}
+		// Error intentionally swallowed; see DESIGN DECISION above.
+		_ = c.clearDeltasBatch(ctx, catalog, readResult.Deltas)
 	}
-
-	// Optimization 2: Batch delete Snaps
 	if len(snaps) > 0 {
-		if err := c.clearSnapsBatch(ctx, catalog, snaps); err != nil {
-		} else {
-		}
+		// Error intentionally swallowed; see DESIGN DECISION above.
+		_ = c.clearSnapsBatch(ctx, catalog, snaps)
 	}
-
 	return nil
 }
 

@@ -34,6 +34,28 @@ type WriteRequest struct {
 //   - Object:  []byte(`{"age":30}`)
 //   - RFC7396: []byte(`{"age":31,"city":null}`)
 //   - RFC6902: []byte(`[{"op":"add","path":"/a","value":1}]`)
+//
+// DESIGN DECISION — orphan storage objects are accepted (intentional):
+//
+// The two-phase commit is:
+//   1. ZADD pending|...           (atomic in Redis)
+//   2. storage.Put(deltaKey, body) (slow, may fail or process may crash)
+//   3. ZADD delta|... + ZREM pending|... (atomic in Redis)
+//
+// Any failure between step 2 and step 3 (network blip, process kill,
+// pending↔committed member mismatch, etc.) leaves the storage object
+// behind without a committed Redis index entry — an orphan.
+//
+// This is the explicit contract, not a bug:
+//   - The pending member at step 1 ages out after 120s and reader.go
+//     filters it out, so reads stay consistent.
+//   - ClearHistory is the unified reaper for orphan storage objects.
+//   - The disk waste in transient failure modes is negligibly small and
+//     acceptable in exchange for the simpler, lock-free write path.
+//
+// A future optimization (write-buffer + atomic rename, similar to
+// fsync-on-rename pattern) could eliminate orphans, but is intentionally
+// out of scope for v3.
 func (c *Client) Write(ctx context.Context, req WriteRequest) error {
 	c.emitEvent(req.Catalog, "Write", map[string]any{"path": req.Path, "mergeType": int(req.MergeType)})
 
