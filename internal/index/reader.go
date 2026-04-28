@@ -4,16 +4,20 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
-// Reader handles reading from Redis ZADD index
+// Reader handles reading from Redis ZADD index.
+//
+// redisTimeUnix is updated periodically from Redis TIME and read concurrently
+// from request goroutines (pending-write age, snapshot freshness checks). It
+// must be accessed only via Load/Store to remain race-free.
 type Reader struct {
-	rdb *redis.Client
-	// prefix string
-	redisTimeUnix int64
+	rdb           *redis.Client
+	redisTimeUnix atomic.Int64
 	indexIO
 }
 
@@ -131,7 +135,7 @@ func (r *Reader) ReadSafeRemoveRangeWithRetention(ctx context.Context, catalog s
 			Deltas:     nil,
 		}
 	}
-	age := int64(r.redisTimeUnix) - int64(snap.StopTsSeq.Score())
+	age := r.redisTimeUnix.Load() - int64(snap.StopTsSeq.Score())
 
 	// if snapshot is too new, return error
 	if age < 60 {
@@ -267,7 +271,7 @@ func (r *Reader) processZMembers(catalog string, results []redis.Z, strictPendin
 
 		// Check pending members
 		if IsPendingMember(member) {
-			ageSeconds := int64(r.redisTimeUnix) - int64(z.Score)
+			ageSeconds := r.redisTimeUnix.Load() - int64(z.Score)
 			if ageSeconds > timeoutThreshold {
 				// Timeout > timeoutThreshold: ignore (abandoned write)
 				continue
@@ -412,7 +416,7 @@ func (c *Reader) startRedisTimeUnixUpdater() {
 				time.Sleep(5 * time.Second)
 				continue
 			}
-			c.redisTimeUnix = timestamp
+			c.redisTimeUnix.Store(timestamp)
 			time.Sleep(5 * time.Second)
 		}
 	}()
