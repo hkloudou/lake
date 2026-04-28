@@ -80,7 +80,7 @@ func (m *memoryStorage) List(ctx context.Context, prefix string) ([]string, erro
 }
 
 func (m *memoryStorage) RedisPrefix() string {
-	return fmt.Sprintf("memory:%s", m.name)
+	return m.name
 }
 
 // MakeDeltaKey generates storage key for data files with MD5-sharded path

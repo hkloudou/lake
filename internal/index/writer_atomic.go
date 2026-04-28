@@ -7,22 +7,29 @@ import (
 	"github.com/hkloudou/lake/v3/internal/encode"
 )
 
-// Lua script to atomically generate TimeSeqID and pre-commit to Redis
-// Returns: {timestamp, seqid, member}
-// Side effect: ZADD with pending member
+// getTimeSeqIDAndPreCommitScript atomically generates a (timestamp, seqid)
+// pair, ZADDs a pending delta member, and returns both the pair and the
+// pending member string.
+//
+// The seqid counter is namespaced by ARGV[3] (the deployment's Redis
+// prefix, i.e. lake.setting Name). This makes the seqid space tenant-
+// scoped: two Lake deployments sharing the same Redis but using different
+// Names get independent 999,999/sec budgets per (catalog, second).
 const getTimeSeqIDAndPreCommitScript = `
--- KEYS[1]: encoded catalog name (for seqid isolation)
+-- KEYS[1]: encoded catalog name
 -- KEYS[2]: delta zset key
--- ARGV[1]: fieldPath (raw, used in member value)
+-- ARGV[1]: fieldPath
 -- ARGV[2]: mergeType
+-- ARGV[3]: prefix (deployment-level namespace)
 
 local catalog = KEYS[1]
 local zaddKey = KEYS[2]
 local fieldPath = ARGV[1]
 local mergeType = ARGV[2]
+local prefix = ARGV[3]
 
 local timestamp = redis.call("TIME")[1]
-local seqKey = "lake:seqid:" .. catalog .. ":" .. timestamp
+local seqKey = prefix .. ":seqid:" .. catalog .. ":" .. timestamp
 
 local setResult = redis.call("SETNX", seqKey, "0")
 if setResult == 1 then
@@ -64,13 +71,20 @@ return "OK"
 
 // GetTimeSeqIDAndPreCommit atomically generates TimeSeqID and pre-commits to Redis.
 // Returns TimeSeqID and pending member string.
+//
+// The seqid counter is namespaced by w.prefix (deployment Name) so that
+// multiple Lake deployments sharing one Redis do not contend for the same
+// per-second seqid budget.
 func (w *Writer) GetTimeSeqIDAndPreCommit(ctx context.Context, catalog, fieldPath string, mergeType MergeType) (TimeSeqID, string, error) {
+	if w.prefix == "" {
+		return TimeSeqID{}, "", fmt.Errorf("writer prefix not set; call SetPrefix before write operations")
+	}
 	encodedCatalog := encode.EncodeRedisCatalogName(catalog)
 	zaddKey := w.MakeDeltaZsetKey(catalog)
 
 	result, err := w.rdb.Eval(ctx, getTimeSeqIDAndPreCommitScript,
 		[]string{encodedCatalog, zaddKey},
-		fieldPath, int(mergeType)).Result()
+		fieldPath, int(mergeType), w.prefix).Result()
 
 	if err != nil {
 		return TimeSeqID{}, "", fmt.Errorf("failed to get timeseq and precommit: %w", err)

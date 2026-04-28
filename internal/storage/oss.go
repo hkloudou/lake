@@ -216,7 +216,10 @@ func (s *ossStorage) List(ctx context.Context, prefix string) ([]string, error) 
 }
 
 func (s *ossStorage) RedisPrefix() string {
-	return fmt.Sprintf("%s:%s", "oss", s.name)
+	// Tenancy is keyed by Name only; backend type is not part of the
+	// Redis namespace so cache and seqid space are shared correctly when
+	// the same Name is reused across configurations.
+	return s.name
 }
 
 // MakeDeltaKey generates storage key for data files with MD5-sharded path

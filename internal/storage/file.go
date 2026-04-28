@@ -205,7 +205,7 @@ func (s *fileStorage) List(ctx context.Context, prefix string) ([]string, error)
 }
 
 func (s *fileStorage) RedisPrefix() string {
-	return fmt.Sprintf("%s:%s", "file", s.name)
+	return s.name
 }
 
 // MakeDeltaKey generates storage key for data files with MD5-sharded path

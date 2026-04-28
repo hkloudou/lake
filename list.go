@@ -145,15 +145,20 @@ func (c *Client) BatchList(ctx context.Context, catalogs []string, opts ...ListO
 	return result
 }
 
-// List reads catalog metadata and returns ListResult
-// Errors (including pending writes) are stored in ListResult.Err
+// List reads catalog metadata and returns ListResult.
+// Errors (including pending writes) are stored in ListResult.Err.
+//
+// Event contract: the "List" event is emitted unconditionally before any
+// early return so EventHandlers can observe every call attempt, including
+// those that fail at initialization.
 func (c *Client) List(ctx context.Context, catalog string, opts ...ListOption) *ListResult {
+	c.emitEvent(catalog, "List", nil)
+
 	var opt listOption
 	for _, o := range opts {
 		o(&opt)
 	}
 
-	// Ensure initialized before operation
 	if err := c.ensureInitialized(ctx); err != nil {
 		return &ListResult{
 			client:  c,
@@ -161,8 +166,6 @@ func (c *Client) List(ctx context.Context, catalog string, opts ...ListOption) *
 			Err:     err,
 		}
 	}
-
-	c.emitEvent(catalog, "List", nil)
 
 	// Try to get existing snapshot
 	snap, err := c.reader.GetLatestSnap(ctx, catalog)

@@ -56,19 +56,21 @@ func unmarshalSampleCache[T any](raw []byte) (float64, T, error) {
 //	})
 func Sample[T any](ctx context.Context, list *ListResult, indicator string, loader func(*ListResult) (T, error)) (T, error) {
 	var zero T
+
+	// Event contract: emit before any early return so EventHandlers see
+	// every Sample call attempt, including pending-write rejections.
+	c := list.client
+	c.emitEvent(list.catalog, "Sample", map[string]any{"indicator": indicator})
+
 	if list.Err != nil {
 		return zero, list.Err
 	}
 	if list.HasPending {
 		return zero, ErrPendingWrites
 	}
-
-	c := list.client
 	if err := c.ensureInitialized(ctx); err != nil {
 		return zero, err
 	}
-
-	c.emitEvent(list.catalog, "Sample", map[string]any{"indicator": indicator})
 
 	lastUpdated := list.LastUpdated()
 	hashKey := c.reader.MakeSampleIndicatorKey(indicator)
