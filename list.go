@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/hkloudou/lake/v3/internal/index"
+	"github.com/hkloudou/lake/v3/internal/utils"
 )
 
 // ListResult represents the read result
@@ -115,16 +116,28 @@ func (c *Client) BatchList(ctx context.Context, catalogs []string, opts ...ListO
 		c.emitEvent(catalog, "BatchList", nil)
 	}
 
+	// Per-catalog validation. Bad names get an Err in their ListResult but
+	// do not poison the rest of the batch. Valid names move on to the
+	// pipeline call below.
+	valid := make([]string, 0, len(catalogs))
+	for _, catalog := range catalogs {
+		if err := utils.ValidateCatalog(catalog); err != nil {
+			result[catalog] = &ListResult{client: c, catalog: catalog, Err: err}
+			continue
+		}
+		valid = append(valid, catalog)
+	}
+
 	if err := c.ensureInitialized(ctx); err != nil {
-		for _, catalog := range catalogs {
+		for _, catalog := range valid {
 			result[catalog] = &ListResult{client: c, catalog: catalog, Err: err}
 		}
 		return result
 	}
 
-	batchResults := c.reader.BatchList(ctx, catalogs, opt.strictPending)
+	batchResults := c.reader.BatchList(ctx, valid, opt.strictPending)
 
-	for _, catalog := range catalogs {
+	for _, catalog := range valid {
 		br := batchResults[catalog]
 		lr := &ListResult{
 			client:  c,
@@ -157,6 +170,10 @@ func (c *Client) List(ctx context.Context, catalog string, opts ...ListOption) *
 	var opt listOption
 	for _, o := range opts {
 		o(&opt)
+	}
+
+	if err := utils.ValidateCatalog(catalog); err != nil {
+		return &ListResult{client: c, catalog: catalog, Err: err}
 	}
 
 	if err := c.ensureInitialized(ctx); err != nil {

@@ -1,6 +1,10 @@
 package lake
 
-import "context"
+import (
+	"context"
+
+	"github.com/hkloudou/lake/v3/internal/utils"
+)
 
 // ClearHistory clears all expired deltas and merged snaps.
 // Equivalent to ClearHistoryWithRetention(ctx, catalog, 0).
@@ -18,6 +22,9 @@ func (c *Client) ClearHistory(ctx context.Context, catalog string) error {
 //
 // SingleFlight de-duplicates concurrent clears on the same catalog.
 func (c *Client) ClearHistoryWithRetention(ctx context.Context, catalog string, keepSnaps int) error {
+	if err := utils.ValidateCatalog(catalog); err != nil {
+		return err
+	}
 	_, err := c.clearFlight.Do(catalog, func() (struct{}, error) {
 		return struct{}{}, c.doClearHistoryOptimized(ctx, catalog, keepSnaps)
 	})

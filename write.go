@@ -59,6 +59,9 @@ type WriteRequest struct {
 func (c *Client) Write(ctx context.Context, req WriteRequest) error {
 	c.emitEvent(req.Catalog, "Write", map[string]any{"path": req.Path, "mergeType": int(req.MergeType)})
 
+	if err := utils.ValidateCatalog(req.Catalog); err != nil {
+		return err
+	}
 	if err := utils.ValidateFieldPath(req.Path); err != nil {
 		return err
 	}
