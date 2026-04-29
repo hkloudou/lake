@@ -28,10 +28,7 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 		baseDataErr, deltaErr error
 		wg                    sync.WaitGroup
 	)
-
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		if list.LatestSnap == nil {
 			baseData = []byte("{}")
 			return
@@ -40,11 +37,10 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 		baseData, baseDataErr = c.snapCache.Take(ctx, c.storage.RedisPrefix(), key, func() ([]byte, error) {
 			return c.storage.Get(ctx, key)
 		})
-	}()
-	go func() {
-		defer wg.Done()
+	})
+	wg.Go(func() {
 		deltaErr = c.fillDeltasBody(ctx, list.catalog, list.Entries)
-	}()
+	})
 	wg.Wait()
 
 	if baseDataErr != nil {
@@ -63,11 +59,9 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 	// Read does not cancel a snapshot that benefits everyone else;
 	// snapWG lets Client.Close drain it.
 	if next := list.NextSnap(); next != nil {
-		c.snapWG.Add(1)
-		go func() {
-			defer c.snapWG.Done()
+		c.snapWG.Go(func() {
 			c.saveSnapshot(context.Background(), list.catalog, next.StopTsSeq, resultData)
-		}()
+		})
 	}
 	return resultData, nil
 }
@@ -99,9 +93,7 @@ func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []in
 
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for d := range jobs {
 				if workerCtx.Err() != nil {
 					return
@@ -123,7 +115,7 @@ func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []in
 				}
 				d.Body = data
 			}
-		}()
+		})
 	}
 
 	go func() {
