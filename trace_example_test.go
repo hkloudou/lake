@@ -10,7 +10,7 @@ import (
 )
 
 func TestReadSimple(t *testing.T) {
-	client := lake.NewLake("redis://lake-redis-master.cs:6379/2")
+	client := lake.NewLake("redis://lake-redis-master.cs:6379/4")
 	defer client.Close()
 	ctx := context.Background()
 	t.Log(lake.ReadString(ctx, client.List(ctx, "test_trace")))
@@ -18,7 +18,7 @@ func TestReadSimple(t *testing.T) {
 }
 
 func TestWriteWithTrace(t *testing.T) {
-	client := lake.NewLake("redis://lake-redis-master.cs:6379/2")
+	client := lake.NewLake("redis://lake-redis-master.cs:6379/4")
 	defer client.Close()
 	ctx := context.Background()
 
@@ -37,7 +37,7 @@ func TestWriteWithTrace(t *testing.T) {
 }
 
 func TestMultipleWritesWithTrace(t *testing.T) {
-	client := lake.NewLake("redis://lake-redis-master.cs:6379/2")
+	client := lake.NewLake("redis://lake-redis-master.cs:6379/4")
 	defer client.Close()
 	catalog := "test_multi_trace"
 
@@ -57,7 +57,7 @@ func TestMultipleWritesWithTrace(t *testing.T) {
 }
 
 func TestWriteWithoutTrace(t *testing.T) {
-	client := lake.NewLake("redis://lake-redis-master.cs:6379/2")
+	client := lake.NewLake("redis://lake-redis-master.cs:6379/4")
 	defer client.Close()
 	ctx := context.Background()
 

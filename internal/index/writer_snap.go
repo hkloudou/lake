@@ -22,16 +22,20 @@ func NewWriter(rdb *redis.Client) *Writer {
 	}
 }
 
-// AddSnap adds a snapshot entry to the catalog snapshot index
-// startTsSeq: start time sequence (e.g., "1700000000_1" or "0_0" for first snap)
-// stopTsSeq: stop time sequence (e.g., "1700000100_500")
-// score: the score for Redis ZADD (typically parsed from stopTsSeq)
+// AddSnap upserts the catalog's latest snapshot entry into the
+// deployment-wide "<prefix>:snaps" Redis Hash.
+//
+//   - field = catalog name
+//   - value = EncodeSnapValue(start, stop) i.e. "{start}|{stop}"
+//
+// V3 keeps only one snap per catalog (snap is idempotent and self-
+// correcting, so historical snaps add no read-path value). HSet
+// overwrites the previous entry; the previous OSS snap object is left
+// orphan and reaped by future cleanup tooling — see Client.AllSnaps and
+// the discussion in clear_optimized.go.
+//
+//   - startTsSeq: start of covered range; "0_0" for the first snap
+//   - stopTsSeq:  stop of covered range
 func (w *Writer) AddSnap(ctx context.Context, catalog string, startTsSeq, stopTsSeq TimeSeqID) error {
-	key := w.MakeSnapZsetKey(catalog)
-	member := EncodeSnapMember(startTsSeq, stopTsSeq)
-
-	return w.rdb.ZAdd(ctx, key, redis.Z{
-		Score:  stopTsSeq.Score(),
-		Member: member,
-	}).Err()
+	return w.rdb.HSet(ctx, w.MakeSnapsHashKey(), catalog, EncodeSnapValue(startTsSeq, stopTsSeq)).Err()
 }

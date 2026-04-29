@@ -17,13 +17,22 @@ func (w *indexIO) MakeDeltaZsetKey(catalog string) string {
 	return fmt.Sprintf("%s:%s:delta", w.prefix, encode.EncodeRedisCatalogName(catalog))
 }
 
-// makeSnapKey generates the Redis key for catalog snapshot index
-// Kept in sync with Reader.makeSnapKey in keys.go
-func (w *indexIO) MakeSnapZsetKey(catalog string) string {
+// MakeSnapsHashKey returns the single Redis Hash that holds the latest
+// snapshot for every catalog in this deployment.
+//
+// Layout: "<prefix>:snaps". Each catalog is a Hash field whose value is
+// the snap encoded by EncodeSnapValue. One round-trip HMGet / HGETALL
+// fetches every catalog's snap metadata, which is what makes whole-
+// deployment backup and bulk inspection cheap.
+//
+// Note: unlike MakeMetaKey / MakeDeltaZsetKey (which take a catalog and
+// return per-catalog keys), MakeSnapsHashKey is global. The catalog
+// is the *field* inside this hash, not part of the key.
+func (w *indexIO) MakeSnapsHashKey() string {
 	if w.prefix == "" {
 		panic("prefix is not set")
 	}
-	return fmt.Sprintf("%s:%s:snap", w.prefix, encode.EncodeRedisCatalogName(catalog))
+	return fmt.Sprintf("%s:snaps", w.prefix)
 }
 
 // MakeSampleIndicatorKey returns the Redis Hash key holding all sample

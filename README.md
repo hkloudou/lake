@@ -188,8 +188,23 @@ colocated, so indicator-wide enumeration / clearing is single-key.
 
 | Function | File | Description |
 |----------|------|-------------|
-| `(*Client) ClearHistory(ctx, catalog) error` | [clear.go](clear.go) | Drop all history except the latest snapshot |
-| `(*Client) ClearHistoryWithRetention(ctx, catalog, keepSnaps) error` | [clear.go](clear.go) | Keep latest + N historical snapshots |
+| `(*Client) ClearHistory(ctx, catalog) error` | [clear.go](clear.go) | Drop all delta entries at or before the catalog's latest snap |
+
+V3 keeps only one snap per catalog (snaps are idempotent and self-correcting — an
+"out of date" snap is replaced on the next read). There is no historical-snap
+retention concept; `ClearHistoryWithRetention` from earlier drafts is removed.
+
+### Backup
+
+| Function | File | Description |
+|----------|------|-------------|
+| `(*Client) AllSnaps(ctx) (map[string]SnapInfo, error)` | [snapshot.go](snapshot.go) | Single HGETALL on `<prefix>:snaps` returns every catalog's snap metadata |
+
+`AllSnaps` is intended for backup tooling: feed each `(catalog, StartTsSeq, StopTsSeq)`
+triple into `Storage.MakeSnapKey` to obtain the OSS object key, then copy that
+object to your archive bucket. This avoids a full OSS `LIST`, which is slow and
+paginated, and gives you a consistent snapshot of the deployment in one Redis
+round-trip.
 
 ### Examples
 
@@ -387,13 +402,14 @@ back later. Callers must therefore avoid `:` and `|` in catalog names today.
     pending|delta|{mergeType}|{path}|{ts}_{seqid}    # in-flight (≤120s)
   }
 
-{prefix}:{catalog}:snap    ZSet
-  score  = stopTsSeq score
-  member = snap|{startTsSeq}|{stopTsSeq}
+{prefix}:snaps             Hash    field=catalog
+  value = "{startTsSeq}|{stopTsSeq}"           # one entry per catalog,
+                                                # overwritten on each save;
+                                                # HGETALL drives backup tooling
 
 {prefix}:samples:{indicator}   Hash
   field = catalog
-  value = [score, data]    (JSON array, atomic per HSET)
+  value = [score, data]                         # JSON array, atomic per HSET
 ```
 
 ### Object storage
@@ -499,6 +515,16 @@ v3 is **not** wire-compatible with v2 callers. Concretely:
   `{prefix}:{catalog}:sample` Hashes with the indicator as the field. v3 uses
   `{prefix}:samples:{indicator}` Hashes with the catalog as the field. v2
   cache entries cannot be read by v3 and will be silently recomputed.
+- **Snap storage replaced.** v2 stored snap metadata in per-catalog ZSets
+  (`{prefix}:{catalog}:snap`) and tracked historical snapshots via a retention
+  parameter. v3 stores a single latest snap per catalog as a field of one
+  global Hash (`{prefix}:snaps`), enabling whole-deployment backup via one
+  HGETALL. The previous OSS snap object on each save becomes orphan storage
+  (acceptable trade-off; reaped by future SweepOrphans tooling).
+  `ClearHistoryWithRetention(ctx, catalog, keepSnaps)` is removed —
+  use `ClearHistory(ctx, catalog)` instead.
+- **`Client.AllSnaps(ctx)`** is new: returns every catalog's snap metadata in
+  one HGETALL, intended for backup workflows.
 - **`merge.Merge` signature** changed: dropped the unused `catalog` parameter
   and the always-empty second return value. (Internal API.)
 - **`Writer.Commit` signature** dropped the meta argument. (Internal API.)

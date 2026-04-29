@@ -10,7 +10,7 @@ import (
 
 func TestBasicUsage(t *testing.T) {
 	// For testing, provide storage directly via options
-	client := lake.NewLake("redis://lake-redis-master.cs:6379/2")
+	client := lake.NewLake("redis://lake-redis-master.cs:6379/4")
 	defer client.Close()
 
 	ctx := context.Background()
@@ -50,7 +50,7 @@ func TestBasicUsage(t *testing.T) {
 }
 
 func TestWriteRFC6902(t *testing.T) {
-	client := lake.NewLake("redis://lake-redis-master.cs:6379/2")
+	client := lake.NewLake("redis://lake-redis-master.cs:6379/4")
 	defer client.Close()
 	ctx := context.Background()
 	catalog := "test_rfc6902"
@@ -111,7 +111,7 @@ func TestWriteRFC6902(t *testing.T) {
 }
 
 func TestWriteData(t *testing.T) {
-	client := lake.NewLake("redis://lake-redis-master.cs:6379/2")
+	client := lake.NewLake("redis://lake-redis-master.cs:6379/4")
 	defer client.Close()
 	ctx := context.Background()
 	catalog := "test_write"
@@ -147,7 +147,7 @@ func TestWriteData(t *testing.T) {
 }
 
 func TestListAndRead(t *testing.T) {
-	client := lake.NewLake("redis://lake-redis-master.cs:6379/2")
+	client := lake.NewLake("redis://lake-redis-master.cs:6379/4")
 	defer client.Close()
 	ctx := context.Background()
 	catalog := "test_write"

@@ -105,40 +105,36 @@ func DecodeDeltaMember(member string, score float64) (*DeltaInfo, error) {
 	}, nil
 }
 
-// EncodeSnapMember encodes snapshot time range into Redis ZADD member format
-// Format: "snap|{startTsSeq}|{stopTsSeq}"
-// Example: "snap|1700000000_1|1700000100_500"
-// If no previous snap (first snap): "snap|0_0|1700000100_500"
-func EncodeSnapMember(startTsSeq, stopTsSeq TimeSeqID) string {
-	return fmt.Sprintf("snap|%s|%s", startTsSeq, stopTsSeq)
+// EncodeSnapValue encodes a snapshot time range as the value stored under
+// the "<prefix>:snaps" Redis Hash, keyed by catalog. Format:
+//
+//	"{startTsSeq}|{stopTsSeq}"
+//
+// e.g. "1700000000_1|1700000100_500", or "0_0|1700000100_500" for the
+// first snap on a catalog.
+//
+// The legacy "snap|" type-marker prefix used by the v3-pre ZSet encoding
+// is dropped — snap values now live in their own Hash and never share a
+// member namespace with delta entries.
+func EncodeSnapValue(startTsSeq, stopTsSeq TimeSeqID) string {
+	return fmt.Sprintf("%s|%s", startTsSeq, stopTsSeq)
 }
 
-// DecodeSnapMember decodes snapshot member and returns start and stop tsSeqID
-func DecodeSnapMember(member string) (startTsSeq, stopTsSeq TimeSeqID, err error) {
-	// Split by "|" delimiter
-	parts := strings.Split(member, "|")
-	if len(parts) != 3 {
-		return TimeSeqID{}, TimeSeqID{}, fmt.Errorf("invalid snap member format (expected 3 parts): %s", member)
+// DecodeSnapValue parses a snap hash value "<startTsSeq>|<stopTsSeq>".
+func DecodeSnapValue(value string) (startTsSeq, stopTsSeq TimeSeqID, err error) {
+	parts := strings.Split(value, "|")
+	if len(parts) != 2 {
+		return TimeSeqID{}, TimeSeqID{}, fmt.Errorf("invalid snap value format (expected 2 parts): %s", value)
 	}
-
-	if parts[0] != "snap" {
-		return TimeSeqID{}, TimeSeqID{}, fmt.Errorf("invalid snap member prefix (expected 'snap'): %s", parts[0])
-	}
-	startTsSeq, err = ParseTimeSeqID(parts[1])
+	startTsSeq, err = ParseTimeSeqID(parts[0])
 	if err != nil {
 		return TimeSeqID{}, TimeSeqID{}, fmt.Errorf("failed to parse start tsSeqID: %w", err)
 	}
-	stopTsSeq, err = ParseTimeSeqID(parts[2])
+	stopTsSeq, err = ParseTimeSeqID(parts[1])
 	if err != nil {
 		return TimeSeqID{}, TimeSeqID{}, fmt.Errorf("failed to parse stop tsSeqID: %w", err)
 	}
-
 	return startTsSeq, stopTsSeq, nil
-}
-
-// IsSnapMember checks if member is a snapshot member
-func IsSnapMember(member string) bool {
-	return strings.HasPrefix(member, "snap|")
 }
 
 // IsDeltaMember checks if member is a delta member

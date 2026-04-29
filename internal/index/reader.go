@@ -85,167 +85,93 @@ func (r *Reader) ReadRange(ctx context.Context, catalog string, minTimestamp, ma
 	return r.readRange(ctx, catalog, fmt.Sprintf("%.6f", minTimestamp), fmt.Sprintf("%.6f", maxTimestamp), false)
 }
 
-func (r *Reader) readSnapBefore(ctx context.Context, catalog string, beforeTimestamp float64) ([]SnapInfo, error) {
-	// return r.readRange(ctx, catalog, "-inf", fmt.Sprintf("%.6f", beforeTimestamp))
-	key := r.MakeSnapZsetKey(catalog)
-	results, err := r.rdb.ZRangeByScoreWithScores(ctx, key, &redis.ZRangeBy{
-		Min:    "-inf",
-		Max:    fmt.Sprintf("(%.6f", beforeTimestamp), // exclude the timestamp itself
-		Offset: 0,
-		Count:  -1,
-	}).Result()
+// ReadSafeRemoveDeltas returns the deltas safely removable for a catalog
+// (those at or before the catalog's latest snap), or an empty result if
+// the catalog has no snap or the snap is too new (< 60s old, possibly
+// still being filled).
+//
+// V3 keeps only one snap per catalog (snap is idempotent and self-
+// correcting), so there are no historical snaps to enumerate or filter —
+// callers only need to worry about removing old delta entries.
+func (r *Reader) ReadSafeRemoveDeltas(ctx context.Context, catalog string) *ReadIndexResult {
+	snap, err := r.GetLatestSnap(ctx, catalog)
+	if err != nil {
+		return &ReadIndexResult{
+			Err:     fmt.Errorf("failed to get latest snap: %w", err),
+			Catalog: catalog,
+		}
+	}
+	if snap == nil {
+		// No snap → no safe removal point.
+		return &ReadIndexResult{Catalog: catalog}
+	}
+	age := r.redisTimeUnix.Load() - int64(snap.StopTsSeq.Score())
+	if age < 60 {
+		return &ReadIndexResult{
+			Err:     fmt.Errorf("snapshot is too new: %s", snap.StopTsSeq.String()),
+			Catalog: catalog,
+		}
+	}
+	return r.ReadRange(ctx, catalog, 0, snap.StopTsSeq.Score())
+}
+
+// GetLatestSnap returns the catalog's snapshot metadata, or nil if the
+// catalog has no snap yet. Reads a single field from the deployment-wide
+// "<prefix>:snaps" hash.
+func (r *Reader) GetLatestSnap(ctx context.Context, catalog string) (*SnapInfo, error) {
+	val, err := r.rdb.HGet(ctx, r.MakeSnapsHashKey(), catalog).Result()
+	if err == redis.Nil {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	var snaps []SnapInfo
-	for _, result := range results {
-		member := result.Member.(string)
-		if !IsSnapMember(member) {
-			continue
-		}
-		startTsSeq, stopTsSeq, err := DecodeSnapMember(member)
+	startTsSeq, stopTsSeq, err := DecodeSnapValue(val)
+	if err != nil {
+		return nil, err
+	}
+	return &SnapInfo{StartTsSeq: startTsSeq, StopTsSeq: stopTsSeq}, nil
+}
+
+// AllSnaps returns the latest snap metadata for every catalog in this
+// deployment via a single HGETALL on "<prefix>:snaps". This is the
+// canonical entry point for whole-deployment backup tooling that wants
+// to enumerate every snap file in OSS without doing an OSS LIST.
+//
+// Catalogs whose snap value fails to decode are skipped silently; if you
+// need to detect corruption, parse the hash yourself via HGETALL.
+func (r *Reader) AllSnaps(ctx context.Context) (map[string]SnapInfo, error) {
+	all, err := r.rdb.HGetAll(ctx, r.MakeSnapsHashKey()).Result()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]SnapInfo, len(all))
+	for catalog, val := range all {
+		startTsSeq, stopTsSeq, err := DecodeSnapValue(val)
 		if err != nil {
 			continue
 		}
-		snaps = append(snaps, SnapInfo{
-			Member: member,
-			Score:  result.Score,
-
-			StartTsSeq: startTsSeq,
-			StopTsSeq:  stopTsSeq,
-		})
+		out[catalog] = SnapInfo{StartTsSeq: startTsSeq, StopTsSeq: stopTsSeq}
 	}
-	return snaps, nil
+	return out, nil
 }
 
-func (r *Reader) ReadSafeRemoveRange(ctx context.Context, catalog string) ([]SnapInfo, *ReadIndexResult) {
-	return r.ReadSafeRemoveRangeWithRetention(ctx, catalog, 0)
-}
-
-// ReadSafeRemoveRangeWithRetention reads safe-to-remove deltas and snaps, while keeping historical snapshots
-// keepSnaps: number of historical snapshots to keep (latest snap is always kept due to < filter)
-//   - keepSnaps = 0: only keep the latest snap, remove all historical snaps
-//   - keepSnaps = 1: keep the latest snap + 1 historical snap
-//   - The latest snap is excluded by readSnapBefore using strict less-than (<)
-func (r *Reader) ReadSafeRemoveRangeWithRetention(ctx context.Context, catalog string, keepSnaps int) ([]SnapInfo, *ReadIndexResult) {
-	snap, err := r.GetLatestSnap(ctx, catalog)
-	if err != nil {
-		return nil, &ReadIndexResult{
-			Err:        fmt.Errorf("failed to get latest snap: %w", err),
-			Catalog:    catalog,
-			HasPending: false,
-			Deltas:     nil,
-		}
-	}
-
-	if snap == nil {
-		return nil, &ReadIndexResult{
-			Err:        nil,
-			Catalog:    catalog,
-			HasPending: false,
-			Deltas:     nil,
-		}
-	}
-	age := r.redisTimeUnix.Load() - int64(snap.StopTsSeq.Score())
-
-	// if snapshot is too new, return error
-	if age < 60 {
-		return nil, &ReadIndexResult{
-			Err:        fmt.Errorf("snapshot is too new: %s", snap.StopTsSeq.String()),
-			Catalog:    catalog,
-			HasPending: false,
-			Deltas:     nil,
-		}
-	}
-
-	// Read all snaps before the latest one
-	allSnaps, err := r.readSnapBefore(ctx, catalog, snap.StopTsSeq.Score())
-	if err != nil {
-		return nil, &ReadIndexResult{
-			Err:        fmt.Errorf("failed to read snap before: %w", err),
-			Catalog:    catalog,
-			HasPending: false,
-			Deltas:     nil,
-		}
-	}
-
-	// Filter snaps based on retention policy
-	snapsToRemove := r.filterSnapsForRemoval(allSnaps, keepSnaps)
-
-	// Deltas can always be removed up to the latest snap
-	result := r.ReadRange(ctx, catalog, 0, snap.StopTsSeq.Score())
-	return snapsToRemove, result
-}
-
-// filterSnapsForRemoval filters snaps to keep the latest N historical snapshots
-// snaps: all candidate historical snaps (sorted by score ascending, latest snap already excluded)
-// keepCount: number of historical snaps to keep
-// Returns: snaps to remove
-func (r *Reader) filterSnapsForRemoval(snaps []SnapInfo, keepCount int) []SnapInfo {
-	if keepCount <= 0 {
-		// Keep 0 historical snaps, remove all (latest snap is already excluded)
-		return snaps
-	}
-
-	if len(snaps) <= keepCount {
-		// Not enough historical snaps to remove any
-		return []SnapInfo{}
-	}
-
-	// snaps are already sorted by score ascending from readSnapBefore
-	// We want to keep the latest N historical snaps, so remove the first (len - keepCount) items
-	removeCount := len(snaps) - keepCount
-	return snaps[:removeCount]
-}
-
-// GetLatestSnap returns the latest snapshot info
-func (r *Reader) GetLatestSnap(ctx context.Context, catalog string) (*SnapInfo, error) {
-	key := r.MakeSnapZsetKey(catalog)
-
-	// ZREVRANGEBYSCORE to get the latest snapshot
-	results, err := r.rdb.ZRevRangeByScoreWithScores(ctx, key, &redis.ZRangeBy{
-		Min:    "-inf",
-		Max:    "+inf",
-		Offset: 0,
-		Count:  1,
-	}).Result()
-
-	if err != nil {
-		return nil, err
-	}
-
-	if len(results) == 0 {
-		return nil, nil // No snapshot found
-	}
-
-	startTsSeq, stopTsSeq, err := DecodeSnapMember(results[0].Member.(string))
-	if err != nil {
-		return nil, err
-	}
-
-	return &SnapInfo{
-		Member:     results[0].Member.(string),
-		Score:      results[0].Score,
-		StartTsSeq: startTsSeq,
-		StopTsSeq:  stopTsSeq,
-	}, nil
-}
-
-// SnapInfo represents snapshot information
+// SnapInfo represents the time range of a catalog's snapshot. The Redis
+// score is derived from StopTsSeq, and the OSS object key is derived
+// from (catalog, StartTsSeq, StopTsSeq); neither is held on the struct
+// directly so there is one source of truth per dimension.
 type SnapInfo struct {
-	Member string
-	Score  float64
-
-	StartTsSeq TimeSeqID // Start time sequence (e.g., "1700000000_1" or "0_0" for first snap)
-	StopTsSeq  TimeSeqID // Stop time sequence (e.g., "1700000100_500")
-	// Score      float64   // Score in Redis (stopTsSeq's timestamp)
+	StartTsSeq TimeSeqID // start of the snap's covered range; "0_0" for the first snap
+	StopTsSeq  TimeSeqID // stop of the snap's covered range
 }
 
+// Score returns the Redis score for this snap (== StopTsSeq.Score()).
+func (m SnapInfo) Score() float64 { return m.StopTsSeq.Score() }
+
+// Dump renders a human-readable single-line description.
 func (m SnapInfo) Dump() string {
-	// fmt.Println(fmt.Sprintf("Snapshot:\n"))
 	var output strings.Builder
 	output.WriteString(fmt.Sprintf("  Time Range: %s ~ %s\n", m.StartTsSeq, m.StopTsSeq))
-	// output.WriteString(fmt.Sprintf("  Score: %.6f\n", m.Score))
 	return output.String()
 }
 
@@ -275,10 +201,9 @@ func (r *Reader) processZMembers(catalog string, results []redis.Z, strictPendin
 	for _, z := range results {
 		member := z.Member.(string)
 
-		// Skip snapshot members
-		if IsSnapMember(member) {
-			continue
-		}
+		// Snap members never appear in the delta zset under v3 (snaps live
+		// in their own "<prefix>:snaps" hash), so no IsSnapMember filter is
+		// needed here.
 
 		// Check pending members
 		if IsPendingMember(member) {
@@ -341,46 +266,36 @@ func (r *Reader) BatchList(ctx context.Context, catalogs []string, strictPending
 		results[catalog] = &BatchListResult{}
 	}
 
-	// Phase 1: Pipeline all snap queries
-	snapPipe := r.rdb.Pipeline()
-	snapCmds := make(map[string]*redis.ZSliceCmd, len(catalogs))
-	for _, catalog := range catalogs {
-		key := r.MakeSnapZsetKey(catalog)
-		snapCmds[catalog] = snapPipe.ZRevRangeByScoreWithScores(ctx, key, &redis.ZRangeBy{
-			Min:    "-inf",
-			Max:    "+inf",
-			Offset: 0,
-			Count:  1,
-		})
-	}
-	snapPipe.Exec(ctx)
-
-	// Process snap results
-	for _, catalog := range catalogs {
-		zs, err := snapCmds[catalog].Result()
-		if err != nil && err != redis.Nil {
+	// Phase 1: a single HMGet pulls every catalog's snap metadata from
+	// the deployment-wide "<prefix>:snaps" hash in one round-trip.
+	snapVals, err := r.rdb.HMGet(ctx, r.MakeSnapsHashKey(), catalogs...).Result()
+	if err != nil && err != redis.Nil {
+		for _, catalog := range catalogs {
 			results[catalog].ReadResult = &ReadIndexResult{
 				Catalog: catalog,
-				Err:     fmt.Errorf("failed to get snapshot: %w", err),
+				Err:     fmt.Errorf("failed to get snapshots: %w", err),
+			}
+		}
+		return results
+	}
+	for i, raw := range snapVals {
+		catalog := catalogs[i]
+		if raw == nil {
+			continue // catalog has no snap yet
+		}
+		val, ok := raw.(string)
+		if !ok {
+			continue
+		}
+		startTsSeq, stopTsSeq, err := DecodeSnapValue(val)
+		if err != nil {
+			results[catalog].ReadResult = &ReadIndexResult{
+				Catalog: catalog,
+				Err:     fmt.Errorf("failed to decode snapshot: %w", err),
 			}
 			continue
 		}
-		if len(zs) > 0 {
-			startTsSeq, stopTsSeq, err := DecodeSnapMember(zs[0].Member.(string))
-			if err != nil {
-				results[catalog].ReadResult = &ReadIndexResult{
-					Catalog: catalog,
-					Err:     fmt.Errorf("failed to decode snapshot: %w", err),
-				}
-				continue
-			}
-			results[catalog].Snap = &SnapInfo{
-				Member:     zs[0].Member.(string),
-				Score:      zs[0].Score,
-				StartTsSeq: startTsSeq,
-				StopTsSeq:  stopTsSeq,
-			}
-		}
+		results[catalog].Snap = &SnapInfo{StartTsSeq: startTsSeq, StopTsSeq: stopTsSeq}
 	}
 
 	// Phase 2: Pipeline all delta queries

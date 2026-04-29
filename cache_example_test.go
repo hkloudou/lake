@@ -14,7 +14,7 @@ import (
 func TestWithCacheHelper(t *testing.T) {
 	// Create Lake client with Redis cache
 	client := lake.NewLake(
-		"redis://lake-redis-master.cs:6379/2",
+		"redis://lake-redis-master.cs:6379/4",
 	)
 	defer client.Close()
 
