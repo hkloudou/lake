@@ -26,7 +26,7 @@ func NewWriter(rdb *redis.Client) *Writer {
 // deployment-wide "<prefix>:snaps" Redis Hash.
 //
 //   - field = catalog name
-//   - value = EncodeSnapValue(start, stop) i.e. "{start}|{stop}"
+//   - value = EncodeSnapValue(stopTsSeq) i.e. "{stopTsSeq}"
 //
 // V3 keeps only one snap per catalog (snap is idempotent and self-
 // correcting, so historical snaps add no read-path value). HSet
@@ -34,8 +34,10 @@ func NewWriter(rdb *redis.Client) *Writer {
 // orphan and reaped by future cleanup tooling — see Client.AllSnaps and
 // the discussion in clear_optimized.go.
 //
-//   - startTsSeq: start of covered range; "0_0" for the first snap
-//   - stopTsSeq:  stop of covered range
-func (w *Writer) AddSnap(ctx context.Context, catalog string, startTsSeq, stopTsSeq TimeSeqID) error {
-	return w.rdb.HSet(ctx, w.MakeSnapsHashKey(), catalog, EncodeSnapValue(startTsSeq, stopTsSeq)).Err()
+// Only stopTsSeq is recorded — the snap's "start" had no read-path
+// meaning (deltas are filtered by score > snap.stop) and storing it
+// doubled both the Redis value size and OSS filename length for no
+// benefit.
+func (w *Writer) AddSnap(ctx context.Context, catalog string, stopTsSeq TimeSeqID) error {
+	return w.rdb.HSet(ctx, w.MakeSnapsHashKey(), catalog, EncodeSnapValue(stopTsSeq)).Err()
 }

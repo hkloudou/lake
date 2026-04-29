@@ -403,7 +403,7 @@ back later. Callers must therefore avoid `:` and `|` in catalog names today.
   }
 
 {prefix}:snaps             Hash    field=catalog
-  value = "{startTsSeq}|{stopTsSeq}"           # one entry per catalog,
+  value = "{stopTsSeq}"                         # one entry per catalog,
                                                 # overwritten on each save;
                                                 # HGETALL drives backup tooling
 
@@ -416,7 +416,7 @@ back later. Callers must therefore avoid `:` and `|` in catalog names today.
 
 ```
 {md5(catalog)[0:4]}/{encoded(catalog)}/{ts}_{seqid}_{mergeType}.dat   # delta
-{md5(catalog)[0:4]}/{encoded(catalog)}/{startTsSeq}~{stopTsSeq}.snap  # snap
+{md5(catalog)[0:4]}/{encoded(catalog)}/{stopTsSeq}.snap               # snap
 ```
 
 The local-file backend uses a deeper layout (`md5[0:2]/encoded/h1/h2/h3/...`)

@@ -85,31 +85,25 @@ func TestDecodeMember(t *testing.T) {
 
 func TestSnapValue(t *testing.T) {
 	tests := []struct {
-		name       string
-		startTsSeq TimeSeqID
-		stopTsSeq  TimeSeqID
-		expected   string
+		name      string
+		stopTsSeq TimeSeqID
+		expected  string
 	}{
-		{"normal", TimeSeqID{1700000000, 1}, TimeSeqID{1700000100, 500}, "1700000000_1|1700000100_500"},
-		{"first snap", TimeSeqID{0, 0}, TimeSeqID{1700000100, 500}, "0_0|1700000100_500"},
-		{"consecutive", TimeSeqID{1700000100, 500}, TimeSeqID{1700000200, 999}, "1700000100_500|1700000200_999"},
+		{"normal", TimeSeqID{1700000100, 500}, "1700000100_500"},
+		{"high seqid", TimeSeqID{1700000200, 999}, "1700000200_999"},
+		{"unit seqid", TimeSeqID{1700000300, 1}, "1700000300_1"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			encoded := EncodeSnapValue(tt.startTsSeq, tt.stopTsSeq)
+			encoded := EncodeSnapValue(tt.stopTsSeq)
 			if encoded != tt.expected {
-				t.Errorf("EncodeSnapValue(%v, %v) = %q, want %q",
-					tt.startTsSeq, tt.stopTsSeq, encoded, tt.expected)
+				t.Errorf("EncodeSnapValue(%v) = %q, want %q", tt.stopTsSeq, encoded, tt.expected)
 			}
 
-			decodedStart, decodedStop, err := DecodeSnapValue(encoded)
+			decodedStop, err := DecodeSnapValue(encoded)
 			if err != nil {
 				t.Errorf("DecodeSnapValue(%q) unexpected error: %v", encoded, err)
-			}
-			if decodedStart != tt.startTsSeq {
-				t.Errorf("DecodeSnapValue(%q) start = %v, want %v",
-					encoded, decodedStart, tt.startTsSeq)
 			}
 			if decodedStop != tt.stopTsSeq {
 				t.Errorf("DecodeSnapValue(%q) stop = %v, want %v",
@@ -118,22 +112,22 @@ func TestSnapValue(t *testing.T) {
 		})
 	}
 
-	// Test IsDeltaMember with delta prefix (still relevant — delta zset is unchanged)
+	// IsDeltaMember on the delta zset is unchanged.
 	if !IsDeltaMember("delta|1|/user/name|1700000000_123") {
 		t.Error("IsDeltaMember(\"delta|1|/user/name|1700000000_123\") = false, want true")
 	}
 
 	// Invalid snap value formats
 	cases := []string{
-		"",                                  // empty
-		"only-one-part",                     // missing pipe
-		"too|many|parts",                    // wrong arity
-		"snap|1700000000_1|1700000100_500",  // legacy "snap|" prefix is no longer accepted
-		"badtsseq|1700000100_500",           // unparseable start
-		"1700000000_1|badtsseq",             // unparseable stop
+		"",                                 // empty
+		"snap|1700000000_1|1700000100_500", // legacy "snap|" prefixed format
+		"1700000000_1|1700000100_500",      // legacy "start|stop" format
+		"badtsseq",                         // unparseable
+		"1700000100_",                      // missing seqid
+		"_500",                             // missing timestamp
 	}
 	for _, c := range cases {
-		if _, _, err := DecodeSnapValue(c); err == nil {
+		if _, err := DecodeSnapValue(c); err == nil {
 			t.Errorf("DecodeSnapValue(%q) expected error, got nil", c)
 		}
 	}

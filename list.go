@@ -70,20 +70,18 @@ func (m ListResult) HasNextSnap() bool {
 	return len(m.Entries) > 0
 }
 
+// NextSnap returns the SnapInfo describing the snap that should next be
+// generated for this list, or nil if there is nothing new since the
+// latest snap (no entries past the snap point).
+//
+// V3 only stores stopTsSeq, so the constructed SnapInfo carries only the
+// last entry's tsSeq.
 func (m ListResult) NextSnap() *index.SnapInfo {
 	if len(m.Entries) == 0 {
 		return nil
 	}
-	if m.LatestSnap == nil {
-		return &index.SnapInfo{
-			StartTsSeq: index.TimeSeqID{Timestamp: 0, SeqID: 0},
-			StopTsSeq:  m.Entries[len(m.Entries)-1].TsSeq,
-		}
-	}
-
 	return &index.SnapInfo{
-		StartTsSeq: m.LatestSnap.StopTsSeq,
-		StopTsSeq:  m.Entries[len(m.Entries)-1].TsSeq,
+		StopTsSeq: m.Entries[len(m.Entries)-1].TsSeq,
 	}
 }
 

@@ -230,12 +230,12 @@ func (s *ossStorage) MakeDeltaKey(catalog string, tsSeqID index.TimeSeqID, merge
 	return fmt.Sprintf("%s/%s_%d.dat", shardedPath, tsSeqID.String(), mergeType)
 }
 
-// MakeSnapKey generates storage key for snapshot files with MD5-sharded path
-// Format: {md5[0:4]}/{hex(catalog)}/{startTsSeq}~{stopTsSeq}.snap
-// Example: f9aa/5573657273/1700000000_1~1700000100_500.snap (for catalog "Users")
-func (s *ossStorage) MakeSnapKey(catalog string, startTsSeq, stopTsSeq index.TimeSeqID) string {
-	shardedPath := encodeOssCatalogPath(catalog, 4) // Default: 4-char MD5 prefix (65,536 dirs)
-	return fmt.Sprintf("%s/%s~%s.snap", shardedPath, startTsSeq.String(), stopTsSeq.String())
+// MakeSnapKey generates storage key for snapshot files with MD5-sharded path.
+// Format: {md5[0:4]}/{hex(catalog)}/{stopTsSeq}.snap
+// Example: f9aa/5573657273/1700000100_500.snap
+func (s *ossStorage) MakeSnapKey(catalog string, stopTsSeq index.TimeSeqID) string {
+	shardedPath := encodeOssCatalogPath(catalog, 4)
+	return fmt.Sprintf("%s/%s.snap", shardedPath, stopTsSeq.String())
 }
 
 // encodeOssCatalogPath generates OSS path with MD5 sharding

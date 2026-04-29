@@ -38,7 +38,7 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 	go func() {
 		defer wg.Done()
 		if list.LatestSnap != nil {
-			storageKey := c.storage.MakeSnapKey(list.catalog, list.LatestSnap.StartTsSeq, list.LatestSnap.StopTsSeq)
+			storageKey := c.storage.MakeSnapKey(list.catalog, list.LatestSnap.StopTsSeq)
 			namespace := c.storage.RedisPrefix()
 
 			// Use cache to load snapshot data with namespace
@@ -87,7 +87,7 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 		go func() {
 			defer c.snapWG.Done()
 			bgCtx := context.Background()
-			c.saveSnapshot(bgCtx, list.catalog, nextSnap.StartTsSeq, nextSnap.StopTsSeq, resultData)
+			c.saveSnapshot(bgCtx, list.catalog, nextSnap.StopTsSeq, resultData)
 		}()
 	}
 

@@ -37,20 +37,20 @@ func (c *Client) AllSnaps(ctx context.Context) (map[string]SnapInfo, error) {
 // overwritten in Redis; its OSS object is left orphan (acceptable per
 // the V3 contract — see clear_optimized.go).
 //
-// SingleFlight on (catalog, start, stop) deduplicates concurrent saves
-// of the same snap range computed by independent readers.
-func (m *Client) saveSnapshot(ctx context.Context, catalog string, startTsSeq, stopTsSeq index.TimeSeqID, snapData []byte) (string, error) {
-	return m.snapFlight.Do(fmt.Sprintf("%s_%s_%s", catalog, startTsSeq.String(), stopTsSeq.String()), func() (string, error) {
-		return m._save(ctx, catalog, startTsSeq, stopTsSeq, snapData)
+// SingleFlight on (catalog, stop) deduplicates concurrent saves of the
+// same snap point computed by independent readers.
+func (m *Client) saveSnapshot(ctx context.Context, catalog string, stopTsSeq index.TimeSeqID, snapData []byte) (string, error) {
+	return m.snapFlight.Do(fmt.Sprintf("%s_%s", catalog, stopTsSeq.String()), func() (string, error) {
+		return m._save(ctx, catalog, stopTsSeq, snapData)
 	})
 }
 
-func (m *Client) _save(ctx context.Context, catalog string, startTsSeq, stopTsSeq index.TimeSeqID, snapData []byte) (string, error) {
-	snapKey := m.storage.MakeSnapKey(catalog, startTsSeq, stopTsSeq)
+func (m *Client) _save(ctx context.Context, catalog string, stopTsSeq index.TimeSeqID, snapData []byte) (string, error) {
+	snapKey := m.storage.MakeSnapKey(catalog, stopTsSeq)
 	if err := m.storage.Put(ctx, snapKey, snapData); err != nil {
 		return "", fmt.Errorf("failed to save snapshot: %w", err)
 	}
-	if err := m.writer.AddSnap(ctx, catalog, startTsSeq, stopTsSeq); err != nil {
+	if err := m.writer.AddSnap(ctx, catalog, stopTsSeq); err != nil {
 		return "", fmt.Errorf("failed to add snapshot to index: %w", err)
 	}
 	return snapKey, nil

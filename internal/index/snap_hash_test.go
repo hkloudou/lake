@@ -30,9 +30,9 @@ func snapHashTestRedis(t *testing.T) *redis.Client {
 	return rdb
 }
 
-// TestSnapHashRoundTrip exercises the AddSnap → GetLatestSnap path on
-// the real Redis Hash and verifies the layout is "<prefix>:snaps" with
-// catalog as field, value = "{start}|{stop}".
+// TestSnapHashRoundTrip exercises the AddSnap → HGet path on the real
+// Redis Hash and verifies the layout is "<prefix>:snaps" with catalog
+// as field, value = "{stopTsSeq}".
 func TestSnapHashRoundTrip(t *testing.T) {
 	rdb := snapHashTestRedis(t)
 	w := NewWriter(rdb)
@@ -42,24 +42,21 @@ func TestSnapHashRoundTrip(t *testing.T) {
 	r.SetPrefix("test")
 
 	ctx := context.Background()
-	start := TimeSeqID{Timestamp: 1700000000, SeqID: 1}
 	stop := TimeSeqID{Timestamp: 1700000100, SeqID: 500}
 
-	if err := w.AddSnap(ctx, "users", start, stop); err != nil {
+	if err := w.AddSnap(ctx, "users", stop); err != nil {
 		t.Fatalf("AddSnap: %v", err)
 	}
 
-	// Hash key shape and field layout
 	val, err := rdb.HGet(ctx, "test:snaps", "users").Result()
 	if err != nil {
 		t.Fatalf("HGet: %v", err)
 	}
-	want := EncodeSnapValue(start, stop)
+	want := EncodeSnapValue(stop)
 	if val != want {
 		t.Fatalf("hash value: got %q, want %q", val, want)
 	}
 
-	// GetLatestSnap roundtrips through DecodeSnapValue
 	got, err := r.GetLatestSnap(ctx, "users")
 	if err != nil {
 		t.Fatalf("GetLatestSnap: %v", err)
@@ -67,8 +64,8 @@ func TestSnapHashRoundTrip(t *testing.T) {
 	if got == nil {
 		t.Fatal("GetLatestSnap returned nil")
 	}
-	if got.StartTsSeq != start || got.StopTsSeq != stop {
-		t.Fatalf("got %+v, want start=%v stop=%v", got, start, stop)
+	if got.StopTsSeq != stop {
+		t.Fatalf("got %+v, want stop=%v", got, stop)
 	}
 	if got.Score() != stop.Score() {
 		t.Fatalf("Score(): got %v, want %v", got.Score(), stop.Score())
@@ -76,8 +73,7 @@ func TestSnapHashRoundTrip(t *testing.T) {
 }
 
 // TestSnapHashOverwrite confirms the V3 contract: each AddSnap on a
-// catalog overwrites its previous entry; we never accumulate historical
-// snaps in Redis.
+// catalog overwrites its previous entry.
 func TestSnapHashOverwrite(t *testing.T) {
 	rdb := snapHashTestRedis(t)
 	w := NewWriter(rdb)
@@ -87,14 +83,13 @@ func TestSnapHashOverwrite(t *testing.T) {
 	r.SetPrefix("test")
 
 	ctx := context.Background()
-	first := TimeSeqID{Timestamp: 1700000000, SeqID: 1}
 	stop1 := TimeSeqID{Timestamp: 1700000100, SeqID: 500}
 	stop2 := TimeSeqID{Timestamp: 1700000200, SeqID: 999}
 
-	if err := w.AddSnap(ctx, "users", first, stop1); err != nil {
+	if err := w.AddSnap(ctx, "users", stop1); err != nil {
 		t.Fatalf("first AddSnap: %v", err)
 	}
-	if err := w.AddSnap(ctx, "users", stop1, stop2); err != nil {
+	if err := w.AddSnap(ctx, "users", stop2); err != nil {
 		t.Fatalf("second AddSnap: %v", err)
 	}
 
@@ -102,11 +97,10 @@ func TestSnapHashOverwrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetLatestSnap: %v", err)
 	}
-	if got.StartTsSeq != stop1 || got.StopTsSeq != stop2 {
-		t.Fatalf("after overwrite: got %+v, want start=%v stop=%v", got, stop1, stop2)
+	if got.StopTsSeq != stop2 {
+		t.Fatalf("after overwrite: got %+v, want stop=%v", got, stop2)
 	}
 
-	// Hash holds exactly one field per catalog.
 	cnt, err := rdb.HLen(ctx, "test:snaps").Result()
 	if err != nil {
 		t.Fatalf("HLen: %v", err)
@@ -128,16 +122,14 @@ func TestAllSnapsBatchBackup(t *testing.T) {
 	r.SetPrefix("test")
 
 	ctx := context.Background()
-	pairs := map[string]struct {
-		start, stop TimeSeqID
-	}{
-		"users":    {TimeSeqID{1700000000, 1}, TimeSeqID{1700000100, 500}},
-		"orders":   {TimeSeqID{1700000010, 2}, TimeSeqID{1700000110, 999}},
-		"products": {TimeSeqID{0, 0}, TimeSeqID{1700000050, 7}}, // first snap shape
+	stops := map[string]TimeSeqID{
+		"users":    {1700000100, 500},
+		"orders":   {1700000110, 999},
+		"products": {1700000050, 7},
 	}
 
-	for catalog, p := range pairs {
-		if err := w.AddSnap(ctx, catalog, p.start, p.stop); err != nil {
+	for catalog, stop := range stops {
+		if err := w.AddSnap(ctx, catalog, stop); err != nil {
 			t.Fatalf("AddSnap %s: %v", catalog, err)
 		}
 	}
@@ -146,17 +138,17 @@ func TestAllSnapsBatchBackup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AllSnaps: %v", err)
 	}
-	if got := len(all); got != len(pairs) {
-		t.Fatalf("AllSnaps length: got %d, want %d", got, len(pairs))
+	if got := len(all); got != len(stops) {
+		t.Fatalf("AllSnaps length: got %d, want %d", got, len(stops))
 	}
-	for catalog, want := range pairs {
+	for catalog, want := range stops {
 		got, ok := all[catalog]
 		if !ok {
 			t.Errorf("missing catalog %q in AllSnaps", catalog)
 			continue
 		}
-		if got.StartTsSeq != want.start || got.StopTsSeq != want.stop {
-			t.Errorf("catalog %q: got %+v, want start=%v stop=%v", catalog, got, want.start, want.stop)
+		if got.StopTsSeq != want {
+			t.Errorf("catalog %q: got %+v, want stop=%v", catalog, got, want)
 		}
 	}
 }

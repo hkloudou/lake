@@ -219,14 +219,13 @@ func (s *fileStorage) MakeDeltaKey(catalog string, tsSeqID index.TimeSeqID, merg
 	return fmt.Sprintf("%s/%s/%s/%s/%s/%s_%d.dat", md5Prefix, catalogEncoded, hash1, hash2, hash3, tsSeqID.String(), mergeType)
 }
 
-// MakeSnapKey generates storage key for snapshot files with MD5-sharded path
-// Format: {md5[0:2]}/{hex(catalog)}/{hash1}/{hash2}/{hash3}/{startTsSeq}~{stopTsSeq}.snap
-// Example: f9/5573657273/ab/cd/ef/1700000000_1~1700000100_500.snap (for catalog "Users")
-// Sharding: md5[0:2]=256 dirs, hash1/hash2/hash3=256×256×256 leaf dirs, ~1k files/dir (194 days)
-func (s *fileStorage) MakeSnapKey(catalog string, startTsSeq, stopTsSeq index.TimeSeqID) string {
+// MakeSnapKey generates storage key for snapshot files with MD5-sharded path.
+// Format: {md5[0:2]}/{hex(catalog)}/{hash1}/{hash2}/{hash3}/{stopTsSeq}.snap
+// Sharding: md5[0:2]=256 dirs, hash1/hash2/hash3=256×256×256 leaf dirs.
+func (s *fileStorage) MakeSnapKey(catalog string, stopTsSeq index.TimeSeqID) string {
 	md5Prefix := getCatalogMd5Prefix0xff(catalog)
 	catalogEncoded := encodeOssCatalogName(catalog)
 	hash1, hash2, hash3 := getTimeHash(stopTsSeq)
-	return fmt.Sprintf("%s/%s/%s/%s/%s/%s~%s.snap", md5Prefix, catalogEncoded, hash1, hash2, hash3, startTsSeq.String(), stopTsSeq.String())
+	return fmt.Sprintf("%s/%s/%s/%s/%s/%s.snap", md5Prefix, catalogEncoded, hash1, hash2, hash3, stopTsSeq.String())
 }
 

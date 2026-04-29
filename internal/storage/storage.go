@@ -47,5 +47,10 @@ type Storage interface {
 	RedisPrefix() string
 
 	MakeDeltaKey(catalog string, tsSeqID index.TimeSeqID, mergeType int) string
-	MakeSnapKey(catalog string, startTsSeq, stopTsSeq index.TimeSeqID) string
+
+	// MakeSnapKey returns the storage object key for the catalog's snapshot
+	// stamped at stopTsSeq. Snaps are uniquely named by stopTsSeq alone —
+	// the seqid is already globally unique per (deployment, catalog,
+	// second) so there's no need to concatenate a start point.
+	MakeSnapKey(catalog string, stopTsSeq index.TimeSeqID) string
 }

@@ -105,36 +105,26 @@ func DecodeDeltaMember(member string, score float64) (*DeltaInfo, error) {
 	}, nil
 }
 
-// EncodeSnapValue encodes a snapshot time range as the value stored under
-// the "<prefix>:snaps" Redis Hash, keyed by catalog. Format:
+// EncodeSnapValue encodes a snap's stop TimeSeqID as the value stored
+// under the "<prefix>:snaps" Redis Hash, keyed by catalog. Format:
 //
-//	"{startTsSeq}|{stopTsSeq}"
+//	"{stopTsSeq}"     e.g. "1700000100_500"
 //
-// e.g. "1700000000_1|1700000100_500", or "0_0|1700000100_500" for the
-// first snap on a catalog.
-//
-// The legacy "snap|" type-marker prefix used by the v3-pre ZSet encoding
-// is dropped — snap values now live in their own Hash and never share a
-// member namespace with delta entries.
-func EncodeSnapValue(startTsSeq, stopTsSeq TimeSeqID) string {
-	return fmt.Sprintf("%s|%s", startTsSeq, stopTsSeq)
+// V3 stores only the stop point — the snap's "start" is purely an OSS
+// filename concern in earlier drafts and carries no read-path meaning
+// (deltas after stopTsSeq are merged on top of the snap; the start
+// point of the snap itself is irrelevant).
+func EncodeSnapValue(stopTsSeq TimeSeqID) string {
+	return stopTsSeq.String()
 }
 
-// DecodeSnapValue parses a snap hash value "<startTsSeq>|<stopTsSeq>".
-func DecodeSnapValue(value string) (startTsSeq, stopTsSeq TimeSeqID, err error) {
-	parts := strings.Split(value, "|")
-	if len(parts) != 2 {
-		return TimeSeqID{}, TimeSeqID{}, fmt.Errorf("invalid snap value format (expected 2 parts): %s", value)
-	}
-	startTsSeq, err = ParseTimeSeqID(parts[0])
+// DecodeSnapValue parses a snap hash value "<stopTsSeq>".
+func DecodeSnapValue(value string) (stopTsSeq TimeSeqID, err error) {
+	stopTsSeq, err = ParseTimeSeqID(value)
 	if err != nil {
-		return TimeSeqID{}, TimeSeqID{}, fmt.Errorf("failed to parse start tsSeqID: %w", err)
+		return TimeSeqID{}, fmt.Errorf("failed to parse stop tsSeqID: %w", err)
 	}
-	stopTsSeq, err = ParseTimeSeqID(parts[1])
-	if err != nil {
-		return TimeSeqID{}, TimeSeqID{}, fmt.Errorf("failed to parse stop tsSeqID: %w", err)
-	}
-	return startTsSeq, stopTsSeq, nil
+	return stopTsSeq, nil
 }
 
 // IsDeltaMember checks if member is a delta member

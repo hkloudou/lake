@@ -126,11 +126,11 @@ func (r *Reader) GetLatestSnap(ctx context.Context, catalog string) (*SnapInfo, 
 	if err != nil {
 		return nil, err
 	}
-	startTsSeq, stopTsSeq, err := DecodeSnapValue(val)
+	stopTsSeq, err := DecodeSnapValue(val)
 	if err != nil {
 		return nil, err
 	}
-	return &SnapInfo{StartTsSeq: startTsSeq, StopTsSeq: stopTsSeq}, nil
+	return &SnapInfo{StopTsSeq: stopTsSeq}, nil
 }
 
 // AllSnaps returns the latest snap metadata for every catalog in this
@@ -147,22 +147,25 @@ func (r *Reader) AllSnaps(ctx context.Context) (map[string]SnapInfo, error) {
 	}
 	out := make(map[string]SnapInfo, len(all))
 	for catalog, val := range all {
-		startTsSeq, stopTsSeq, err := DecodeSnapValue(val)
+		stopTsSeq, err := DecodeSnapValue(val)
 		if err != nil {
 			continue
 		}
-		out[catalog] = SnapInfo{StartTsSeq: startTsSeq, StopTsSeq: stopTsSeq}
+		out[catalog] = SnapInfo{StopTsSeq: stopTsSeq}
 	}
 	return out, nil
 }
 
-// SnapInfo represents the time range of a catalog's snapshot. The Redis
-// score is derived from StopTsSeq, and the OSS object key is derived
-// from (catalog, StartTsSeq, StopTsSeq); neither is held on the struct
-// directly so there is one source of truth per dimension.
+// SnapInfo records that a catalog has been snapshotted up to StopTsSeq.
+// All deltas with score <= StopTsSeq.Score() are absorbed by the snap;
+// reads merge later deltas on top.
+//
+// The "start" of a snap is intentionally absent: it had no read-path
+// meaning (deltas are filtered by score > snap.stop only), and storing
+// it doubled the Redis hash value size and the OSS filename length for
+// no benefit.
 type SnapInfo struct {
-	StartTsSeq TimeSeqID // start of the snap's covered range; "0_0" for the first snap
-	StopTsSeq  TimeSeqID // stop of the snap's covered range
+	StopTsSeq TimeSeqID
 }
 
 // Score returns the Redis score for this snap (== StopTsSeq.Score()).
@@ -171,7 +174,7 @@ func (m SnapInfo) Score() float64 { return m.StopTsSeq.Score() }
 // Dump renders a human-readable single-line description.
 func (m SnapInfo) Dump() string {
 	var output strings.Builder
-	output.WriteString(fmt.Sprintf("  Time Range: %s ~ %s\n", m.StartTsSeq, m.StopTsSeq))
+	output.WriteString(fmt.Sprintf("  Stop: %s\n", m.StopTsSeq))
 	return output.String()
 }
 
@@ -287,7 +290,7 @@ func (r *Reader) BatchList(ctx context.Context, catalogs []string, strictPending
 		if !ok {
 			continue
 		}
-		startTsSeq, stopTsSeq, err := DecodeSnapValue(val)
+		stopTsSeq, err := DecodeSnapValue(val)
 		if err != nil {
 			results[catalog].ReadResult = &ReadIndexResult{
 				Catalog: catalog,
@@ -295,7 +298,7 @@ func (r *Reader) BatchList(ctx context.Context, catalogs []string, strictPending
 			}
 			continue
 		}
-		results[catalog].Snap = &SnapInfo{StartTsSeq: startTsSeq, StopTsSeq: stopTsSeq}
+		results[catalog].Snap = &SnapInfo{StopTsSeq: stopTsSeq}
 	}
 
 	// Phase 2: Pipeline all delta queries

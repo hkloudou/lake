@@ -90,10 +90,9 @@ func (s *memoryStorage) MakeDeltaKey(catalog string, tsSeqID index.TimeSeqID, me
 	return fmt.Sprintf("%s/delta/%s_%d.json", catalog, tsSeqID.String(), mergeType)
 }
 
-// MakeSnapKey generates storage key for snapshot files with MD5-sharded path
-// Format: {md5[0:4]}/{hex(catalog)}/snap/{startTsSeq}~{stopTsSeq}.snap
-// Example: f9aa/5573657273/snap/1700000000_1~1700000100_500.snap (for catalog "Users")
-func (s *memoryStorage) MakeSnapKey(catalog string, startTsSeq, stopTsSeq index.TimeSeqID) string {
-	return fmt.Sprintf("%s/snap/%s~%s.snap", catalog, startTsSeq.String(), stopTsSeq.String())
+// MakeSnapKey generates storage key for snapshot files.
+// Format: {catalog}/snap/{stopTsSeq}.snap
+func (s *memoryStorage) MakeSnapKey(catalog string, stopTsSeq index.TimeSeqID) string {
+	return fmt.Sprintf("%s/snap/%s.snap", catalog, stopTsSeq.String())
 }
 
