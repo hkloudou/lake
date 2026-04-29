@@ -3,7 +3,6 @@ package index
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -11,14 +10,9 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Reader handles reading from Redis ZADD index.
-//
-// redisTimeUnix is updated periodically from Redis TIME and read concurrently
-// from request goroutines (pending-write age, snapshot freshness checks). It
-// must be accessed only via Load/Store to remain race-free.
-//
-// Close stops the background time-sync goroutine. It must be called when the
-// owning Client is shut down; otherwise the goroutine leaks.
+// Reader reads Lake's Redis index. Maintains a 5-second-resolution clock
+// (redisTimeUnix) used for pending-write age and snapshot freshness;
+// callers must Close the Reader to stop the background ticker.
 type Reader struct {
 	rdb           *redis.Client
 	redisTimeUnix atomic.Int64
@@ -27,36 +21,39 @@ type Reader struct {
 	indexIO
 }
 
-// NewReader creates a new index reader.
+// NewReader returns a Reader that has begun ticking. SetPrefix must be
+// called before any read method.
 func NewReader(rdb *redis.Client) *Reader {
-	reader := &Reader{
-		rdb:     rdb,
-		done:    make(chan struct{}),
-		indexIO: indexIO{prefix: "lake"}, // overridden later via SetPrefix
-	}
-	reader.startRedisTimeUnixUpdater()
-	return reader
+	r := &Reader{rdb: rdb, done: make(chan struct{})}
+	go r.timeUpdater()
+	return r
 }
 
-// Close stops the background updater. Idempotent.
+// Close stops the background time-sync goroutine. Idempotent.
 func (r *Reader) Close() {
-	r.closeOnce.Do(func() {
-		close(r.done)
-	})
+	r.closeOnce.Do(func() { close(r.done) })
 }
 
-// DeltaInfo represents delta information (with optional body data)
-type DeltaInfo struct {
-	Member string
-	Score  float64
+// SnapInfo records that a catalog has been snapshotted up to StopTsSeq.
+// Reads merge any deltas with score > StopTsSeq.Score() on top.
+type SnapInfo struct {
+	StopTsSeq TimeSeqID
+}
 
+func (s SnapInfo) Score() float64 { return s.StopTsSeq.Score() }
+func (s SnapInfo) Dump() string   { return fmt.Sprintf("  Stop: %s\n", s.StopTsSeq) }
+
+// DeltaInfo is one parsed entry from the catalog's delta zset.
+type DeltaInfo struct {
+	Member    string
+	Score     float64
 	TsSeq     TimeSeqID
 	MergeType MergeType
 	Path      string
-	Body      []byte // Optional: filled by fillDeltasBody
+	Body      []byte // populated lazily by readers
 }
 
-// ReadAllResult holds read results with pending status
+// ReadIndexResult is the parsed view of a delta zset slice.
 type ReadIndexResult struct {
 	Catalog    string
 	Deltas     []DeltaInfo
@@ -64,60 +61,45 @@ type ReadIndexResult struct {
 	Err        error
 }
 
-type SampleInfo struct {
-	Indicator string
-	Score     float64
+// BatchListResult combines the snap + delta read for one catalog.
+type BatchListResult struct {
+	Snap       *SnapInfo
+	ReadResult *ReadIndexResult
 }
 
-// ReadAll reads all entries from the catalog
+// ReadAll returns every delta for the catalog.
 func (r *Reader) ReadAll(ctx context.Context, catalog string, strictPending bool) *ReadIndexResult {
 	return r.readRange(ctx, catalog, "-inf", "+inf", strictPending)
 }
 
-// ReadSince reads entries since the given timestamp (exclusive)
+// ReadSince returns deltas with score > sinceTimestamp.
 func (r *Reader) ReadSince(ctx context.Context, catalog string, sinceTimestamp float64, strictPending bool) *ReadIndexResult {
-	// Use '(' to exclude the timestamp itself
 	return r.readRange(ctx, catalog, fmt.Sprintf("(%.6f", sinceTimestamp), "+inf", strictPending)
 }
 
-// ReadRange reads entries between timestamps
+// ReadRange returns deltas in [minTimestamp, maxTimestamp].
 func (r *Reader) ReadRange(ctx context.Context, catalog string, minTimestamp, maxTimestamp float64) *ReadIndexResult {
 	return r.readRange(ctx, catalog, fmt.Sprintf("%.6f", minTimestamp), fmt.Sprintf("%.6f", maxTimestamp), false)
 }
 
-// ReadSafeRemoveDeltas returns the deltas safely removable for a catalog
-// (those at or before the catalog's latest snap), or an empty result if
-// the catalog has no snap or the snap is too new (< 60s old, possibly
-// still being filled).
-//
-// V3 keeps only one snap per catalog (snap is idempotent and self-
-// correcting), so there are no historical snaps to enumerate or filter —
-// callers only need to worry about removing old delta entries.
+// ReadSafeRemoveDeltas returns deltas safely removable for a catalog
+// (those at or before the latest snap). Empty if no snap exists or the
+// snap is younger than 60s.
 func (r *Reader) ReadSafeRemoveDeltas(ctx context.Context, catalog string) *ReadIndexResult {
 	snap, err := r.GetLatestSnap(ctx, catalog)
 	if err != nil {
-		return &ReadIndexResult{
-			Err:     fmt.Errorf("failed to get latest snap: %w", err),
-			Catalog: catalog,
-		}
+		return &ReadIndexResult{Catalog: catalog, Err: fmt.Errorf("get latest snap: %w", err)}
 	}
 	if snap == nil {
-		// No snap → no safe removal point.
 		return &ReadIndexResult{Catalog: catalog}
 	}
-	age := r.redisTimeUnix.Load() - int64(snap.StopTsSeq.Score())
-	if age < 60 {
-		return &ReadIndexResult{
-			Err:     fmt.Errorf("snapshot is too new: %s", snap.StopTsSeq.String()),
-			Catalog: catalog,
-		}
+	if r.redisTimeUnix.Load()-int64(snap.StopTsSeq.Score()) < 60 {
+		return &ReadIndexResult{Catalog: catalog, Err: fmt.Errorf("snapshot is too new: %s", snap.StopTsSeq)}
 	}
 	return r.ReadRange(ctx, catalog, 0, snap.StopTsSeq.Score())
 }
 
-// GetLatestSnap returns the catalog's snapshot metadata, or nil if the
-// catalog has no snap yet. Reads a single field from the deployment-wide
-// "<prefix>:snaps" hash.
+// GetLatestSnap returns the catalog's snap metadata (nil if none).
 func (r *Reader) GetLatestSnap(ctx context.Context, catalog string) (*SnapInfo, error) {
 	val, err := r.rdb.HGet(ctx, r.MakeSnapsHashKey(), catalog).Result()
 	if err == redis.Nil {
@@ -126,20 +108,15 @@ func (r *Reader) GetLatestSnap(ctx context.Context, catalog string) (*SnapInfo, 
 	if err != nil {
 		return nil, err
 	}
-	stopTsSeq, err := DecodeSnapValue(val)
+	stop, err := DecodeSnapValue(val)
 	if err != nil {
 		return nil, err
 	}
-	return &SnapInfo{StopTsSeq: stopTsSeq}, nil
+	return &SnapInfo{StopTsSeq: stop}, nil
 }
 
-// AllSnaps returns the latest snap metadata for every catalog in this
-// deployment via a single HGETALL on "<prefix>:snaps". This is the
-// canonical entry point for whole-deployment backup tooling that wants
-// to enumerate every snap file in OSS without doing an OSS LIST.
-//
-// Catalogs whose snap value fails to decode are skipped silently; if you
-// need to detect corruption, parse the hash yourself via HGETALL.
+// AllSnaps returns every catalog's snap metadata via a single HGETALL.
+// Catalogs with undecodable values are skipped.
 func (r *Reader) AllSnaps(ctx context.Context) (map[string]SnapInfo, error) {
 	all, err := r.rdb.HGetAll(ctx, r.MakeSnapsHashKey()).Result()
 	if err != nil {
@@ -147,234 +124,146 @@ func (r *Reader) AllSnaps(ctx context.Context) (map[string]SnapInfo, error) {
 	}
 	out := make(map[string]SnapInfo, len(all))
 	for catalog, val := range all {
-		stopTsSeq, err := DecodeSnapValue(val)
-		if err != nil {
-			continue
+		if stop, err := DecodeSnapValue(val); err == nil {
+			out[catalog] = SnapInfo{StopTsSeq: stop}
 		}
-		out[catalog] = SnapInfo{StopTsSeq: stopTsSeq}
 	}
 	return out, nil
 }
 
-// SnapInfo records that a catalog has been snapshotted up to StopTsSeq.
-// All deltas with score <= StopTsSeq.Score() are absorbed by the snap;
-// reads merge later deltas on top.
-//
-// The "start" of a snap is intentionally absent: it had no read-path
-// meaning (deltas are filtered by score > snap.stop only), and storing
-// it doubled the Redis hash value size and the OSS filename length for
-// no benefit.
-type SnapInfo struct {
-	StopTsSeq TimeSeqID
-}
-
-// Score returns the Redis score for this snap (== StopTsSeq.Score()).
-func (m SnapInfo) Score() float64 { return m.StopTsSeq.Score() }
-
-// Dump renders a human-readable single-line description.
-func (m SnapInfo) Dump() string {
-	var output strings.Builder
-	output.WriteString(fmt.Sprintf("  Stop: %s\n", m.StopTsSeq))
-	return output.String()
-}
-
-func (r *Reader) readRange(ctx context.Context, catalog string, min, max string, strictPending bool) *ReadIndexResult {
-	key := r.MakeDeltaZsetKey(catalog)
-	results, err := r.rdb.ZRangeByScoreWithScores(ctx, key, &redis.ZRangeBy{
-		Min: min,
-		Max: max,
-	}).Result()
-
-	if err != nil {
-		return &ReadIndexResult{Err: err}
-	}
-
-	result := r.processZMembers(catalog, results, strictPending)
-
-	return result
-}
-
-// processZMembers processes raw Redis Z members into ReadIndexResult.
-// Shared by readRange and BatchList.
-func (r *Reader) processZMembers(catalog string, results []redis.Z, strictPending bool) *ReadIndexResult {
-	var entries []DeltaInfo
-	var timeoutThreshold = int64(120) // 2 minutes in seconds
-	var hasPending bool
-	var hasUnresolvedPending bool
-	for _, z := range results {
-		member := z.Member.(string)
-
-		// Snap members never appear in the delta zset under v3 (snaps live
-		// in their own "<prefix>:snaps" hash), so no IsSnapMember filter is
-		// needed here.
-
-		// Check pending members
-		if IsPendingMember(member) {
-			ageSeconds := r.redisTimeUnix.Load() - int64(z.Score)
-			if ageSeconds > timeoutThreshold {
-				// Timeout > timeoutThreshold: ignore (abandoned write)
-				continue
-			}
-			// Pending write in progress (age < timeout)
-			hasUnresolvedPending = true
-			if strictPending {
-				hasPending = true
-			}
-			continue
-		}
-		// A delta after a pending means the read may have incomplete data
-		if hasUnresolvedPending {
-			hasPending = true
-		}
-
-		// Only delta members should remain at this point
-		if !IsDeltaMember(member) {
-			// Unknown member type - data corruption
-			return &ReadIndexResult{Err: fmt.Errorf("unknown member type (not snap/pending/delta): %q", member)}
-		}
-
-		deltaInfo, err := DecodeDeltaMember(member, z.Score)
-		if err != nil {
-			return &ReadIndexResult{Err: fmt.Errorf("failed to decode delta member: %w", err)}
-		}
-
-		entries = append(entries, *deltaInfo)
-	}
-
-	return &ReadIndexResult{
-		Catalog:    catalog,
-		Deltas:     entries,
-		HasPending: hasPending,
-	}
-}
-
-// BatchListResult holds the combined snap + delta results for one catalog
-type BatchListResult struct {
-	Snap       *SnapInfo
-	ReadResult *ReadIndexResult
-}
-
-// BatchList performs List operations for multiple catalogs using Redis Pipeline.
-// Phase 1: pipeline all snap queries (1 round-trip)
-// Phase 2: pipeline all delta queries using snap results (1 round-trip)
-// Total: 2 round-trips regardless of catalog count.
+// BatchList runs a snap HMGet plus a pipelined delta ZRange for every
+// catalog — 2 round-trips total regardless of catalog count.
 func (r *Reader) BatchList(ctx context.Context, catalogs []string, strictPending bool) map[string]*BatchListResult {
-	results := make(map[string]*BatchListResult, len(catalogs))
+	out := make(map[string]*BatchListResult, len(catalogs))
 	if len(catalogs) == 0 {
-		return results
+		return out
+	}
+	for _, c := range catalogs {
+		out[c] = &BatchListResult{}
 	}
 
-	// Initialize results
-	for _, catalog := range catalogs {
-		results[catalog] = &BatchListResult{}
-	}
-
-	// Phase 1: a single HMGet pulls every catalog's snap metadata from
-	// the deployment-wide "<prefix>:snaps" hash in one round-trip.
+	// Phase 1: HMGet on the global snaps hash.
 	snapVals, err := r.rdb.HMGet(ctx, r.MakeSnapsHashKey(), catalogs...).Result()
 	if err != nil && err != redis.Nil {
-		for _, catalog := range catalogs {
-			results[catalog].ReadResult = &ReadIndexResult{
-				Catalog: catalog,
-				Err:     fmt.Errorf("failed to get snapshots: %w", err),
-			}
+		for _, c := range catalogs {
+			out[c].ReadResult = &ReadIndexResult{Catalog: c, Err: fmt.Errorf("hmget snaps: %w", err)}
 		}
-		return results
+		return out
 	}
 	for i, raw := range snapVals {
-		catalog := catalogs[i]
-		if raw == nil {
-			continue // catalog has no snap yet
-		}
-		val, ok := raw.(string)
+		c := catalogs[i]
+		s, ok := raw.(string)
 		if !ok {
 			continue
 		}
-		stopTsSeq, err := DecodeSnapValue(val)
+		stop, err := DecodeSnapValue(s)
 		if err != nil {
-			results[catalog].ReadResult = &ReadIndexResult{
-				Catalog: catalog,
-				Err:     fmt.Errorf("failed to decode snapshot: %w", err),
-			}
+			out[c].ReadResult = &ReadIndexResult{Catalog: c, Err: fmt.Errorf("decode snap: %w", err)}
 			continue
 		}
-		results[catalog].Snap = &SnapInfo{StopTsSeq: stopTsSeq}
+		out[c].Snap = &SnapInfo{StopTsSeq: stop}
 	}
 
-	// Phase 2: Pipeline all delta queries
-	deltaPipe := r.rdb.Pipeline()
-	deltaCmds := make(map[string]*redis.ZSliceCmd, len(catalogs))
-	for _, catalog := range catalogs {
-		// Skip catalogs that already failed in phase 1
-		if results[catalog].ReadResult != nil && results[catalog].ReadResult.Err != nil {
+	// Phase 2: pipelined delta ZRange per catalog.
+	pipe := r.rdb.Pipeline()
+	cmds := make(map[string]*redis.ZSliceCmd, len(catalogs))
+	for _, c := range catalogs {
+		if out[c].ReadResult != nil && out[c].ReadResult.Err != nil {
 			continue
 		}
-		key := r.MakeDeltaZsetKey(catalog)
 		min := "-inf"
-		if snap := results[catalog].Snap; snap != nil {
-			min = fmt.Sprintf("(%.6f", snap.StopTsSeq.Score())
+		if out[c].Snap != nil {
+			min = fmt.Sprintf("(%.6f", out[c].Snap.StopTsSeq.Score())
 		}
-		deltaCmds[catalog] = deltaPipe.ZRangeByScoreWithScores(ctx, key, &redis.ZRangeBy{
-			Min: min,
-			Max: "+inf",
-		})
+		cmds[c] = pipe.ZRangeByScoreWithScores(ctx, r.MakeDeltaZsetKey(c), &redis.ZRangeBy{Min: min, Max: "+inf"})
 	}
-	deltaPipe.Exec(ctx)
-
-	// Process delta results
-	for catalog, cmd := range deltaCmds {
+	pipe.Exec(ctx)
+	for c, cmd := range cmds {
 		zs, err := cmd.Result()
 		if err != nil && err != redis.Nil {
-			results[catalog].ReadResult = &ReadIndexResult{
-				Catalog: catalog,
-				Err:     fmt.Errorf("failed to read deltas: %w", err),
-			}
+			out[c].ReadResult = &ReadIndexResult{Catalog: c, Err: fmt.Errorf("zrange: %w", err)}
 			continue
 		}
-		results[catalog].ReadResult = r.processZMembers(catalog, zs, strictPending)
+		out[c].ReadResult = r.processZMembers(c, zs, strictPending)
 	}
-
-	return results
+	return out
 }
 
-func (c *Reader) startRedisTimeUnixUpdater() {
-	go func() {
-		// Initial fetch so the first read sees a real value rather than 0.
-		if ts, err := c.getTimeUnix(context.Background()); err == nil {
-			c.redisTimeUnix.Store(ts)
+func (r *Reader) readRange(ctx context.Context, catalog, min, max string, strictPending bool) *ReadIndexResult {
+	zs, err := r.rdb.ZRangeByScoreWithScores(ctx, r.MakeDeltaZsetKey(catalog), &redis.ZRangeBy{Min: min, Max: max}).Result()
+	if err != nil {
+		return &ReadIndexResult{Catalog: catalog, Err: err}
+	}
+	return r.processZMembers(catalog, zs, strictPending)
+}
+
+// processZMembers parses zset entries into deltas and detects pending
+// writes. A pending member is "unresolved" if its age < 120s; if a
+// committed delta follows an unresolved pending the read is flagged
+// HasPending. With strictPending=true, any unresolved pending sets the
+// flag regardless of position.
+func (r *Reader) processZMembers(catalog string, zs []redis.Z, strictPending bool) *ReadIndexResult {
+	const timeoutSec = 120
+
+	var entries []DeltaInfo
+	var hasPending, sawUnresolvedPending bool
+	now := r.redisTimeUnix.Load()
+
+	for _, z := range zs {
+		member := z.Member.(string)
+		switch {
+		case IsPendingMember(member):
+			if now-int64(z.Score) > timeoutSec {
+				continue // abandoned
+			}
+			sawUnresolvedPending = true
+			if strictPending {
+				hasPending = true
+			}
+		case IsDeltaMember(member):
+			if sawUnresolvedPending {
+				hasPending = true
+			}
+			d, err := DecodeDeltaMember(member, z.Score)
+			if err != nil {
+				return &ReadIndexResult{Catalog: catalog, Err: fmt.Errorf("decode delta: %w", err)}
+			}
+			entries = append(entries, *d)
+		default:
+			return &ReadIndexResult{Catalog: catalog, Err: fmt.Errorf("unknown member %q", member)}
 		}
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-c.done:
-				return
-			case <-ticker.C:
-				if ts, err := c.getTimeUnix(context.Background()); err == nil {
-					c.redisTimeUnix.Store(ts)
-				}
+	}
+	return &ReadIndexResult{Catalog: catalog, Deltas: entries, HasPending: hasPending}
+}
+
+// timeUpdater pulls Redis TIME every 5s into redisTimeUnix.
+func (r *Reader) timeUpdater() {
+	if ts, err := r.serverUnix(context.Background()); err == nil {
+		r.redisTimeUnix.Store(ts)
+	}
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.done:
+			return
+		case <-ticker.C:
+			if ts, err := r.serverUnix(context.Background()); err == nil {
+				r.redisTimeUnix.Store(ts)
 			}
 		}
-	}()
+	}
 }
 
-func (w *Reader) getTimeUnix(ctx context.Context) (int64, error) {
-	result, err := w.rdb.Eval(ctx, `
-local timeResult = redis.call("TIME")
-local timestamp = timeResult[1]
-return tonumber(timestamp)`,
-		[]string{},
-	).Result()
-
+func (r *Reader) serverUnix(ctx context.Context) (int64, error) {
+	res, err := r.rdb.Eval(ctx, `return tonumber(redis.call("TIME")[1])`, nil).Result()
 	if err != nil {
-		return 0, fmt.Errorf("failed to get timeseq and precommit: %w", err)
+		return 0, err
 	}
-
-	// Parse result
-	timestamp, ok := result.(int64)
+	ts, ok := res.(int64)
 	if !ok {
-		return 0, fmt.Errorf("invalid timestamp type: %T", result)
+		return 0, fmt.Errorf("redis TIME returned %T, want int64", res)
 	}
-	return timestamp, nil
+	return ts, nil
 }
 

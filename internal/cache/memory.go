@@ -8,11 +8,10 @@ import (
 	"github.com/hkloudou/lake/v3/internal/xsync"
 )
 
-// MemoryCache implements Cache interface using an in-memory map with TTL.
-// Implements io.Closer-style Close for graceful shutdown.
+// MemoryCache is a process-local TTL cache. Close stops the cleanup loop.
 type MemoryCache struct {
 	mu        sync.RWMutex
-	data      map[string]*cacheEntry
+	data      map[string]cacheEntry
 	ttl       time.Duration
 	flight    xsync.SingleFlight[[]byte]
 	done      chan struct{}
@@ -24,10 +23,9 @@ type cacheEntry struct {
 	expireTime time.Time
 }
 
-// NewMemoryCache creates a new memory cache with TTL support.
 func NewMemoryCache(ttl time.Duration) *MemoryCache {
 	c := &MemoryCache{
-		data:   make(map[string]*cacheEntry),
+		data:   make(map[string]cacheEntry),
 		ttl:    ttl,
 		flight: xsync.NewSingleFlight[[]byte](),
 		done:   make(chan struct{}),
@@ -38,70 +36,47 @@ func NewMemoryCache(ttl time.Duration) *MemoryCache {
 
 // Close stops the background cleanup goroutine. Idempotent.
 func (c *MemoryCache) Close() error {
-	c.closeOnce.Do(func() {
-		close(c.done)
-	})
+	c.closeOnce.Do(func() { close(c.done) })
 	return nil
 }
 
-// Take implements Cache interface with SingleFlight
 func (c *MemoryCache) Take(ctx context.Context, namespace, key string, loader func() ([]byte, error)) ([]byte, error) {
 	cacheKey := namespace + ":" + key
-	// Use SingleFlight to prevent cache stampede
 	return c.flight.Do(cacheKey, func() ([]byte, error) {
-		// Check cache first
 		c.mu.RLock()
-		if entry, ok := c.data[cacheKey]; ok {
-			if time.Now().Before(entry.expireTime) {
-				// Cache hit
-				c.mu.RUnlock()
-				return entry.value, nil
-			}
-		}
+		e, ok := c.data[cacheKey]
 		c.mu.RUnlock()
-
-		// Cache miss, call loader
+		if ok && time.Now().Before(e.expireTime) {
+			return e.value, nil
+		}
 		data, err := loader()
 		if err != nil {
 			return nil, err
 		}
-
-		// Store in cache with TTL
 		c.mu.Lock()
-		c.data[cacheKey] = &cacheEntry{
-			value:      data,
-			expireTime: time.Now().Add(c.ttl),
-		}
+		c.data[cacheKey] = cacheEntry{value: data, expireTime: time.Now().Add(c.ttl)}
 		c.mu.Unlock()
-
 		return data, nil
 	})
 }
 
-// cleanupLoop periodically removes expired entries until Close is called.
+// cleanupLoop sweeps expired entries every minute until Close.
 func (c *MemoryCache) cleanupLoop() {
-	ticker := time.NewTicker(1 * time.Minute)
-	defer ticker.Stop()
+	t := time.NewTicker(1 * time.Minute)
+	defer t.Stop()
 	for {
 		select {
 		case <-c.done:
 			return
-		case <-ticker.C:
-			c.cleanup()
-		}
-	}
-}
-
-// cleanup removes expired entries
-func (c *MemoryCache) cleanup() {
-	now := time.Now()
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	for key, entry := range c.data {
-		if now.After(entry.expireTime) {
-			delete(c.data, key)
+		case <-t.C:
+			now := time.Now()
+			c.mu.Lock()
+			for k, e := range c.data {
+				if now.After(e.expireTime) {
+					delete(c.data, k)
+				}
+			}
+			c.mu.Unlock()
 		}
 	}
 }

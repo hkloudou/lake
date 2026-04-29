@@ -1,43 +1,10 @@
 package storage
 
-/*
-Directory Structure Design Philosophy (OSS/Object Storage):
-
-Object storage (OSS/S3/MinIO) is fundamentally different from traditional filesystems:
-  - No real "directories" - keys are flat strings with "/" as part of the name
-  - No performance penalty for millions of objects under same prefix
-  - Direct key access (Get/Put) is O(1) regardless of prefix depth or sibling count
-
-Design Goals:
-  1. Short key length (reduces storage cost and request size)
-  2. Uniform distribution (avoid hot partitions)
-  3. Enable lifecycle management via Redis (not via prefix)
-  4. Keep structure simple since directory count doesn't matter
-
-Structure: {md5[0:4]}/{hex(catalog)}/{file}
-Example:   f9aa/5573657273/1700000000_123_1.dat
-
-Breakdown:
-  - md5[0:4]: 65,536 shards (distributed storage load balancing, avoid hot spots)
-  - hex(catalog): Catalog identifier (encoded for OSS path safety)
-  - file: Direct filename with timestamp (no yearMonth - lifecycle managed by Redis)
-
-Why NO yearMonth:
-  - Cleanup is handled by Redis index (knows exact keys to delete)
-  - No List operations on OSS (all keys come from Redis)
-  - Infinite accumulation is fine - object storage handles billions of objects
-  - Adding yearMonth would only increase key length without benefit
-
-Why NO hash sharding on filename:
-  - Not needed - object storage has no "files per directory" limit
-  - Direct key access doesn't care about sibling count
-  - Simpler structure = shorter keys = lower cost
-
-Performance:
-  - Direct access: O(1) regardless of total objects
-  - List by prefix: Rarely used (keys come from Redis)
-  - Billions of objects: No problem for object storage
-*/
+// OSS key layout: "{md5(catalog)[0:4]}/{encodedCatalog}/{filename}".
+// MD5 prefix gives 65,536 hot-spot-free shards; encodedCatalog keeps
+// each tenant's prefix human-readable for OSS LIST / lifecycle / billing
+// at the catalog level. No depth-based directory sharding — object
+// stores have no per-prefix object-count penalty.
 
 import (
 	"bytes"
@@ -49,252 +16,166 @@ import (
 	"io"
 	"os"
 	"strings"
-	"sync"
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/hkloudou/lake/v3/internal/encrypt"
 	"github.com/hkloudou/lake/v3/internal/index"
 )
 
-// OSSStorage implements Storage interface for Aliyun OSS
 type ossStorage struct {
 	name     string
-	client   *oss.Client
 	bucket   *oss.Bucket
 	endpoint string
-	aesKey   []byte // AES encryption key
-	mu       sync.RWMutex
+	aesKey   []byte
 }
 
-// OSSConfig holds OSS configuration
+// OSSConfig holds OSS configuration.
 type OSSConfig struct {
 	Name      string
-	Endpoint  string // OSS endpoint (e.g., "oss-cn-hangzhou")
-	Bucket    string // Bucket name
-	AccessKey string // Access key
-	SecretKey string // Secret key
-	AESKey    string // AES encryption key
-	Internal  bool   // Use internal endpoint
+	Endpoint  string // e.g. "oss-cn-hangzhou"; "-internal" appended in FC
+	Bucket    string
+	AccessKey string
+	SecretKey string
+	AESKey    string
+	Internal  bool // force internal endpoint suffix
 }
 
-// NewOSSStorage creates a new OSS storage instance
+// NewOSSStorage builds an OSS-backed Storage. The endpoint may be a
+// short region ("oss-cn-hangzhou") which is expanded to a full URL; if
+// the FC_REGION env var matches the endpoint and the endpoint is not
+// already internal, "-internal" is appended automatically.
 func NewOSSStorage(cfg OSSConfig) (*ossStorage, error) {
-	// Build endpoint URL
 	endpoint := cfg.Endpoint
 	if cfg.Internal {
-		endpoint = endpoint + "-internal"
+		endpoint += "-internal"
 	}
 	if !strings.HasPrefix(endpoint, "http") {
-		// step1: check if FC_REGION is set and if the endpoint contains the FC_REGION and the endpoint does not contain -internal
-		fcRegion := os.Getenv("FC_REGION")
-		if fcRegion != "" && strings.Contains(endpoint, fcRegion) && !strings.Contains(endpoint, "-internal") {
-			endpoint = endpoint + "-internal"
+		if r := os.Getenv("FC_REGION"); r != "" && strings.Contains(endpoint, r) && !strings.Contains(endpoint, "-internal") {
+			endpoint += "-internal"
 		}
-
-		//end step: fill the endpoint with the region
-		endpoint = fmt.Sprintf("https://%s.aliyuncs.com", endpoint)
+		endpoint = "https://" + endpoint + ".aliyuncs.com"
 	}
-
-	// Create OSS client
 	client, err := oss.New(endpoint, cfg.AccessKey, cfg.SecretKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create OSS client: %w", err)
+		return nil, fmt.Errorf("oss client: %w", err)
 	}
-
-	// Get bucket
 	bucket, err := client.Bucket(cfg.Bucket)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get bucket: %w", err)
+		return nil, fmt.Errorf("oss bucket: %w", err)
 	}
-
 	return &ossStorage{
-		client:   client,
-		bucket:   bucket,
 		name:     cfg.Name,
+		bucket:   bucket,
 		endpoint: endpoint,
 		aesKey:   []byte(cfg.AESKey),
 	}, nil
 }
 
-// Put stores data with the given key (with compression and AES encryption)
 func (s *ossStorage) Put(ctx context.Context, key string, data []byte) error {
-	s.mu.RLock()
-	bucket := s.bucket
-	aesKey := s.aesKey
-	s.mu.RUnlock()
-
-	// Compress and encrypt data
-	dataToWrite, err := encrypt.Encrypt(data, aesKey)
+	enc, err := encrypt.Encrypt(data, s.aesKey)
 	if err != nil {
 		return err
 	}
-
-	return bucket.PutObject(key, bytes.NewReader(dataToWrite))
+	return s.bucket.PutObject(key, bytes.NewReader(enc))
 }
 
-// Get retrieves data by key (with AES decryption and decompression)
 func (s *ossStorage) Get(ctx context.Context, key string) ([]byte, error) {
-	s.mu.RLock()
-	bucket := s.bucket
-	aesKey := s.aesKey
-	s.mu.RUnlock()
-
-	reader, err := bucket.GetObject(key)
+	r, err := s.bucket.GetObject(key)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get object: %w", err)
+		return nil, fmt.Errorf("get %s: %w", key, err)
 	}
-	defer reader.Close()
-
-	data, err := io.ReadAll(reader)
+	defer r.Close()
+	data, err := io.ReadAll(r)
 	if err != nil {
 		return nil, err
 	}
-
-	// Decrypt and decompress data
-	return encrypt.Decrypt(data, aesKey)
+	return encrypt.Decrypt(data, s.aesKey)
 }
 
-// Delete removes data by key
-// Returns nil if the object doesn't exist (idempotent delete)
 func (s *ossStorage) Delete(ctx context.Context, key string) error {
-	s.mu.RLock()
-	bucket := s.bucket
-	s.mu.RUnlock()
-
-	err := bucket.DeleteObject(key)
-	if err != nil {
-		// Check if error is "object not found" - treat as success (idempotent)
-		if ossErr, ok := err.(oss.ServiceError); ok {
-			if ossErr.StatusCode == 404 || ossErr.Code == "NoSuchKey" {
-				return nil
-			}
+	if err := s.bucket.DeleteObject(key); err != nil {
+		if e, ok := err.(oss.ServiceError); ok && (e.StatusCode == 404 || e.Code == "NoSuchKey") {
+			return nil
 		}
 		return err
 	}
 	return nil
 }
 
-// Exists checks if key exists
 func (s *ossStorage) Exists(ctx context.Context, key string) (bool, error) {
-	s.mu.RLock()
-	bucket := s.bucket
-	s.mu.RUnlock()
-
-	exists, err := bucket.IsObjectExist(key)
-	if err != nil {
-		return false, fmt.Errorf("failed to check existence: %w", err)
-	}
-	return exists, nil
+	return s.bucket.IsObjectExist(key)
 }
 
-// List lists all keys with the given prefix
 func (s *ossStorage) List(ctx context.Context, prefix string) ([]string, error) {
-	s.mu.RLock()
-	bucket := s.bucket
-	s.mu.RUnlock()
-
 	var keys []string
 	marker := ""
-
 	for {
-		result, err := bucket.ListObjects(oss.Prefix(prefix), oss.Marker(marker))
+		res, err := s.bucket.ListObjects(oss.Prefix(prefix), oss.Marker(marker))
 		if err != nil {
-			return nil, fmt.Errorf("failed to list objects: %w", err)
+			return nil, fmt.Errorf("list %s: %w", prefix, err)
 		}
-
-		for _, obj := range result.Objects {
-			keys = append(keys, obj.Key)
+		for _, o := range res.Objects {
+			keys = append(keys, o.Key)
 		}
-
-		if !result.IsTruncated {
-			break
+		if !res.IsTruncated {
+			return keys, nil
 		}
-		marker = result.NextMarker
+		marker = res.NextMarker
 	}
-
-	return keys, nil
 }
 
-func (s *ossStorage) RedisPrefix() string {
-	// Tenancy is keyed by Name only; backend type is not part of the
-	// Redis namespace so cache and seqid space are shared correctly when
-	// the same Name is reused across configurations.
-	return s.name
+// RedisPrefix is the deployment Name; tenancy is keyed by Name only,
+// not backend type, so cache / seqid spaces stay consistent across
+// configs.
+func (s *ossStorage) RedisPrefix() string { return s.name }
+
+func (s *ossStorage) MakeDeltaKey(catalog string, ts index.TimeSeqID, mergeType int) string {
+	return fmt.Sprintf("%s/%s_%d.dat", encodeOssCatalogPath(catalog, 4), ts, mergeType)
 }
 
-// MakeDeltaKey generates storage key for data files with MD5-sharded path
-// Format: {md5[0:4]}/{hex(catalog)}/{ts}_{seqid}_{mergeTypeInt}.dat
-// Example: f9aa/5573657273/1700000000_123_1.dat (for catalog "Users")
-func (s *ossStorage) MakeDeltaKey(catalog string, tsSeqID index.TimeSeqID, mergeType int) string {
-	shardedPath := encodeOssCatalogPath(catalog, 4) // Default: 4-char MD5 prefix (65,536 dirs)
-	return fmt.Sprintf("%s/%s_%d.dat", shardedPath, tsSeqID.String(), mergeType)
+func (s *ossStorage) MakeSnapKey(catalog string, stop index.TimeSeqID) string {
+	return fmt.Sprintf("%s/%s.snap", encodeOssCatalogPath(catalog, 4), stop)
 }
 
-// MakeSnapKey generates storage key for snapshot files with MD5-sharded path.
-// Format: {md5[0:4]}/{hex(catalog)}/{stopTsSeq}.snap
-// Example: f9aa/5573657273/1700000100_500.snap
-func (s *ossStorage) MakeSnapKey(catalog string, stopTsSeq index.TimeSeqID) string {
-	shardedPath := encodeOssCatalogPath(catalog, 4)
-	return fmt.Sprintf("%s/%s.snap", shardedPath, stopTsSeq.String())
-}
-
-// encodeOssCatalogPath generates OSS path with MD5 sharding
-// Format: md5(catalog)[0:shardSize]/EncodeOssCatalogName(catalog)
+// encodeOssCatalogPath: "{md5[0:shardSize]}/{encodeOssCatalogName(catalog)}".
 func encodeOssCatalogPath(catalog string, shardSize int) string {
 	hash := md5.Sum([]byte(catalog))
-	md5Prefix := hex.EncodeToString(hash[:])[0:shardSize]
-	catalogEncoded := encodeOssCatalogName(catalog)
-	return md5Prefix + "/" + catalogEncoded
+	return hex.EncodeToString(hash[:])[0:shardSize] + "/" + encodeOssCatalogName(catalog)
 }
 
-// IsOssLowerSafe checks if catalog contains only lowercase safe characters
-// Allows: a-z, 0-9, -, _, /, .
-func isOssLowerSafe(catalog string) bool {
-	if len(catalog) == 0 {
-		return false
-	}
-	for _, r := range catalog {
-		if !((r >= 'a' && r <= 'z') ||
-			(r >= '0' && r <= '9') ||
-			r == '-' || r == '_' || r == '/' || r == '.') {
-			return false
-		}
-	}
-	return true
-}
-
-// IsOssUpperSafe checks if catalog contains only uppercase safe characters
-// Allows: A-Z, 0-9, -, _, /, .
-func isOssUpperSafe(catalog string) bool {
-	if len(catalog) == 0 {
-		return false
-	}
-	for _, r := range catalog {
-		if !((r >= 'A' && r <= 'Z') ||
-			(r >= '0' && r <= '9') ||
-			r == '-' || r == '_' || r == '/' || r == '.') {
-			return false
-		}
-	}
-	return true
-}
-
-// encodeOssCatalogName encodes catalog name for OSS paths
-// Returns the encoded name with prefix for type identification
+// encodeOssCatalogName encodes a catalog name for OSS paths.
+//
+// Three forms, distinguished by a 1-byte type marker:
+//   - "(<name>"   pure lowercase + safe chars (a-z 0-9 - _ / .)
+//   - ")<NAME>"   pure uppercase + safe chars
+//   - "<base32>"  mixed-case or non-ASCII (lowercased base32, no padding)
+//
+// The marker resolves the case-insensitive collision risk on filesystems
+// like macOS HFS+/NTFS that may underlie a "file" backend.
 func encodeOssCatalogName(catalog string) string {
-	// Check if all lowercase safe
-	if isOssLowerSafe(catalog) {
-		// Prefix: ( for lowercase
+	if isOssCaseSafe(catalog, 'a', 'z') {
 		return "(" + catalog
 	}
-
-	// Check if all uppercase safe
-	if isOssUpperSafe(catalog) {
-		// Prefix: ) for uppercase
+	if isOssCaseSafe(catalog, 'A', 'Z') {
 		return ")" + catalog
 	}
+	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString([]byte(catalog)))
+}
 
-	// Mixed case or unsafe characters: use base32 lowercase
-	encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString([]byte(catalog))
-	return strings.ToLower(encoded)
+// isOssCaseSafe checks catalog uses only the given letter case plus
+// digits and "-_/."; returns false on empty input.
+func isOssCaseSafe(catalog string, lo, hi rune) bool {
+	if catalog == "" {
+		return false
+	}
+	for _, r := range catalog {
+		switch {
+		case r >= lo && r <= hi:
+		case r >= '0' && r <= '9':
+		case r == '-', r == '_', r == '/', r == '.':
+		default:
+			return false
+		}
+	}
+	return true
 }

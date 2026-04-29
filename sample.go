@@ -9,56 +9,22 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// ErrPendingWrites is returned when a Sample/Read is attempted on a list whose
+// ErrPendingWrites is returned when a Sample/Read sees a list whose
 // index contains a pending write that may affect the result.
 var ErrPendingWrites = errors.New("pending writes detected")
 
-// marshalSampleCache serializes [score, data] as a JSON array.
-func marshalSampleCache[T any](score float64, data T) ([]byte, error) {
-	return json.Marshal([2]any{score, data})
-}
-
-// unmarshalSampleCache deserializes [score, data] from a JSON array.
-func unmarshalSampleCache[T any](raw []byte) (float64, T, error) {
-	var arr [2]json.RawMessage
-	var zero T
-	if err := json.Unmarshal(raw, &arr); err != nil {
-		return 0, zero, err
-	}
-	var score float64
-	if err := json.Unmarshal(arr[0], &score); err != nil {
-		return 0, zero, err
-	}
-	var data T
-	if err := json.Unmarshal(arr[1], &data); err != nil {
-		return 0, zero, err
-	}
-	return score, data, nil
-}
-
-// Sample returns the cached sampling result of type T for the given indicator
-// applied to the catalog represented by list. If the catalog has changed since
-// the last sample (compared by ListResult.LastUpdated), loader is invoked to
-// produce a fresh value, which is then cached for future calls.
+// Sample returns the cached sample of type T for the given indicator
+// applied to list's catalog. If the catalog changed since the last
+// sample (compared by ListResult.LastUpdated), loader is invoked and
+// the new value is cached for future calls.
 //
-// indicator distinguishes different sampling dimensions for the same catalog
-// (e.g. "report", "summary", "stats"). All catalogs sharing an indicator live
-// inside the same Redis Hash "<prefix>:samples:<indicator>", with the catalog
-// name as the field, making indicator-wide operations cheap.
-//
-// Usage:
-//
-//	list := client.List(ctx, "users")
-//	report, err := lake.Sample[Report](ctx, list, "daily", func(l *ListResult) (Report, error) {
-//	    data, err := lake.ReadMap(ctx, l)
-//	    if err != nil { return Report{}, err }
-//	    return buildReport(data), nil
-//	})
+// Storage layout: all catalogs sharing one indicator live inside
+// "<prefix>:samples:<indicator>" Hash, with catalog as field and
+// "[score, data]" JSON as value. Indicator-wide bulk operations stay
+// single-key.
 func Sample[T any](ctx context.Context, list *ListResult, indicator string, loader func(*ListResult) (T, error)) (T, error) {
 	var zero T
 
-	// Event contract: emit before any early return so EventHandlers see
-	// every Sample call attempt, including pending-write rejections.
 	c := list.client
 	c.emitEvent(list.catalog, "Sample", map[string]any{"indicator": indicator})
 
@@ -76,46 +42,55 @@ func Sample[T any](ctx context.Context, list *ListResult, indicator string, load
 	hashKey := c.reader.MakeSampleIndicatorKey(indicator)
 	field := list.catalog
 
-	// Single HGET: [score, data] atomic per (indicator, catalog).
-	cached, err := c.rdb.HGet(ctx, hashKey, field).Bytes()
-	if err == nil {
-		score, data, unmarshalErr := unmarshalSampleCache[T](cached)
-		if unmarshalErr == nil && score >= lastUpdated && score > 0 {
+	// Cache hit fast-path: one HGET; values are "[score, data]" JSON arrays.
+	if cached, err := c.rdb.HGet(ctx, hashKey, field).Bytes(); err == nil {
+		if score, data, derr := unmarshalSampleCache[T](cached); derr == nil && score >= lastUpdated && score > 0 {
 			return data, nil
 		}
-		// Score stale or unmarshal failed — fall through to reload.
 	} else if err != redis.Nil {
 		return zero, err
 	}
 
-	// Data changed or no cache — invoke loader under SingleFlight to dedupe
-	// concurrent loaders for the same (catalog, indicator, score).
-	// sampleFlight has its own namespace, so no prefix is needed here.
-	singleFlightKey := fmt.Sprintf("%s:%s:%.6f", list.catalog, indicator, lastUpdated)
-	resultBytes, err := c.sampleFlight.Do(singleFlightKey, func() (string, error) {
+	// Cache miss / stale: SingleFlight-deduped loader on (catalog, indicator, score).
+	flightKey := fmt.Sprintf("%s:%s:%.6f", list.catalog, indicator, lastUpdated)
+	resultBytes, err := c.sampleFlight.Do(flightKey, func() (string, error) {
 		result, err := loader(list)
 		if err != nil {
 			return "", err
 		}
-
 		data, err := marshalSampleCache(lastUpdated, result)
 		if err != nil {
-			return "", fmt.Errorf("failed to marshal sample result: %w", err)
+			return "", fmt.Errorf("marshal sample: %w", err)
 		}
-
 		if err := c.rdb.HSet(ctx, hashKey, field, data).Err(); err != nil {
-			return "", fmt.Errorf("failed to write sample cache: %w", err)
+			return "", fmt.Errorf("hset sample: %w", err)
 		}
-
 		return string(data), nil
 	})
 	if err != nil {
 		return zero, err
 	}
-
 	_, result, err := unmarshalSampleCache[T]([]byte(resultBytes))
-	if err != nil {
-		return zero, err
+	return result, err
+}
+
+func marshalSampleCache[T any](score float64, data T) ([]byte, error) {
+	return json.Marshal([2]any{score, data})
+}
+
+func unmarshalSampleCache[T any](raw []byte) (float64, T, error) {
+	var arr [2]json.RawMessage
+	var zero T
+	if err := json.Unmarshal(raw, &arr); err != nil {
+		return 0, zero, err
 	}
-	return result, nil
+	var score float64
+	if err := json.Unmarshal(arr[0], &score); err != nil {
+		return 0, zero, err
+	}
+	var data T
+	if err := json.Unmarshal(arr[1], &data); err != nil {
+		return 0, zero, err
+	}
+	return score, data, nil
 }

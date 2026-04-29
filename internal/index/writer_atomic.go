@@ -7,121 +7,80 @@ import (
 	"github.com/hkloudou/lake/v3/internal/encode"
 )
 
-// getTimeSeqIDAndPreCommitScript atomically generates a (timestamp, seqid)
-// pair, ZADDs a pending delta member, and returns both the pair and the
-// pending member string.
+// getTimeSeqIDAndPreCommitScript atomically allocates a TimeSeqID,
+// pre-commits a pending delta member, and returns
+// {timestamp, seqid, member}.
 //
-// The seqid counter is namespaced by ARGV[3] (the deployment's Redis
-// prefix, i.e. lake.setting Name). This makes the seqid space tenant-
-// scoped: two Lake deployments sharing the same Redis but using different
-// Names get independent 999,999/sec budgets per (catalog, second).
+// The seqid counter is namespaced by ARGV[3] (deployment prefix /
+// lake.setting Name) so multiple deployments sharing one Redis under
+// different Names get independent 999,999/sec budgets.
 const getTimeSeqIDAndPreCommitScript = `
--- KEYS[1]: encoded catalog name
--- KEYS[2]: delta zset key
--- ARGV[1]: fieldPath
--- ARGV[2]: mergeType
--- ARGV[3]: prefix (deployment-level namespace)
+local catalog, zaddKey = KEYS[1], KEYS[2]
+local fieldPath, mergeType, prefix = ARGV[1], ARGV[2], ARGV[3]
 
-local catalog = KEYS[1]
-local zaddKey = KEYS[2]
-local fieldPath = ARGV[1]
-local mergeType = ARGV[2]
-local prefix = ARGV[3]
-
-local timestamp = redis.call("TIME")[1]
-local seqKey = prefix .. ":seqid:" .. catalog .. ":" .. timestamp
-
-local setResult = redis.call("SETNX", seqKey, "0")
-if setResult == 1 then
-    redis.call("EXPIRE", seqKey, 5)
+local ts = redis.call("TIME")[1]
+local seqKey = prefix .. ":seqid:" .. catalog .. ":" .. ts
+if redis.call("SETNX", seqKey, "0") == 1 then
+  redis.call("EXPIRE", seqKey, 5)
 end
-
 local seqid = redis.call("INCR", seqKey)
-
 if seqid > 999999 then
-    return redis.error_reply("seqid overflow: " .. seqid .. " > 999999 (max writes per second reached)")
+  return redis.error_reply("seqid overflow: " .. seqid .. " > 999999 (max writes/sec)")
 end
 
-local tsSeq = timestamp .. "_" .. seqid
+local tsSeq  = ts .. "_" .. seqid
 local member = "pending|delta|" .. mergeType .. "|" .. fieldPath .. "|" .. tsSeq
-local score = tonumber(timestamp) + (tonumber(seqid) / 1000000.0)
+local score  = tonumber(ts) + (tonumber(seqid) / 1000000.0)
 
 redis.call("ZADD", zaddKey, score, member)
-
-return {tonumber(timestamp), seqid, member}
+return {tonumber(ts), seqid, member}
 `
 
-// commitScript atomically removes the pending member and adds the committed one.
+// commitScript atomically swaps a pending delta member for its committed form.
 const commitScript = `
--- KEYS[1]: delta zset key
--- ARGV[1]: pending member
--- ARGV[2]: committed member
--- ARGV[3]: score
-
 local key = KEYS[1]
-local pendingMember = ARGV[1]
-local committedMember = ARGV[2]
-local score = tonumber(ARGV[3])
-
-redis.call("ZADD", key, score, committedMember)
-redis.call("ZREM", key, pendingMember)
-
+redis.call("ZADD", key, tonumber(ARGV[3]), ARGV[2])
+redis.call("ZREM", key, ARGV[1])
 return "OK"
 `
 
-// GetTimeSeqIDAndPreCommit atomically generates TimeSeqID and pre-commits to Redis.
-// Returns TimeSeqID and pending member string.
-//
-// The seqid counter is namespaced by w.prefix (deployment Name) so that
-// multiple Lake deployments sharing one Redis do not contend for the same
-// per-second seqid budget.
+// GetTimeSeqIDAndPreCommit allocates a TimeSeqID and writes the
+// pending delta member. Returns the assigned tsSeq and the pending
+// member string used by Commit / Rollback.
 func (w *Writer) GetTimeSeqIDAndPreCommit(ctx context.Context, catalog, fieldPath string, mergeType MergeType) (TimeSeqID, string, error) {
 	if w.prefix == "" {
-		return TimeSeqID{}, "", fmt.Errorf("writer prefix not set; call SetPrefix before write operations")
+		return TimeSeqID{}, "", fmt.Errorf("writer prefix not set; call SetPrefix")
 	}
-	encodedCatalog := encode.EncodeRedisCatalogName(catalog)
-	zaddKey := w.MakeDeltaZsetKey(catalog)
-
-	result, err := w.rdb.Eval(ctx, getTimeSeqIDAndPreCommitScript,
-		[]string{encodedCatalog, zaddKey},
-		fieldPath, int(mergeType), w.prefix).Result()
-
+	res, err := w.rdb.Eval(ctx, getTimeSeqIDAndPreCommitScript,
+		[]string{encode.EncodeRedisCatalogName(catalog), w.MakeDeltaZsetKey(catalog)},
+		fieldPath, int(mergeType), w.prefix,
+	).Result()
 	if err != nil {
-		return TimeSeqID{}, "", fmt.Errorf("failed to get timeseq and precommit: %w", err)
+		return TimeSeqID{}, "", fmt.Errorf("precommit eval: %w", err)
 	}
-
-	arr, ok := result.([]interface{})
+	arr, ok := res.([]any)
 	if !ok || len(arr) != 3 {
-		return TimeSeqID{}, "", fmt.Errorf("unexpected result format: %v", result)
+		return TimeSeqID{}, "", fmt.Errorf("unexpected precommit result: %v", res)
 	}
-
-	timestamp, ok := arr[0].(int64)
-	if !ok {
-		return TimeSeqID{}, "", fmt.Errorf("invalid timestamp type: %T", arr[0])
+	ts, ok1 := arr[0].(int64)
+	seq, ok2 := arr[1].(int64)
+	member, ok3 := arr[2].(string)
+	if !ok1 || !ok2 || !ok3 {
+		return TimeSeqID{}, "", fmt.Errorf("unexpected precommit types: %T,%T,%T", arr[0], arr[1], arr[2])
 	}
-	seqid, ok := arr[1].(int64)
-	if !ok {
-		return TimeSeqID{}, "", fmt.Errorf("invalid seqid type: %T", arr[1])
-	}
-	pendingMember, ok := arr[2].(string)
-	if !ok {
-		return TimeSeqID{}, "", fmt.Errorf("invalid pending member type: %T", arr[2])
-	}
-
-	return TimeSeqID{Timestamp: timestamp, SeqID: seqid}, pendingMember, nil
+	return TimeSeqID{Timestamp: ts, SeqID: seq}, member, nil
 }
 
-// Rollback removes a pending member from Redis (used when storage write fails)
+// Rollback removes a pending member. Used when storage Put fails.
 func (w *Writer) Rollback(ctx context.Context, catalog, pendingMember string) error {
-	zaddKey := w.MakeDeltaZsetKey(catalog)
-	return w.rdb.ZRem(ctx, zaddKey, pendingMember).Err()
+	return w.rdb.ZRem(ctx, w.MakeDeltaZsetKey(catalog), pendingMember).Err()
 }
 
-// Commit atomically commits a pending write.
+// Commit atomically swaps pending → committed.
 func (w *Writer) Commit(ctx context.Context, catalog, pendingMember, committedMember string, score float64) error {
-	zaddKey := w.MakeDeltaZsetKey(catalog)
 	_, err := w.rdb.Eval(ctx, commitScript,
-		[]string{zaddKey},
-		pendingMember, committedMember, score).Result()
+		[]string{w.MakeDeltaZsetKey(catalog)},
+		pendingMember, committedMember, score,
+	).Result()
 	return err
 }

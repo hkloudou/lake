@@ -2,22 +2,22 @@ package index
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/hkloudou/lake/v3/internal/utils"
 )
 
-// MergeType defines how to merge values
+// MergeType selects how a Write merges into the existing document.
 type MergeType int
 
 const (
-	MergeTypeUnknown MergeType = 0 // Unknown merge type
-	MergeTypeReplace MergeType = 1 // Replace existing value (simple set)
-	MergeTypeRFC7396 MergeType = 2 // RFC 7396 JSON Merge Patch
-	MergeTypeRFC6902 MergeType = 3 // RFC 6902 JSON Patch
+	MergeTypeUnknown MergeType = 0
+	MergeTypeReplace MergeType = 1 // simple field set
+	MergeTypeRFC7396 MergeType = 2 // JSON Merge Patch
+	MergeTypeRFC6902 MergeType = 3 // JSON Patch
 )
 
-// String returns the string representation
 func (m MergeType) String() string {
 	switch m {
 	case MergeTypeReplace:
@@ -31,121 +31,72 @@ func (m MergeType) String() string {
 	}
 }
 
-// MergeTypeFromInt converts int to MergeType
+// MergeTypeFromInt converts the wire integer into a MergeType,
+// returning MergeTypeUnknown for anything outside 1..3.
 func MergeTypeFromInt(i int) MergeType {
-	switch i {
-	case 1:
-		return MergeTypeReplace
-	case 2:
-		return MergeTypeRFC7396
-	case 3:
-		return MergeTypeRFC6902
-	default:
+	if i < 1 || i > 3 {
 		return MergeTypeUnknown
 	}
+	return MergeType(i)
 }
 
-// EncodeDeltaMember encodes field, mergeType and tsSeq into Redis ZADD member format
-// Format: "delta|{mergeType}|{field}|{tsSeq}"
-// Example: "delta|1|/user/name|1700000000_1"
-// Note: tsSeq is required for snapshot time-range merging and keeping history
+// EncodeDeltaMember formats a delta zset member: "delta|{type}|{path}|{tsSeq}".
 func EncodeDeltaMember(field string, mergeType MergeType, tsSeq TimeSeqID) string {
-	return fmt.Sprintf("delta|%d|%s|%s", mergeType, field, tsSeq.String())
+	return fmt.Sprintf("delta|%d|%s|%s", mergeType, field, tsSeq)
 }
 
-// DecodeDeltaMember decodes Redis ZADD entry into DeltaInfo
-// Format: "delta|{mergeType}|{field}|{tsSeq}"
-// Validates all fields and verifies tsSeq.Score() matches score
+// DecodeDeltaMember parses a delta member and verifies its score matches
+// the embedded tsSeq (data-integrity check).
 func DecodeDeltaMember(member string, score float64) (*DeltaInfo, error) {
-
-	// Split by "|" delimiter
 	parts := strings.Split(member, "|")
-	if len(parts) != 4 {
-		return nil, fmt.Errorf("invalid member format (expected 4 parts): %s", member)
+	if len(parts) != 4 || parts[0] != "delta" {
+		return nil, fmt.Errorf("invalid delta member %q", member)
 	}
-
-	if parts[0] != "delta" {
-		return nil, fmt.Errorf("invalid member prefix (expected 'delta'): %s", parts[0])
+	mt, err := strconv.Atoi(parts[1])
+	if err != nil || mt < 1 || mt > 3 {
+		return nil, fmt.Errorf("invalid merge type in %q", member)
 	}
-
-	// Parse merge type
-	var mergeTypeInt int
-	_, err := fmt.Sscanf(parts[1], "%d", &mergeTypeInt)
-	if err != nil {
-		return nil, fmt.Errorf("invalid merge type: %s", parts[1])
+	if err := utils.ValidateFieldPath(parts[2]); err != nil {
+		return nil, fmt.Errorf("invalid path in %q: %w", member, err)
 	}
-
-	// Validate merge type range (1: Replace, 2: RFC7396, 3: RFC6902)
-	if mergeTypeInt < 1 || mergeTypeInt > 3 {
-		return nil, fmt.Errorf("invalid merge type: %d (must be 1-3)", mergeTypeInt)
-	}
-
-	fieldPath := parts[2]
-	if err := utils.ValidateFieldPath(fieldPath); err != nil {
-		return nil, fmt.Errorf("invalid field path: %w", err)
-	}
-
-	// Parse tsSeq
 	tsSeq, err := ParseTimeSeqID(parts[3])
 	if err != nil {
-		return nil, fmt.Errorf("invalid tsSeq: %w", err)
+		return nil, fmt.Errorf("invalid tsSeq in %q: %w", member, err)
 	}
-
-	// Verify tsSeq matches score (data integrity check)
 	if tsSeq.Score() != score {
-		return nil, fmt.Errorf("data integrity error: tsSeq in member %q (score=%.6f) doesn't match Redis score (%.6f)", member, tsSeq.Score(), score)
+		return nil, fmt.Errorf("score mismatch in %q (member=%.6f, redis=%.6f)", member, tsSeq.Score(), score)
 	}
-
 	return &DeltaInfo{
 		Member:    member,
 		Score:     score,
-		Path:      fieldPath,
+		Path:      parts[2],
 		TsSeq:     tsSeq,
-		MergeType: MergeTypeFromInt(mergeTypeInt),
+		MergeType: MergeTypeFromInt(mt),
 	}, nil
 }
 
-// EncodeSnapValue encodes a snap's stop TimeSeqID as the value stored
-// under the "<prefix>:snaps" Redis Hash, keyed by catalog. Format:
-//
-//	"{stopTsSeq}"     e.g. "1700000100_500"
-//
-// V3 stores only the stop point — the snap's "start" is purely an OSS
-// filename concern in earlier drafts and carries no read-path meaning
-// (deltas after stopTsSeq are merged on top of the snap; the start
-// point of the snap itself is irrelevant).
-func EncodeSnapValue(stopTsSeq TimeSeqID) string {
-	return stopTsSeq.String()
-}
+// EncodeSnapValue / DecodeSnapValue handle the value stored under the
+// "<prefix>:snaps" Redis Hash, keyed by catalog. The value is just
+// "{stopTsSeq}" — V3 stores only the snap stop point.
+func EncodeSnapValue(stopTsSeq TimeSeqID) string { return stopTsSeq.String() }
 
-// DecodeSnapValue parses a snap hash value "<stopTsSeq>".
-func DecodeSnapValue(value string) (stopTsSeq TimeSeqID, err error) {
-	stopTsSeq, err = ParseTimeSeqID(value)
+func DecodeSnapValue(value string) (TimeSeqID, error) {
+	t, err := ParseTimeSeqID(value)
 	if err != nil {
-		return TimeSeqID{}, fmt.Errorf("failed to parse stop tsSeqID: %w", err)
+		return TimeSeqID{}, fmt.Errorf("invalid snap value: %w", err)
 	}
-	return stopTsSeq, nil
+	return t, nil
 }
 
-// IsDeltaMember checks if member is a delta member
-func IsDeltaMember(member string) bool {
-	return strings.HasPrefix(member, "delta|")
-}
+func IsDeltaMember(m string) bool   { return strings.HasPrefix(m, "delta|") }
+func IsPendingMember(m string) bool { return strings.HasPrefix(m, "pending|") }
 
-// IsPendingMember checks if member is a pending (uncommitted) member
-func IsPendingMember(member string) bool {
-	return strings.HasPrefix(member, "pending|")
-}
-
-// ParsePendingMemberTimestamp extracts TimeSeqID from a pending member
-// Format: "pending|delta|{mergeType}|{field}|{tsSeq}"
-// Example: "pending|delta|1|/user/name|1700000000_1"
+// ParsePendingMemberTimestamp extracts the TimeSeqID from a pending
+// member, format "pending|delta|{type}|{path}|{tsSeq}".
 func ParsePendingMemberTimestamp(member string) (TimeSeqID, error) {
 	parts := strings.Split(member, "|")
 	if len(parts) < 5 {
-		return TimeSeqID{}, fmt.Errorf("invalid pending member format")
+		return TimeSeqID{}, fmt.Errorf("invalid pending member %q", member)
 	}
-
-	// parts[4] is tsSeq
 	return ParseTimeSeqID(parts[4])
 }

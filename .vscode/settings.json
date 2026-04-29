@@ -1,3 +1,11 @@
 {
-  "go.testFlags": ["-v"]
+  "go.testFlags": ["-v"],
+
+  // Fold foo_test.go under foo.go in the Explorer. Files do not physically
+  // move (Go requires tests in the same package directory).
+  "explorer.fileNesting.enabled": true,
+  "explorer.fileNesting.expand": false,
+  "explorer.fileNesting.patterns": {
+    "*.go": "${capture}_test.go"
+  }
 }

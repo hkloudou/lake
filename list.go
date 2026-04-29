@@ -9,16 +9,18 @@ import (
 	"github.com/hkloudou/lake/v3/internal/utils"
 )
 
-// ListResult represents the read result
+// ListResult is the read-side view of a catalog: the latest snap (if any)
+// and the deltas after it.
 type ListResult struct {
-	client     *Client           // Client instance
-	catalog    string            // Catalog name
-	LatestSnap *index.SnapInfo   // Snapshot info (if generated or used)
-	Entries    []index.DeltaInfo // Raw entries (for debugging)
-	HasPending bool              // True if pending writes detected (< 60s)
-	Err        error             // Error from index read (Redis/decode failures)
+	client     *Client
+	catalog    string
+	LatestSnap *index.SnapInfo
+	Entries    []index.DeltaInfo
+	HasPending bool  // a pending write younger than 120s overlaps the result
+	Err        error // Redis / decode failures
 }
 
+// LastUpdated is the score of the most recent observable change.
 func (m ListResult) LastUpdated() float64 {
 	if len(m.Entries) > 0 {
 		return m.Entries[len(m.Entries)-1].Score
@@ -29,139 +31,64 @@ func (m ListResult) LastUpdated() float64 {
 	return 0
 }
 
+// Exist reports whether the catalog has any persisted state.
 func (m ListResult) Exist() bool {
-	// return m.LatestSnap != nil || len(m.Entries) > 0 || m.HasPending //removed pending writes for now
 	return m.LatestSnap != nil || len(m.Entries) > 0
 }
 
-// Dump returns a debug string representation of the ListResult
-func (m ListResult) Dump() string {
-	var output strings.Builder
+// HasNextSnap reports whether NextSnap would return a non-nil value.
+func (m ListResult) HasNextSnap() bool { return len(m.Entries) > 0 }
 
-	// Snapshot info
-	if m.LatestSnap != nil {
-		output.WriteString("Latest Snapshot:\n")
-		output.WriteString(m.LatestSnap.Dump())
-		if m.HasNextSnap() {
-			output.WriteString("Next Snapshot:\n")
-			output.WriteString(m.NextSnap().Dump())
-		}
-	} else {
-		output.WriteString("No snapshot found\n")
-	}
-
-	// Entries info
-	if len(m.Entries) > 0 {
-		for i, entry := range m.Entries {
-			output.WriteString(fmt.Sprintf("\n[%d/%d] --------------------------------\n", i+1, len(m.Entries)))
-			output.WriteString(fmt.Sprintf("  Path: %s\n", entry.Path))
-			output.WriteString(fmt.Sprintf("  TsSeq: %s\n", entry.TsSeq))
-			output.WriteString(fmt.Sprintf("  MergeType: %d (%s)\n", entry.MergeType, entry.MergeType.String()))
-			output.WriteString(fmt.Sprintf("  Score: %.6f\n", entry.Score))
-		}
-	} else {
-		output.WriteString("No entries found\n")
-	}
-
-	return output.String()
-}
-
-func (m ListResult) HasNextSnap() bool {
-	return len(m.Entries) > 0
-}
-
-// NextSnap returns the SnapInfo describing the snap that should next be
-// generated for this list, or nil if there is nothing new since the
-// latest snap (no entries past the snap point).
-//
-// V3 only stores stopTsSeq, so the constructed SnapInfo carries only the
-// last entry's tsSeq.
+// NextSnap is the snap that should next be persisted for this list, or
+// nil if there are no entries past the latest snap.
 func (m ListResult) NextSnap() *index.SnapInfo {
 	if len(m.Entries) == 0 {
 		return nil
 	}
-	return &index.SnapInfo{
-		StopTsSeq: m.Entries[len(m.Entries)-1].TsSeq,
+	return &index.SnapInfo{StopTsSeq: m.Entries[len(m.Entries)-1].TsSeq}
+}
+
+// Dump renders a debug-friendly description of the result.
+func (m ListResult) Dump() string {
+	var b strings.Builder
+	if m.LatestSnap != nil {
+		b.WriteString("Latest Snapshot:\n")
+		b.WriteString(m.LatestSnap.Dump())
+		if m.HasNextSnap() {
+			b.WriteString("Next Snapshot:\n")
+			b.WriteString(m.NextSnap().Dump())
+		}
+	} else {
+		b.WriteString("No snapshot found\n")
 	}
+	if len(m.Entries) == 0 {
+		b.WriteString("No entries found\n")
+		return b.String()
+	}
+	for i, e := range m.Entries {
+		fmt.Fprintf(&b, "\n[%d/%d] --------------------------------\n", i+1, len(m.Entries))
+		fmt.Fprintf(&b, "  Path: %s\n", e.Path)
+		fmt.Fprintf(&b, "  TsSeq: %s\n", e.TsSeq)
+		fmt.Fprintf(&b, "  MergeType: %d (%s)\n", e.MergeType, e.MergeType.String())
+		fmt.Fprintf(&b, "  Score: %.6f\n", e.Score)
+	}
+	return b.String()
 }
 
 type listOption struct {
 	strictPending bool
 }
 
-// ListOption configures List behavior
+// ListOption configures List behavior.
 type ListOption func(*listOption)
 
-// WithStrictPending makes List report HasPending=true for any pending member,
-// regardless of position. By default, only pending members followed by a delta trigger HasPending.
-func WithStrictPending() ListOption {
-	return func(o *listOption) {
-		o.strictPending = true
-	}
-}
+// WithStrictPending makes List flag HasPending for any pending member,
+// not just those followed by a delta.
+func WithStrictPending() ListOption { return func(o *listOption) { o.strictPending = true } }
 
-// BatchList performs List operations for multiple catalogs in 2 Redis round-trips.
-// Each catalog's result is independent — one catalog's error does not affect others.
-func (c *Client) BatchList(ctx context.Context, catalogs []string, opts ...ListOption) map[string]*ListResult {
-	var opt listOption
-	for _, o := range opts {
-		o(&opt)
-	}
-
-	result := make(map[string]*ListResult, len(catalogs))
-
-	for _, catalog := range catalogs {
-		c.emitEvent(catalog, "BatchList", nil)
-	}
-
-	// Per-catalog validation. Bad names get an Err in their ListResult but
-	// do not poison the rest of the batch. Valid names move on to the
-	// pipeline call below.
-	valid := make([]string, 0, len(catalogs))
-	for _, catalog := range catalogs {
-		if err := utils.ValidateCatalog(catalog); err != nil {
-			result[catalog] = &ListResult{client: c, catalog: catalog, Err: err}
-			continue
-		}
-		valid = append(valid, catalog)
-	}
-
-	if err := c.ensureInitialized(ctx); err != nil {
-		for _, catalog := range valid {
-			result[catalog] = &ListResult{client: c, catalog: catalog, Err: err}
-		}
-		return result
-	}
-
-	batchResults := c.reader.BatchList(ctx, valid, opt.strictPending)
-
-	for _, catalog := range valid {
-		br := batchResults[catalog]
-		lr := &ListResult{
-			client:  c,
-			catalog: catalog,
-		}
-		if br.ReadResult != nil && br.ReadResult.Err != nil {
-			lr.Err = br.ReadResult.Err
-		} else {
-			lr.LatestSnap = br.Snap
-			if br.ReadResult != nil {
-				lr.Entries = br.ReadResult.Deltas
-				lr.HasPending = br.ReadResult.HasPending
-			}
-		}
-		result[catalog] = lr
-	}
-
-	return result
-}
-
-// List reads catalog metadata and returns ListResult.
-// Errors (including pending writes) are stored in ListResult.Err.
-//
-// Event contract: the "List" event is emitted unconditionally before any
-// early return so EventHandlers can observe every call attempt, including
-// those that fail at initialization.
+// List reads the catalog metadata in two Redis ops (HGet snap + ZRange
+// deltas). Errors land in ListResult.Err; the "List" event fires before
+// any early return.
 func (c *Client) List(ctx context.Context, catalog string, opts ...ListOption) *ListResult {
 	c.emitEvent(catalog, "List", nil)
 
@@ -173,39 +100,74 @@ func (c *Client) List(ctx context.Context, catalog string, opts ...ListOption) *
 	if err := utils.ValidateCatalog(catalog); err != nil {
 		return &ListResult{client: c, catalog: catalog, Err: err}
 	}
-
 	if err := c.ensureInitialized(ctx); err != nil {
-		return &ListResult{
-			client:  c,
-			catalog: catalog,
-			Err:     err,
-		}
+		return &ListResult{client: c, catalog: catalog, Err: err}
 	}
 
-	// Try to get existing snapshot
 	snap, err := c.reader.GetLatestSnap(ctx, catalog)
 	if err != nil {
-		return &ListResult{
-			client:  c,
-			catalog: catalog,
-			Err:     fmt.Errorf("failed to get snapshot: %w", err),
-		}
+		return &ListResult{client: c, catalog: catalog, Err: fmt.Errorf("get snapshot: %w", err)}
 	}
-
-	var readResult *index.ReadIndexResult
-
+	var rr *index.ReadIndexResult
 	if snap != nil {
-		readResult = c.reader.ReadSince(ctx, catalog, snap.StopTsSeq.Score(), opt.strictPending)
+		rr = c.reader.ReadSince(ctx, catalog, snap.StopTsSeq.Score(), opt.strictPending)
 	} else {
-		readResult = c.reader.ReadAll(ctx, catalog, opt.strictPending)
+		rr = c.reader.ReadAll(ctx, catalog, opt.strictPending)
 	}
-
 	return &ListResult{
 		client:     c,
 		catalog:    catalog,
 		LatestSnap: snap,
-		Entries:    readResult.Deltas,
-		HasPending: readResult.HasPending,
-		Err:        readResult.Err,
+		Entries:    rr.Deltas,
+		HasPending: rr.HasPending,
+		Err:        rr.Err,
 	}
+}
+
+// BatchList runs List for many catalogs in 2 Redis round-trips total
+// (one HMGet on snaps + one pipelined ZRange). Each catalog's result is
+// independent; an invalid catalog name only poisons its own ListResult.
+func (c *Client) BatchList(ctx context.Context, catalogs []string, opts ...ListOption) map[string]*ListResult {
+	var opt listOption
+	for _, o := range opts {
+		o(&opt)
+	}
+
+	out := make(map[string]*ListResult, len(catalogs))
+	for _, cat := range catalogs {
+		c.emitEvent(cat, "BatchList", nil)
+	}
+
+	valid := make([]string, 0, len(catalogs))
+	for _, cat := range catalogs {
+		if err := utils.ValidateCatalog(cat); err != nil {
+			out[cat] = &ListResult{client: c, catalog: cat, Err: err}
+			continue
+		}
+		valid = append(valid, cat)
+	}
+
+	if err := c.ensureInitialized(ctx); err != nil {
+		for _, cat := range valid {
+			out[cat] = &ListResult{client: c, catalog: cat, Err: err}
+		}
+		return out
+	}
+
+	results := c.reader.BatchList(ctx, valid, opt.strictPending)
+	for _, cat := range valid {
+		br := results[cat]
+		lr := &ListResult{client: c, catalog: cat}
+		if br.ReadResult != nil && br.ReadResult.Err != nil {
+			lr.Err = br.ReadResult.Err
+		} else {
+			lr.LatestSnap = br.Snap
+			if br.ReadResult != nil {
+				lr.Entries = br.ReadResult.Deltas
+				lr.HasPending = br.ReadResult.HasPending
+			}
+		}
+		out[cat] = lr
+	}
+	return out
 }

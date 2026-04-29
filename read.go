@@ -9,195 +9,141 @@ import (
 	"github.com/hkloudou/lake/v3/internal/merge"
 )
 
+// readData loads the snapshot bytes and delta bodies in parallel, merges
+// them into the resulting document, and asynchronously persists a new
+// snapshot if there are deltas past the latest snap.
 func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error) {
-
-	// Check for read errors from List
 	if list.Err != nil {
 		return nil, list.Err
 	}
-
-	// If pending writes detected, return error
 	if list.HasPending {
-		return nil, fmt.Errorf("pending writes detected")
+		return nil, ErrPendingWrites
 	}
-
-	// Ensure initialized before operation
 	if err := c.ensureInitialized(ctx); err != nil {
 		return nil, err
 	}
 
-	// Parallel execution: load snapshot base data and delta bodies concurrently
-	var baseData []byte
-	var baseDataErr error
-	var deltasErr error
+	var (
+		baseData              []byte
+		baseDataErr, deltaErr error
+		wg                    sync.WaitGroup
+	)
 
-	var wg sync.WaitGroup
-
-	// Goroutine 1: Load snapshot base data from cache/storage
-	wg.Add(1)
+	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		if list.LatestSnap != nil {
-			storageKey := c.storage.MakeSnapKey(list.catalog, list.LatestSnap.StopTsSeq)
-			namespace := c.storage.RedisPrefix()
-
-			// Use cache to load snapshot data with namespace
-			baseData, baseDataErr = c.snapCache.Take(ctx, namespace, storageKey, func() ([]byte, error) {
-				// Cache miss: load from storage
-				return c.storage.Get(ctx, storageKey)
-			})
-		} else {
+		if list.LatestSnap == nil {
 			baseData = []byte("{}")
+			return
 		}
+		key := c.storage.MakeSnapKey(list.catalog, list.LatestSnap.StopTsSeq)
+		baseData, baseDataErr = c.snapCache.Take(ctx, c.storage.RedisPrefix(), key, func() ([]byte, error) {
+			return c.storage.Get(ctx, key)
+		})
 	}()
-
-	// Goroutine 2: Load delta bodies concurrently (max 10 workers)
-	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		deltasErr = c.fillDeltasBody(ctx, list.catalog, list.Entries)
+		deltaErr = c.fillDeltasBody(ctx, list.catalog, list.Entries)
 	}()
-
-	// Wait for both operations to complete
 	wg.Wait()
 
-	// Check for errors
 	if baseDataErr != nil {
-		return nil, fmt.Errorf("failed to load snapshot: %w", baseDataErr)
+		return nil, fmt.Errorf("load snapshot: %w", baseDataErr)
 	}
-	if deltasErr != nil {
-		return nil, fmt.Errorf("failed to load deltas: %w", deltasErr)
+	if deltaErr != nil {
+		return nil, fmt.Errorf("load deltas: %w", deltaErr)
 	}
 
-	// Merge entries with base data (pure CPU operation, all data loaded)
 	resultData, err := merge.Merge(baseData, list.Entries)
 	if err != nil {
 		return nil, err
 	}
 
-	// Generate and save new snapshot asynchronously (non-blocking).
-	//
-	// We deliberately use context.Background() so an aborted Read does not
-	// cancel a snapshot that is already paying off for everyone else;
-	// SingleFlight inside saveSnapshot dedupes concurrent attempts.
-	//
-	// snapWG accounts for these goroutines so Client.Close can drain them.
-	if nextSnap := list.NextSnap(); nextSnap != nil {
+	// Async: save new snapshot. Uses background context so an aborted
+	// Read does not cancel a snapshot that benefits everyone else;
+	// snapWG lets Client.Close drain it.
+	if next := list.NextSnap(); next != nil {
 		c.snapWG.Add(1)
 		go func() {
 			defer c.snapWG.Done()
-			bgCtx := context.Background()
-			c.saveSnapshot(bgCtx, list.catalog, nextSnap.StopTsSeq, resultData)
+			c.saveSnapshot(context.Background(), list.catalog, next.StopTsSeq, resultData)
 		}()
 	}
-
 	return resultData, nil
 }
 
-// fillDeltasBody fills the Body field for all deltas concurrently
-// Uses a worker pool with max 10 concurrent goroutines
-// Idempotent: skips deltas that already have Body loaded (len(Body) > 0)
-// Returns error immediately if any delta fails to load (no partial success)
+// fillDeltasBody loads each delta's Body via deltaCache + storage,
+// using a worker pool capped at 10. Idempotent: skips deltas already
+// loaded. Cancels remaining workers on the first failure.
 func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []index.DeltaInfo) error {
-	if len(deltas) == 0 {
+	pending := 0
+	for i := range deltas {
+		if len(deltas[i].Body) == 0 {
+			pending++
+		}
+	}
+	if pending == 0 {
 		return nil
 	}
 
-	// Channel for work distribution
-	type job struct {
-		index int
-		delta *index.DeltaInfo
-	}
-
-	jobs := make(chan job, len(deltas))
-	done := make(chan error, 1) // Buffered channel for first error
-
-	// Count deltas that need loading
-	needLoading := 0
-	for i := range deltas {
-		if len(deltas[i].Body) == 0 {
-			needLoading++
-		}
-	}
-
-	if needLoading == 0 {
-		return nil // All bodies already loaded
-	}
-
-	// Worker pool with max 10 concurrent workers
-	maxWorkers := 10
-	if needLoading < maxWorkers {
-		maxWorkers = needLoading
-	}
-
-	// Context for early cancellation on error
 	workerCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Start workers
+	workers := 10
+	if pending < workers {
+		workers = pending
+	}
+
+	jobs := make(chan *index.DeltaInfo, len(deltas))
+	done := make(chan error, 1)
+
 	var wg sync.WaitGroup
-	for i := 0; i < maxWorkers; i++ {
+	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for j := range jobs {
-				// Check if context cancelled (another worker failed)
-				select {
-				case <-workerCtx.Done():
+			for d := range jobs {
+				if workerCtx.Err() != nil {
 					return
-				default:
 				}
-
-				// Skip if already loaded
-				if len(j.delta.Body) > 0 {
+				if len(d.Body) > 0 {
 					continue
 				}
-
-				key := c.storage.MakeDeltaKey(catalog, j.delta.TsSeq, int(j.delta.MergeType))
-				namespace := c.storage.RedisPrefix()
-
-				// Use deltaCache (memory cache) for delta files
-				data, err := c.deltaCache.Take(workerCtx, namespace, key, func() ([]byte, error) {
-					// Cache miss: load from storage
+				key := c.storage.MakeDeltaKey(catalog, d.TsSeq, int(d.MergeType))
+				data, err := c.deltaCache.Take(workerCtx, c.storage.RedisPrefix(), key, func() ([]byte, error) {
 					return c.storage.Get(workerCtx, key)
 				})
-
 				if err != nil {
-					// Send error and cancel other workers
 					select {
-					case done <- fmt.Errorf("failed to load delta %d (%s): %w", j.index, j.delta.TsSeq, err):
+					case done <- fmt.Errorf("load delta %s: %w", d.TsSeq, err):
 					default:
 					}
 					cancel()
 					return
 				}
-				j.delta.Body = data
+				d.Body = data
 			}
 		}()
 	}
 
-	// Send jobs in a separate goroutine
 	go func() {
 		for i := range deltas {
 			select {
 			case <-workerCtx.Done():
 				return
-			case jobs <- job{index: i, delta: &deltas[i]}:
+			case jobs <- &deltas[i]:
 			}
 		}
 		close(jobs)
 	}()
 
-	// Wait for all workers or first error
 	go func() {
 		wg.Wait()
 		close(done)
 	}()
 
-	// Return first error or nil
 	if err := <-done; err != nil {
 		return err
 	}
-
 	return nil
 }

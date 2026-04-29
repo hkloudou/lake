@@ -7,60 +7,48 @@ import (
 	"io"
 )
 
-func Encrypt(data []byte, aesKey []byte) ([]byte, error) {
-	// Step 1: Compress data with highest compression level
-	var compressedBuf bytes.Buffer
-	gzipWriter, err := gzip.NewWriterLevel(&compressedBuf, gzip.BestCompression)
+// Encrypt gzips data, then optionally AES-GCM-encrypts it (when aesKey
+// is non-empty). The reverse pipeline is in Decrypt.
+func Encrypt(data, aesKey []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	w, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create gzip writer: %w", err)
+		return nil, fmt.Errorf("gzip writer: %w", err)
 	}
-	if _, err := gzipWriter.Write(data); err != nil {
-		gzipWriter.Close()
-		return nil, fmt.Errorf("failed to compress data: %w", err)
+	if _, err := w.Write(data); err != nil {
+		w.Close()
+		return nil, fmt.Errorf("gzip write: %w", err)
 	}
-	if err := gzipWriter.Close(); err != nil {
-		return nil, fmt.Errorf("failed to close gzip writer: %w", err)
+	if err := w.Close(); err != nil {
+		return nil, fmt.Errorf("gzip close: %w", err)
 	}
-	compressedData := compressedBuf.Bytes()
-
-	// Step 2: Encrypt data if AES key is provided
-	if len(aesKey) > 0 {
-		encrypted, err := aesGcmEncrypt(compressedData, aesKey)
-		if err != nil {
-			return nil, fmt.Errorf("failed to encrypt data: %w", err)
-		}
-		return encrypted, nil
+	if len(aesKey) == 0 {
+		return buf.Bytes(), nil
 	}
-
-	return compressedData, nil
+	out, err := aesGcmEncrypt(buf.Bytes(), aesKey)
+	if err != nil {
+		return nil, fmt.Errorf("aes encrypt: %w", err)
+	}
+	return out, nil
 }
 
-// AesGcmDecryptAndDecompress decrypts data (if encrypted) and decompresses it
-// Returns the original data
-func Decrypt(data []byte, aesKey []byte) ([]byte, error) {
-	// Step 1: Decrypt data if AES key is provided
-	var compressedData []byte
+// Decrypt is Encrypt's inverse: optional AES-GCM-decrypt then gunzip.
+func Decrypt(data, aesKey []byte) ([]byte, error) {
 	if len(aesKey) > 0 {
-		decrypted, err := aesGcmDecrypt(data, aesKey)
+		dec, err := aesGcmDecrypt(data, aesKey)
 		if err != nil {
-			return nil, fmt.Errorf("failed to decrypt data: %w", err)
+			return nil, fmt.Errorf("aes decrypt: %w", err)
 		}
-		compressedData = decrypted
-	} else {
-		compressedData = data
+		data = dec
 	}
-
-	// Step 2: Decompress data
-	gzipReader, err := gzip.NewReader(bytes.NewReader(compressedData))
+	r, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create gzip reader: %w", err)
+		return nil, fmt.Errorf("gzip reader: %w", err)
 	}
-	defer gzipReader.Close()
-
-	decompressedData, err := io.ReadAll(gzipReader)
+	defer r.Close()
+	out, err := io.ReadAll(r)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decompress data: %w", err)
+		return nil, fmt.Errorf("gzip read: %w", err)
 	}
-
-	return decompressedData, nil
+	return out, nil
 }

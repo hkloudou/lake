@@ -6,14 +6,9 @@ import (
 	"github.com/hkloudou/lake/v3/internal/utils"
 )
 
-// ClearHistory removes all delta entries (and their OSS objects) at or
-// before the catalog's latest snap, releasing storage that the snap has
-// already absorbed.
-//
-// V3 keeps only one snap per catalog (overwritten on each save), so
-// there is no historical-snap retention concept; ClearHistory is the
-// single cleanup entry point. The previous OSS snap objects from
-// overwrites are left in place — see clear_optimized.go's design note.
+// ClearHistory removes all delta entries (and their storage objects) at
+// or before the catalog's latest snap. The previous OSS snap object
+// from each save is left orphan in storage (V3 contract).
 //
 // SingleFlight de-duplicates concurrent clears on the same catalog.
 func (c *Client) ClearHistory(ctx context.Context, catalog string) error {
