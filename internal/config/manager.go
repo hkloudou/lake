@@ -78,13 +78,11 @@ func (cfg *Config) CreateStorage() (storage.Storage, error) {
 			Bucket:    cfg.Bucket,
 			AccessKey: cfg.AccessKey,
 			SecretKey: cfg.SecretKey,
-			AESKey:    cfg.AESPwd,
 		})
 	case "file":
 		return storage.NewFileStorage(storage.FileConfig{
 			Name:     cfg.Name,
 			BasePath: cfg.BasePath,
-			AESKey:   cfg.AESPwd,
 		})
 	default:
 		return nil, fmt.Errorf("unknown storage type: %s", cfg.Storage)

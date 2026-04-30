@@ -7,16 +7,19 @@ import (
 	"github.com/hkloudou/lake/v3/internal/encode"
 )
 
-// getTimeSeqIDAndPreCommitScript atomically allocates a TimeSeqID,
-// pre-commits a pending delta member, and returns
-// {timestamp, seqid, member}.
+// notifyScript atomically allocates a TimeSeqID and adds the committed
+// delta member in a single ZADD. V3 dispenses with the v2 pending →
+// committed swap entirely: tsSeq is allocated only when notify fires
+// (after the OSS upload has succeeded), so a slow / aborted upload
+// never appears in the index — no pending phase, no 120s timeout, no
+// rollback API.
 //
-// The seqid counter is namespaced by ARGV[3] (deployment prefix /
-// lake.setting Name) so multiple deployments sharing one Redis under
-// different Names get independent 999,999/sec budgets.
-const getTimeSeqIDAndPreCommitScript = `
+// The seqid counter is namespaced by ARGV[3] (deployment Name) so that
+// multiple deployments sharing one Redis under different Names get
+// independent 999,999/sec budgets.
+const notifyScript = `
 local catalog, zaddKey = KEYS[1], KEYS[2]
-local fieldPath, mergeType, prefix = ARGV[1], ARGV[2], ARGV[3]
+local fieldPath, mergeType, prefix, uuid = ARGV[1], ARGV[2], ARGV[3], ARGV[4]
 
 local ts = redis.call("TIME")[1]
 local seqKey = prefix .. ":seqid:" .. catalog .. ":" .. ts
@@ -29,58 +32,37 @@ if seqid > 999999 then
 end
 
 local tsSeq  = ts .. "_" .. seqid
-local member = "pending|delta|" .. mergeType .. "|" .. fieldPath .. "|" .. tsSeq
+local member = "delta|" .. mergeType .. "|" .. fieldPath .. "|" .. tsSeq .. "|" .. uuid
 local score  = tonumber(ts) + (tonumber(seqid) / 1000000.0)
 
 redis.call("ZADD", zaddKey, score, member)
 return {tonumber(ts), seqid, member}
 `
 
-// commitScript atomically swaps a pending delta member for its committed form.
-const commitScript = `
-local key = KEYS[1]
-redis.call("ZADD", key, tonumber(ARGV[3]), ARGV[2])
-redis.call("ZREM", key, ARGV[1])
-return "OK"
-`
-
-// GetTimeSeqIDAndPreCommit allocates a TimeSeqID and writes the
-// pending delta member. Returns the assigned tsSeq and the pending
-// member string used by Commit / Rollback.
-func (w *Writer) GetTimeSeqIDAndPreCommit(ctx context.Context, catalog, fieldPath string, mergeType MergeType) (TimeSeqID, string, error) {
+// Notify allocates a TimeSeqID for an already-uploaded delta and
+// commits it to the Redis index. The uuid is the OSS object identifier
+// the client used at upload time; it is embedded in the delta member
+// so reads can resolve the storage key.
+func (w *Writer) Notify(ctx context.Context, catalog, fieldPath string, mergeType MergeType, uuid string) (TimeSeqID, string, error) {
 	if w.prefix == "" {
 		return TimeSeqID{}, "", fmt.Errorf("writer prefix not set; call SetPrefix")
 	}
-	res, err := w.rdb.Eval(ctx, getTimeSeqIDAndPreCommitScript,
+	res, err := w.rdb.Eval(ctx, notifyScript,
 		[]string{encode.EncodeRedisCatalogName(catalog), w.MakeDeltaZsetKey(catalog)},
-		fieldPath, int(mergeType), w.prefix,
+		fieldPath, int(mergeType), w.prefix, uuid,
 	).Result()
 	if err != nil {
-		return TimeSeqID{}, "", fmt.Errorf("precommit eval: %w", err)
+		return TimeSeqID{}, "", fmt.Errorf("notify eval: %w", err)
 	}
 	arr, ok := res.([]any)
 	if !ok || len(arr) != 3 {
-		return TimeSeqID{}, "", fmt.Errorf("unexpected precommit result: %v", res)
+		return TimeSeqID{}, "", fmt.Errorf("unexpected notify result: %v", res)
 	}
 	ts, ok1 := arr[0].(int64)
 	seq, ok2 := arr[1].(int64)
 	member, ok3 := arr[2].(string)
 	if !ok1 || !ok2 || !ok3 {
-		return TimeSeqID{}, "", fmt.Errorf("unexpected precommit types: %T,%T,%T", arr[0], arr[1], arr[2])
+		return TimeSeqID{}, "", fmt.Errorf("unexpected notify types: %T,%T,%T", arr[0], arr[1], arr[2])
 	}
 	return TimeSeqID{Timestamp: ts, SeqID: seq}, member, nil
-}
-
-// Rollback removes a pending member. Used when storage Put fails.
-func (w *Writer) Rollback(ctx context.Context, catalog, pendingMember string) error {
-	return w.rdb.ZRem(ctx, w.MakeDeltaZsetKey(catalog), pendingMember).Err()
-}
-
-// Commit atomically swaps pending → committed.
-func (w *Writer) Commit(ctx context.Context, catalog, pendingMember, committedMember string, score float64) error {
-	_, err := w.rdb.Eval(ctx, commitScript,
-		[]string{w.MakeDeltaZsetKey(catalog)},
-		pendingMember, committedMember, score,
-	).Result()
-	return err
 }

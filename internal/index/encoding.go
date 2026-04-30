@@ -31,8 +31,6 @@ func (m MergeType) String() string {
 	}
 }
 
-// MergeTypeFromInt converts the wire integer into a MergeType,
-// returning MergeTypeUnknown for anything outside 1..3.
 func MergeTypeFromInt(i int) MergeType {
 	if i < 1 || i > 3 {
 		return MergeTypeUnknown
@@ -40,16 +38,20 @@ func MergeTypeFromInt(i int) MergeType {
 	return MergeType(i)
 }
 
-// EncodeDeltaMember formats a delta zset member: "delta|{type}|{path}|{tsSeq}".
-func EncodeDeltaMember(field string, mergeType MergeType, tsSeq TimeSeqID) string {
-	return fmt.Sprintf("delta|%d|%s|%s", mergeType, field, tsSeq)
+// EncodeDeltaMember formats a delta zset member.
+//
+// V3 layout: "delta|{type}|{path}|{tsSeq}|{uuid}". The uuid is the OSS
+// object identifier (allocated client-side at WriteBegin); it lives in
+// the member so Read can resolve the storage key without a side hash.
+func EncodeDeltaMember(field string, mergeType MergeType, tsSeq TimeSeqID, uuid string) string {
+	return fmt.Sprintf("delta|%d|%s|%s|%s", mergeType, field, tsSeq, uuid)
 }
 
-// DecodeDeltaMember parses a delta member and verifies its score matches
-// the embedded tsSeq (data-integrity check).
+// DecodeDeltaMember parses a delta member and verifies its score
+// matches the embedded tsSeq.
 func DecodeDeltaMember(member string, score float64) (*DeltaInfo, error) {
 	parts := strings.Split(member, "|")
-	if len(parts) != 4 || parts[0] != "delta" {
+	if len(parts) != 5 || parts[0] != "delta" {
 		return nil, fmt.Errorf("invalid delta member %q", member)
 	}
 	mt, err := strconv.Atoi(parts[1])
@@ -66,18 +68,21 @@ func DecodeDeltaMember(member string, score float64) (*DeltaInfo, error) {
 	if tsSeq.Score() != score {
 		return nil, fmt.Errorf("score mismatch in %q (member=%.6f, redis=%.6f)", member, tsSeq.Score(), score)
 	}
+	if parts[4] == "" {
+		return nil, fmt.Errorf("empty uuid in %q", member)
+	}
 	return &DeltaInfo{
 		Member:    member,
 		Score:     score,
 		Path:      parts[2],
 		TsSeq:     tsSeq,
 		MergeType: MergeTypeFromInt(mt),
+		UUID:      parts[4],
 	}, nil
 }
 
-// EncodeSnapValue / DecodeSnapValue handle the value stored under the
-// "<prefix>:snaps" Redis Hash, keyed by catalog. The value is just
-// "{stopTsSeq}" — V3 stores only the snap stop point.
+// EncodeSnapValue / DecodeSnapValue handle the value stored under
+// "<prefix>:snaps", keyed by catalog. The value is just "{stopTsSeq}".
 func EncodeSnapValue(stopTsSeq TimeSeqID) string { return stopTsSeq.String() }
 
 func DecodeSnapValue(value string) (TimeSeqID, error) {
@@ -88,15 +93,4 @@ func DecodeSnapValue(value string) (TimeSeqID, error) {
 	return t, nil
 }
 
-func IsDeltaMember(m string) bool   { return strings.HasPrefix(m, "delta|") }
-func IsPendingMember(m string) bool { return strings.HasPrefix(m, "pending|") }
-
-// ParsePendingMemberTimestamp extracts the TimeSeqID from a pending
-// member, format "pending|delta|{type}|{path}|{tsSeq}".
-func ParsePendingMemberTimestamp(member string) (TimeSeqID, error) {
-	parts := strings.Split(member, "|")
-	if len(parts) < 5 {
-		return TimeSeqID{}, fmt.Errorf("invalid pending member %q", member)
-	}
-	return ParseTimeSeqID(parts[4])
-}
+func IsDeltaMember(m string) bool { return strings.HasPrefix(m, "delta|") }

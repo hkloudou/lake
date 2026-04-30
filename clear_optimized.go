@@ -42,7 +42,7 @@ func (c *Client) clearDeltasBatch(ctx context.Context, catalog string, deltas []
 	for i := 0; i < workers; i++ {
 		wg.Go(func() {
 			for d := range jobs {
-				key := c.storage.MakeDeltaKey(catalog, d.TsSeq, int(d.MergeType))
+				key := c.storage.MakeDeltaKey(catalog, d.UUID)
 				if err := c.storage.Delete(ctx, key); err != nil {
 					errs <- fmt.Errorf("delete %s: %w", key, err)
 				}

@@ -16,7 +16,6 @@ type memoryStorage struct {
 	data map[string][]byte
 }
 
-// NewMemoryStorage returns an empty in-memory storage with the given name.
 func NewMemoryStorage(name string) *memoryStorage {
 	return &memoryStorage{name: name, data: make(map[string][]byte)}
 }
@@ -67,8 +66,8 @@ func (m *memoryStorage) List(ctx context.Context, prefix string) ([]string, erro
 
 func (m *memoryStorage) RedisPrefix() string { return m.name }
 
-func (m *memoryStorage) MakeDeltaKey(catalog string, ts index.TimeSeqID, mergeType int) string {
-	return fmt.Sprintf("%s/delta/%s_%d.dat", catalog, ts, mergeType)
+func (m *memoryStorage) MakeDeltaKey(catalog, uuid string) string {
+	return fmt.Sprintf("%s/delta/%s.dat", catalog, uuid)
 }
 
 func (m *memoryStorage) MakeSnapKey(catalog string, stop index.TimeSeqID) string {

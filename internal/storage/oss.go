@@ -2,9 +2,10 @@ package storage
 
 // OSS key layout: "{md5(catalog)[0:4]}/{encodedCatalog}/{filename}".
 // MD5 prefix gives 65,536 hot-spot-free shards; encodedCatalog keeps
-// each tenant's prefix human-readable for OSS LIST / lifecycle / billing
-// at the catalog level. No depth-based directory sharding — object
-// stores have no per-prefix object-count penalty.
+// each tenant's prefix human-readable for OSS LIST / lifecycle / billing.
+//
+// Bodies are stored RAW (no Lake-side gzip / AES). Use OSS SSE for
+// at-rest encryption.
 
 import (
 	"bytes"
@@ -18,7 +19,6 @@ import (
 	"strings"
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
-	"github.com/hkloudou/lake/v3/internal/encrypt"
 	"github.com/hkloudou/lake/v3/internal/index"
 )
 
@@ -26,24 +26,19 @@ type ossStorage struct {
 	name     string
 	bucket   *oss.Bucket
 	endpoint string
-	aesKey   []byte
 }
 
 // OSSConfig holds OSS configuration.
 type OSSConfig struct {
 	Name      string
-	Endpoint  string // e.g. "oss-cn-hangzhou"; "-internal" appended in FC
+	Endpoint  string
 	Bucket    string
 	AccessKey string
 	SecretKey string
-	AESKey    string
-	Internal  bool // force internal endpoint suffix
+	Internal  bool
 }
 
-// NewOSSStorage builds an OSS-backed Storage. The endpoint may be a
-// short region ("oss-cn-hangzhou") which is expanded to a full URL; if
-// the FC_REGION env var matches the endpoint and the endpoint is not
-// already internal, "-internal" is appended automatically.
+// NewOSSStorage builds an OSS-backed Storage.
 func NewOSSStorage(cfg OSSConfig) (*ossStorage, error) {
 	endpoint := cfg.Endpoint
 	if cfg.Internal {
@@ -63,20 +58,11 @@ func NewOSSStorage(cfg OSSConfig) (*ossStorage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("oss bucket: %w", err)
 	}
-	return &ossStorage{
-		name:     cfg.Name,
-		bucket:   bucket,
-		endpoint: endpoint,
-		aesKey:   []byte(cfg.AESKey),
-	}, nil
+	return &ossStorage{name: cfg.Name, bucket: bucket, endpoint: endpoint}, nil
 }
 
 func (s *ossStorage) Put(ctx context.Context, key string, data []byte) error {
-	enc, err := encrypt.Encrypt(data, s.aesKey)
-	if err != nil {
-		return err
-	}
-	return s.bucket.PutObject(key, bytes.NewReader(enc))
+	return s.bucket.PutObject(key, bytes.NewReader(data))
 }
 
 func (s *ossStorage) Get(ctx context.Context, key string) ([]byte, error) {
@@ -85,11 +71,7 @@ func (s *ossStorage) Get(ctx context.Context, key string) ([]byte, error) {
 		return nil, fmt.Errorf("get %s: %w", key, err)
 	}
 	defer r.Close()
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return nil, err
-	}
-	return encrypt.Decrypt(data, s.aesKey)
+	return io.ReadAll(r)
 }
 
 func (s *ossStorage) Delete(ctx context.Context, key string) error {
@@ -124,17 +106,41 @@ func (s *ossStorage) List(ctx context.Context, prefix string) ([]string, error) 
 	}
 }
 
-// RedisPrefix is the deployment Name; tenancy is keyed by Name only,
-// not backend type, so cache / seqid spaces stay consistent across
-// configs.
 func (s *ossStorage) RedisPrefix() string { return s.name }
 
-func (s *ossStorage) MakeDeltaKey(catalog string, ts index.TimeSeqID, mergeType int) string {
-	return fmt.Sprintf("%s/%s_%d.dat", encodeOssCatalogPath(catalog, 4), ts, mergeType)
+// MakeDeltaKey: "{md5}/{encoded}/{uuid}.dat".
+func (s *ossStorage) MakeDeltaKey(catalog, uuid string) string {
+	return fmt.Sprintf("%s/%s.dat", encodeOssCatalogPath(catalog, 4), uuid)
 }
 
+// MakeSnapKey: "{md5}/{encoded}/{stopTsSeq}.snap".
 func (s *ossStorage) MakeSnapKey(catalog string, stop index.TimeSeqID) string {
 	return fmt.Sprintf("%s/%s.snap", encodeOssCatalogPath(catalog, 4), stop)
+}
+
+// PresignPut signs a PUT URL for the given key. User metadata is baked
+// into the signature so the client MUST send the listed headers
+// verbatim; this enforces self-describing OSS objects.
+func (s *ossStorage) PresignPut(ctx context.Context, key string, opts PresignOptions) (PresignedUpload, error) {
+	ttl := opts.TTL
+	if ttl <= 0 {
+		ttl = 15 * 60 * 1e9 // 15 min in ns; converted to seconds below
+	}
+	signOpts := []oss.Option{}
+	headers := map[string]string{}
+	if opts.ContentType != "" {
+		signOpts = append(signOpts, oss.ContentType(opts.ContentType))
+		headers["Content-Type"] = opts.ContentType
+	}
+	for k, v := range opts.UserMetadata {
+		signOpts = append(signOpts, oss.Meta(k, v))
+		headers["x-oss-meta-"+strings.ToLower(k)] = v
+	}
+	url, err := s.bucket.SignURL(key, oss.HTTPPut, int64(ttl.Seconds()), signOpts...)
+	if err != nil {
+		return PresignedUpload{}, fmt.Errorf("sign url: %w", err)
+	}
+	return PresignedUpload{URL: url, Method: "PUT", Headers: headers}, nil
 }
 
 // encodeOssCatalogPath: "{md5[0:shardSize]}/{encodeOssCatalogName(catalog)}".
@@ -145,13 +151,12 @@ func encodeOssCatalogPath(catalog string, shardSize int) string {
 
 // encodeOssCatalogName encodes a catalog name for OSS paths.
 //
-// Three forms, distinguished by a 1-byte type marker:
-//   - "(<name>"   pure lowercase + safe chars (a-z 0-9 - _ / .)
-//   - ")<NAME>"   pure uppercase + safe chars
-//   - "<base32>"  mixed-case or non-ASCII (lowercased base32, no padding)
+// Three forms with a 1-byte type marker resolving case-insensitive
+// collisions on filesystems like macOS HFS+ underlying File backends:
 //
-// The marker resolves the case-insensitive collision risk on filesystems
-// like macOS HFS+/NTFS that may underlie a "file" backend.
+//   - "(<name>"   pure lowercase (a-z 0-9 - _ / .)
+//   - ")<NAME>"   pure uppercase
+//   - "<base32>"  mixed-case or non-ASCII (lowercased base32, no padding)
 func encodeOssCatalogName(catalog string) string {
 	if isOssCaseSafe(catalog, 'a', 'z') {
 		return "(" + catalog
@@ -162,13 +167,11 @@ func encodeOssCatalogName(catalog string) string {
 	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString([]byte(catalog)))
 }
 
-// isOssCaseSafe checks catalog uses only the given letter case plus
-// digits and "-_/."; returns false on empty input.
-func isOssCaseSafe(catalog string, lo, hi rune) bool {
-	if catalog == "" {
+func isOssCaseSafe(s string, lo, hi rune) bool {
+	if s == "" {
 		return false
 	}
-	for _, r := range catalog {
+	for _, r := range s {
 		switch {
 		case r >= lo && r <= hi:
 		case r >= '0' && r <= '9':

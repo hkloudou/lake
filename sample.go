@@ -10,10 +10,6 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// ErrPendingWrites is returned when a Sample/Read sees a list whose
-// index contains a pending write that may affect the result.
-var ErrPendingWrites = errors.New("pending writes detected")
-
 // Sample returns the cached sample of type T for the given indicator
 // applied to list's catalog. If the catalog changed since the last
 // sample (compared by ListResult.LastUpdated), loader is invoked and
@@ -31,9 +27,6 @@ func Sample[T any](ctx context.Context, list *ListResult, indicator string, load
 
 	if list.Err != nil {
 		return zero, list.Err
-	}
-	if list.HasPending {
-		return zero, ErrPendingWrites
 	}
 	if err := c.ensureInitialized(ctx); err != nil {
 		return zero, err
@@ -122,8 +115,6 @@ func BatchSample[T any](
 			out[cat] = &BatchSampleResult[T]{Err: errors.New("nil list")}
 		case l.Err != nil:
 			out[cat] = &BatchSampleResult[T]{Err: l.Err}
-		case l.HasPending:
-			out[cat] = &BatchSampleResult[T]{Err: ErrPendingWrites}
 		default:
 			probe = append(probe, cat)
 		}

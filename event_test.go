@@ -2,6 +2,7 @@ package lake
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 )
@@ -67,18 +68,17 @@ func TestEmit_BatchListFiresOnInitFailure(t *testing.T) {
 	}
 }
 
-func TestEmit_WriteFiresOnPathValidationFailure(t *testing.T) {
+func TestEmit_WriteBeginFiresOnPathValidationFailure(t *testing.T) {
 	c, spy := newClientWithSpy(t)
 
 	// Invalid path: missing leading slash. Fails before init.
-	_ = c.Write(context.Background(), WriteRequest{
+	_, _ = c.WriteBegin(context.Background(), WriteBeginRequest{
 		Catalog:   "users",
 		Path:      "no-leading-slash",
-		Body:      []byte(`{}`),
 		MergeType: MergeTypeReplace,
 	})
-	if !spy.seen("Write") {
-		t.Fatal("Write event must be emitted even when path validation fails")
+	if !spy.seen("WriteBegin") {
+		t.Fatal("WriteBegin event must be emitted even when path validation fails")
 	}
 }
 
@@ -91,24 +91,22 @@ func TestEmit_ClearHistoryFiresOnInitFailure(t *testing.T) {
 	}
 }
 
-func TestEmit_SampleFiresOnPendingShortCircuit(t *testing.T) {
+func TestEmit_SampleFiresOnListErr(t *testing.T) {
 	c, spy := newClientWithSpy(t)
 
-	// Hand-craft a ListResult with HasPending=true so Sample short-circuits
-	// before doing any Redis work; emit must still fire.
-	list := &ListResult{
-		client:     c,
-		catalog:    "users",
-		HasPending: true,
-	}
+	// Hand-craft a ListResult with Err so Sample short-circuits;
+	// emit must still fire.
+	list := &ListResult{client: c, catalog: "users", Err: errIntentional}
 	_, err := Sample[map[string]any](
 		context.Background(), list, "report",
 		func(*ListResult) (map[string]any, error) { return nil, nil },
 	)
 	if err == nil {
-		t.Fatal("expected ErrPendingWrites, got nil")
+		t.Fatal("expected list-err propagation, got nil")
 	}
 	if !spy.seen("Sample") {
-		t.Fatal("Sample event must be emitted even when pending writes short-circuit")
+		t.Fatal("Sample event must be emitted even when list.Err short-circuits")
 	}
 }
+
+var errIntentional = errors.New("intentional")

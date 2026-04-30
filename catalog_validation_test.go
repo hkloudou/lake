@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-// Each public API that takes a catalog must reject invalid names *before*
-// touching Redis. We verify by pointing at an unreachable Redis: a valid
-// catalog would surface a connection error, an invalid catalog must
+// V3: each public API that takes a catalog must reject invalid names
+// *before* touching Redis or OSS. We point at unreachable Redis: a
+// valid catalog surfaces a connection error, an invalid catalog must
 // surface a validation error first.
 
 const unreachableRedis = "127.0.0.1:1"
@@ -24,13 +24,12 @@ func isValidationErr(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "invalid catalog")
 }
 
-func TestCatalogValidation_Write(t *testing.T) {
+func TestCatalogValidation_WriteBegin(t *testing.T) {
 	c := newDeadClient(t)
 
-	err := c.Write(context.Background(), WriteRequest{
+	_, err := c.WriteBegin(context.Background(), WriteBeginRequest{
 		Catalog:   "/leading-slash",
 		Path:      "/x",
-		Body:      []byte(`1`),
 		MergeType: MergeTypeReplace,
 	})
 	if !isValidationErr(err) {
@@ -50,8 +49,6 @@ func TestCatalogValidation_List(t *testing.T) {
 func TestCatalogValidation_BatchListMixesGoodAndBad(t *testing.T) {
 	c := newDeadClient(t)
 
-	// Bad name gets a per-result validation error, good name gets a
-	// downstream init/connection error (since Redis is unreachable).
 	out := c.BatchList(context.Background(), []string{"good", "bad|name"})
 	if got := len(out); got != 2 {
 		t.Fatalf("expected 2 results, got %d", got)
@@ -79,12 +76,11 @@ func TestCatalogValidation_ClearHistory(t *testing.T) {
 func TestCatalogValidation_AcceptsHierarchy(t *testing.T) {
 	c := newDeadClient(t)
 
-	// Internal "/" is allowed; the call should fail later (unreachable Redis)
-	// but NOT at the validation step.
-	err := c.Write(context.Background(), WriteRequest{
+	// Internal "/" is allowed. Call should fail later (Redis unreachable
+	// → ensureInitialized fails) but NOT at validation.
+	_, err := c.WriteBegin(context.Background(), WriteBeginRequest{
 		Catalog:   "tenantA/users",
 		Path:      "/x",
-		Body:      []byte(`1`),
 		MergeType: MergeTypeReplace,
 	})
 	if isValidationErr(err) {

@@ -38,8 +38,7 @@ func TestBatchSample_PreservesPerCatalogErrors(t *testing.T) {
 
 	listErr := errors.New("list-failed")
 	lists := map[string]*ListResult{
-		"with-err":     {client: c, catalog: "with-err", Err: listErr},
-		"with-pending": {client: c, catalog: "with-pending", HasPending: true},
+		"with-err": {client: c, catalog: "with-err", Err: listErr},
 	}
 	loaderCalls := atomic.Int32{}
 	out := BatchSample[int](context.Background(), lists, "daily", func(*ListResult) (int, error) {
@@ -49,9 +48,6 @@ func TestBatchSample_PreservesPerCatalogErrors(t *testing.T) {
 
 	if !errors.Is(out["with-err"].Err, listErr) {
 		t.Errorf("expected list err to surface, got %v", out["with-err"].Err)
-	}
-	if !errors.Is(out["with-pending"].Err, ErrPendingWrites) {
-		t.Errorf("expected ErrPendingWrites, got %v", out["with-pending"].Err)
 	}
 	if loaderCalls.Load() != 0 {
 		t.Errorf("loader must not run for already-erroring lists; ran %d times", loaderCalls.Load())

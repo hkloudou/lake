@@ -48,20 +48,36 @@ import (
 
 func main() {
     client := lake.NewLake("redis://localhost:6379")
+    defer client.Close()
 
     client.Use(func(catalog, event string, attrs map[string]any) {
         log.Printf("[lake] %s %s %v", catalog, event, attrs)
     })
 
     ctx := context.Background()
+    body := []byte(`{"name":"Alice","age":30}`)
 
-    err := client.Write(ctx, lake.WriteRequest{
+    // 1. Reserve a UUID and signed OSS PUT URL — no Redis op here.
+    h, err := client.WriteBegin(ctx, lake.WriteBeginRequest{
         Catalog:   "users",
         Path:      "/profile",
-        Body:      []byte(`{"name":"Alice","age":30}`),
         MergeType: lake.MergeTypeReplace,
     })
     if err != nil {
+        log.Fatal(err)
+    }
+
+    // 2. Upload the body directly to OSS. Bytes do NOT pass through Lake.
+    req, _ := http.NewRequestWithContext(ctx, h.UploadMethod, h.UploadURL, bytes.NewReader(body))
+    for k, v := range h.UploadHeaders {
+        req.Header.Set(k, v)
+    }
+    if _, err := http.DefaultClient.Do(req); err != nil {
+        log.Fatal(err)
+    }
+
+    // 3. Notify Lake to commit the index entry referencing the upload.
+    if err := client.WriteNotify(ctx, h); err != nil {
         log.Fatal(err)
     }
 
@@ -91,20 +107,64 @@ import "github.com/hkloudou/lake/v3"
 | `WithDeltaCache(cache.Cache) func(*option)` | [lake.go](lake.go) | Same, for delta cache |
 | `(*Client) Use(handler EventHandler)` | [middleware.go](middleware.go) | Register an event handler |
 
-### Write
+### Write — three-step direct upload
+
+V3 splits Write into three steps so client bytes never traverse the Lake
+process:
 
 | Function | File | Description |
 |----------|------|-------------|
-| `(*Client) Write(ctx, WriteRequest) error` | [write.go](write.go) | Write JSON delta with merge strategy |
+| `(*Client) WriteBegin(ctx, WriteBeginRequest, opts...) (*WriteHandle, error)` | [write.go](write.go) | Reserve a UUID and signed OSS PUT URL. **No Redis op** — pure function of (catalog, path, mergeType, OSS credentials). |
+| (HTTP PUT to `handle.UploadURL`) | — | The client uploads bytes directly to OSS using the signed URL and the headers in `handle.UploadHeaders`. |
+| `(*Client) WriteNotify(ctx, *WriteHandle) error` | [write.go](write.go) | Allocate the tsSeq and atomically register the delta in Redis. |
+
+**WriteBeginRequest**:
 
 ```go
-type WriteRequest struct {
-    Catalog   string    // Document namespace
-    Path      string    // JSON path; "/" means root document
-    Body      []byte    // Raw JSON bytes
-    MergeType MergeType // MergeTypeReplace, MergeTypeRFC7396, or MergeTypeRFC6902
+type WriteBeginRequest struct {
+    Catalog   string    `json:"catalog"`
+    Path      string    `json:"path"`      // "/" means root
+    MergeType MergeType `json:"mergeType"` // 1=Replace, 2=RFC7396, 3=RFC6902
 }
 ```
+
+**WriteHandle** (JSON-serialisable for non-Go SDKs):
+
+```go
+type WriteHandle struct {
+    Catalog       string            `json:"catalog"`
+    Path          string            `json:"path"`
+    MergeType     MergeType         `json:"mergeType"`
+    UUID          string            `json:"uuid"`
+    StorageKey    string            `json:"storageKey"`
+    UploadURL     string            `json:"uploadURL"`
+    UploadMethod  string            `json:"uploadMethod"`
+    UploadHeaders map[string]string `json:"uploadHeaders"`
+    ExpiresAt     time.Time         `json:"expiresAt"`
+}
+```
+
+**Begin options**:
+
+```go
+lake.WithUploadTTL(15 * time.Minute)        // signed URL validity
+lake.WithMaxBodyBytes(100 * 1024 * 1024)    // hard cap baked into signature
+lake.WithUploadContentType("application/json")
+```
+
+**Why three steps**
+
+- **Bandwidth** — body bytes go through the OSS provider's free inbound
+  pipe, never through your Lake servers.
+- **FaaS-friendly** — Begin needs only OSS credentials; Notify needs only
+  Redis. Each can be a Lambda / Workers function near its dependency.
+- **Multi-language** — Begin returns JSON. Any client (browser / Python /
+  Rust / curl) can talk to Lake's HTTP endpoints; the Go SDK is a
+  convenience layer, not a requirement.
+- **Self-describing OSS objects** — the signed URL forces the client to
+  attach `x-oss-meta-catalog`, `x-oss-meta-path`, `x-oss-meta-merge-type`
+  headers. An LIST + GetObjectMeta on the bucket is enough to rebuild
+  Lake's Redis index from scratch.
 
 **MergeType constants** ([export.go](export.go)):
 
@@ -114,13 +174,19 @@ lake.MergeTypeRFC7396  // = 2: RFC 7396 JSON Merge Patch (null removes)
 lake.MergeTypeRFC6902  // = 3: RFC 6902 JSON Patch (operations array)
 ```
 
+> **Storage support**: WriteBegin requires a `Presigner`-capable storage
+> backend. OSS supports it; File / Memory return `lake.ErrPresignNotSupported`
+> (file/memory backends are now read-only at the V3 boundary).
+>
+> **Bodies are stored RAW**: V3 storage no longer gzips/encrypts. For
+> at-rest encryption use OSS SSE; for compression encode client-side.
+
 ### Read
 
 | Function | File | Description |
 |----------|------|-------------|
-| `(*Client) List(ctx, catalog, opts...) *ListResult` | [list.go](list.go) | Fetch snapshot info + delta index |
-| `(*Client) BatchList(ctx, catalogs, opts...) map[string]*ListResult` | [list.go](list.go) | Batched list across N catalogs in 2 round-trips |
-| `WithStrictPending() ListOption` | [list.go](list.go) | Treat any pending member as `HasPending` |
+| `(*Client) List(ctx, catalog) *ListResult` | [list.go](list.go) | Fetch snapshot info + delta index (1 HGet + 1 ZRange) |
+| `(*Client) BatchList(ctx, catalogs) map[string]*ListResult` | [list.go](list.go) | Batched list across N catalogs in 2 round-trips total |
 | `ReadBytes(ctx, *ListResult) ([]byte, error)` | [helpers.go](helpers.go) | Merged document as raw bytes |
 | `ReadString(ctx, *ListResult) (string, error)` | [helpers.go](helpers.go) | Merged document as JSON string |
 | `ReadMap(ctx, *ListResult) (map[string]any, error)` | [helpers.go](helpers.go) | Merged document as map |
@@ -356,26 +422,26 @@ client.Use(func(catalog, event string, attrs map[string]any) {
 | `/user/profile` | `/123` |
 | `/$config` | `/user-name` |
 
-### Two-phase commit (atomic write)
+### Three-step direct upload
 
 ```
-Write:
-  1. Lua: GetTimeSeqID + ZADD pending|...      (atomic, in Redis)
-  2. Storage.Put(deltaKey, body)                (slow path)
-  3. Lua: ZREM pending + ZADD delta|...         (atomic, in Redis)
+WriteBegin:
+  1. Generate UUID v4
+  2. PresignPut("{md5}/{encoded}/{uuid}.dat") with required user metadata
+     → return WriteHandle (NO Redis op)
+
+(client uploads bytes directly to OSS via handle.UploadURL)
+
+WriteNotify:
+  3. Lua: INCR seqid → tsSeq; ZADD delta|{type}|{path}|{tsSeq}|{uuid}
+     (single atomic op)
 ```
 
-If step 2 fails → step 1 is rolled back via `ZREM pending`. If step 3 fails →
-the pending member auto-expires after 120 s and is reaped by `ClearHistory`.
-
-### Pending detection
-
-Read paths consult Redis time (synced every 5 s) to age pending members:
-
-- `age > 120 s` → ignored (write was abandoned)
-- `age ≤ 120 s` → `HasPending = true` *only if* a committed delta follows the
-  pending member (tail pending is harmless to in-flight reads)
-- With `WithStrictPending()` → any in-window pending sets `HasPending`
+The protocol has NO pending phase. Because tsSeq is allocated only at
+step 3 (after the OSS upload has succeeded), a slow or aborted upload
+never appears in the index — there is nothing to wait for, nothing to
+roll back. Aborted writes leave at most one orphaned OSS object,
+reaped by future sweep tooling.
 
 ### Catalog encoding
 
@@ -397,10 +463,7 @@ back later. Callers must therefore avoid `:` and `|` in catalog names today.
 ```
 {prefix}:{catalog}:delta   ZSet
   score  = timestamp + seqid / 1e6   (e.g. 1700000000.000123)
-  member ∈ {
-    delta|{mergeType}|{path}|{ts}_{seqid}            # committed
-    pending|delta|{mergeType}|{path}|{ts}_{seqid}    # in-flight (≤120s)
-  }
+  member = "delta|{mergeType}|{path}|{ts}_{seqid}|{uuid}"
 
 {prefix}:snaps             Hash    field=catalog
   value = "{stopTsSeq}"                         # one entry per catalog,
@@ -415,8 +478,8 @@ back later. Callers must therefore avoid `:` and `|` in catalog names today.
 ### Object storage
 
 ```
-{md5(catalog)[0:4]}/{encoded(catalog)}/{ts}_{seqid}_{mergeType}.dat   # delta
-{md5(catalog)[0:4]}/{encoded(catalog)}/{stopTsSeq}.snap               # snap
+{md5(catalog)[0:4]}/{encoded(catalog)}/{uuid}.dat       # delta (uuid allocated by WriteBegin)
+{md5(catalog)[0:4]}/{encoded(catalog)}/{stopTsSeq}.snap # snap (server-generated)
 ```
 
 The local-file backend uses a deeper layout (`md5[0:2]/encoded/h1/h2/h3/...`)

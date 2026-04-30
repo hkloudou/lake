@@ -16,9 +16,6 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 	if list.Err != nil {
 		return nil, list.Err
 	}
-	if list.HasPending {
-		return nil, ErrPendingWrites
-	}
 	if err := c.ensureInitialized(ctx); err != nil {
 		return nil, err
 	}
@@ -101,7 +98,7 @@ func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []in
 				if len(d.Body) > 0 {
 					continue
 				}
-				key := c.storage.MakeDeltaKey(catalog, d.TsSeq, int(d.MergeType))
+				key := c.storage.MakeDeltaKey(catalog, d.UUID)
 				data, err := c.deltaCache.Take(workerCtx, c.storage.RedisPrefix(), key, func() ([]byte, error) {
 					return c.storage.Get(workerCtx, key)
 				})

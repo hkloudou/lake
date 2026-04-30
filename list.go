@@ -9,15 +9,14 @@ import (
 	"github.com/hkloudou/lake/v3/internal/utils"
 )
 
-// ListResult is the read-side view of a catalog: the latest snap (if any)
-// and the deltas after it.
+// ListResult is the read-side view of a catalog: the latest snap (if
+// any) and the deltas after it.
 type ListResult struct {
 	client     *Client
 	catalog    string
 	LatestSnap *index.SnapInfo
 	Entries    []index.DeltaInfo
-	HasPending bool  // a pending write younger than 120s overlaps the result
-	Err        error // Redis / decode failures
+	Err        error
 }
 
 // LastUpdated is the score of the most recent observable change.
@@ -36,11 +35,10 @@ func (m ListResult) Exist() bool {
 	return m.LatestSnap != nil || len(m.Entries) > 0
 }
 
-// HasNextSnap reports whether NextSnap would return a non-nil value.
 func (m ListResult) HasNextSnap() bool { return len(m.Entries) > 0 }
 
-// NextSnap is the snap that should next be persisted for this list, or
-// nil if there are no entries past the latest snap.
+// NextSnap is the snap that should next be persisted, or nil if there
+// are no entries past the latest snap.
 func (m ListResult) NextSnap() *index.SnapInfo {
 	if len(m.Entries) == 0 {
 		return nil
@@ -48,7 +46,6 @@ func (m ListResult) NextSnap() *index.SnapInfo {
 	return &index.SnapInfo{StopTsSeq: m.Entries[len(m.Entries)-1].TsSeq}
 }
 
-// Dump renders a debug-friendly description of the result.
 func (m ListResult) Dump() string {
 	var b strings.Builder
 	if m.LatestSnap != nil {
@@ -69,33 +66,17 @@ func (m ListResult) Dump() string {
 		fmt.Fprintf(&b, "\n[%d/%d] --------------------------------\n", i+1, len(m.Entries))
 		fmt.Fprintf(&b, "  Path: %s\n", e.Path)
 		fmt.Fprintf(&b, "  TsSeq: %s\n", e.TsSeq)
+		fmt.Fprintf(&b, "  UUID: %s\n", e.UUID)
 		fmt.Fprintf(&b, "  MergeType: %d (%s)\n", e.MergeType, e.MergeType.String())
 		fmt.Fprintf(&b, "  Score: %.6f\n", e.Score)
 	}
 	return b.String()
 }
 
-type listOption struct {
-	strictPending bool
-}
-
-// ListOption configures List behavior.
-type ListOption func(*listOption)
-
-// WithStrictPending makes List flag HasPending for any pending member,
-// not just those followed by a delta.
-func WithStrictPending() ListOption { return func(o *listOption) { o.strictPending = true } }
-
 // List reads the catalog metadata in two Redis ops (HGet snap + ZRange
-// deltas). Errors land in ListResult.Err; the "List" event fires before
-// any early return.
-func (c *Client) List(ctx context.Context, catalog string, opts ...ListOption) *ListResult {
+// deltas).
+func (c *Client) List(ctx context.Context, catalog string) *ListResult {
 	c.emitEvent(catalog, "List", nil)
-
-	var opt listOption
-	for _, o := range opts {
-		o(&opt)
-	}
 
 	if err := utils.ValidateCatalog(catalog); err != nil {
 		return &ListResult{client: c, catalog: catalog, Err: err}
@@ -110,29 +91,21 @@ func (c *Client) List(ctx context.Context, catalog string, opts ...ListOption) *
 	}
 	var rr *index.ReadIndexResult
 	if snap != nil {
-		rr = c.reader.ReadSince(ctx, catalog, snap.StopTsSeq.Score(), opt.strictPending)
+		rr = c.reader.ReadSince(ctx, catalog, snap.StopTsSeq.Score())
 	} else {
-		rr = c.reader.ReadAll(ctx, catalog, opt.strictPending)
+		rr = c.reader.ReadAll(ctx, catalog)
 	}
 	return &ListResult{
 		client:     c,
 		catalog:    catalog,
 		LatestSnap: snap,
 		Entries:    rr.Deltas,
-		HasPending: rr.HasPending,
 		Err:        rr.Err,
 	}
 }
 
-// BatchList runs List for many catalogs in 2 Redis round-trips total
-// (one HMGet on snaps + one pipelined ZRange). Each catalog's result is
-// independent; an invalid catalog name only poisons its own ListResult.
-func (c *Client) BatchList(ctx context.Context, catalogs []string, opts ...ListOption) map[string]*ListResult {
-	var opt listOption
-	for _, o := range opts {
-		o(&opt)
-	}
-
+// BatchList runs List for many catalogs in 2 Redis round-trips total.
+func (c *Client) BatchList(ctx context.Context, catalogs []string) map[string]*ListResult {
 	out := make(map[string]*ListResult, len(catalogs))
 	for _, cat := range catalogs {
 		c.emitEvent(cat, "BatchList", nil)
@@ -154,7 +127,7 @@ func (c *Client) BatchList(ctx context.Context, catalogs []string, opts ...ListO
 		return out
 	}
 
-	results := c.reader.BatchList(ctx, valid, opt.strictPending)
+	results := c.reader.BatchList(ctx, valid)
 	for _, cat := range valid {
 		br := results[cat]
 		lr := &ListResult{client: c, catalog: cat}
@@ -164,7 +137,6 @@ func (c *Client) BatchList(ctx context.Context, catalogs []string, opts ...ListO
 			lr.LatestSnap = br.Snap
 			if br.ReadResult != nil {
 				lr.Entries = br.ReadResult.Deltas
-				lr.HasPending = br.ReadResult.HasPending
 			}
 		}
 		out[cat] = lr
