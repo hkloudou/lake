@@ -36,6 +36,8 @@ type WriteBeginRequest struct {
 // then ships the same handle back to Lake's notify endpoint.
 //
 // Fields are exported so SDKs in other languages can construct it.
+// ExpiresAt is a Unix timestamp in seconds (not RFC3339) so non-Go
+// clients can compare it without parsing dates.
 type WriteHandle struct {
 	Catalog       string            `json:"catalog"`
 	Path          string            `json:"path"`
@@ -45,7 +47,7 @@ type WriteHandle struct {
 	UploadURL     string            `json:"uploadURL"`
 	UploadMethod  string            `json:"uploadMethod"`
 	UploadHeaders map[string]string `json:"uploadHeaders"`
-	ExpiresAt    time.Time         `json:"expiresAt"`
+	ExpiresAt     int64             `json:"expiresAt"` // unix seconds
 }
 
 // WriteBeginOption tunes the presign call.
@@ -137,7 +139,7 @@ func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...
 		UploadURL:     upload.URL,
 		UploadMethod:  upload.Method,
 		UploadHeaders: upload.Headers,
-		ExpiresAt:     time.Now().Add(o.ttl),
+		ExpiresAt:     time.Now().Add(o.ttl).Unix(),
 	}, nil
 }
 
