@@ -55,10 +55,11 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 	// Async: save new snapshot. Uses background context so an aborted
 	// Read does not cancel a snapshot that benefits everyone else;
 	// snapWG lets Client.Close drain it.
+	// Async snapshot save: fire-and-forget. An interrupted save leaves at
+	// most one orphan OSS object (reaped by the next sweep); the next
+	// read regenerates the snap, so reads remain correct.
 	if next := list.NextSnap(); next != nil {
-		c.snapWG.Go(func() {
-			c.saveSnapshot(context.Background(), list.catalog, next.StopTsSeq, resultData)
-		})
+		go c.saveSnapshot(context.Background(), list.catalog, next.StopTsSeq, resultData)
 	}
 	return resultData, nil
 }

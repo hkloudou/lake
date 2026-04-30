@@ -37,7 +37,6 @@ func TestSnapHashRoundTrip(t *testing.T) {
 	rdb := snapHashTestRedis(t)
 	w := NewWriter(rdb)
 	r := NewReader(rdb)
-	t.Cleanup(func() { r.Close() })
 	w.SetPrefix("test")
 	r.SetPrefix("test")
 
@@ -78,7 +77,6 @@ func TestSnapHashOverwrite(t *testing.T) {
 	rdb := snapHashTestRedis(t)
 	w := NewWriter(rdb)
 	r := NewReader(rdb)
-	t.Cleanup(func() { r.Close() })
 	w.SetPrefix("test")
 	r.SetPrefix("test")
 
@@ -117,7 +115,6 @@ func TestAllSnapsBatchBackup(t *testing.T) {
 	rdb := snapHashTestRedis(t)
 	w := NewWriter(rdb)
 	r := NewReader(rdb)
-	t.Cleanup(func() { r.Close() })
 	w.SetPrefix("test")
 	r.SetPrefix("test")
 
@@ -157,7 +154,6 @@ func TestAllSnapsBatchBackup(t *testing.T) {
 func TestGetLatestSnapMissingReturnsNilNil(t *testing.T) {
 	rdb := snapHashTestRedis(t)
 	r := NewReader(rdb)
-	t.Cleanup(func() { r.Close() })
 	r.SetPrefix("test")
 
 	ctx := context.Background()

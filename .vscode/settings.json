@@ -1,11 +1,13 @@
 {
   "go.testFlags": ["-v"],
 
-  // Fold foo_test.go under foo.go in the Explorer. Files do not physically
-  // move (Go requires tests in the same package directory).
+  // Fold foo_test.go AND foo_*_test.go under foo.go in the Explorer.
+  // Files do not physically move (Go requires tests in the same package
+  // directory). The wildcard variant catches files like
+  // sample_batch_test.go nesting under sample.go.
   "explorer.fileNesting.enabled": true,
   "explorer.fileNesting.expand": false,
   "explorer.fileNesting.patterns": {
-    "*.go": "${capture}_test.go"
+    "*.go": "${capture}_test.go, ${capture}_*_test.go"
   }
 }

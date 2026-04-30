@@ -41,7 +41,6 @@ func newClientWithSpy(t *testing.T) (*Client, *spyHandler) {
 	// Unreachable Redis → ensureInitialized always fails → exercises the
 	// "emit before early return" contract for every API.
 	c := NewLake("127.0.0.1:1")
-	t.Cleanup(func() { _ = c.Close() })
 	spy := &spyHandler{}
 	c.Use(spy.handler())
 	return c, spy

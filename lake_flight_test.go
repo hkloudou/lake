@@ -9,7 +9,6 @@ import "testing"
 // removes that fragile coupling and removes contention on a single mutex.
 func TestSampleFlightIsDistinctFromSnapFlight(t *testing.T) {
 	c := NewLake("127.0.0.1:1") // unreachable; we never call methods that need Redis
-	defer c.Close()
 
 	if c.snapFlight == nil || c.sampleFlight == nil {
 		t.Fatalf("both flights must be initialized; snap=%v sample=%v", c.snapFlight, c.sampleFlight)

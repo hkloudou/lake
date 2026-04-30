@@ -3,7 +3,6 @@ package lake
 import (
 	"context"
 	"fmt"
-	"io"
 	"sync"
 	"time"
 
@@ -17,10 +16,11 @@ import (
 
 // Client is the main entry point for Lake v3.
 //
-// A Client owns several long-lived background goroutines (Redis time
-// updater, cache cleanup / stat) and an unbounded number of short-lived
-// async snapshot writers. Call Close to drain them; do not use the
-// Client after Close.
+// A Client is intended to live for the process lifetime. Background
+// goroutines (Redis time updater, cache cleanup / stat) tick forever
+// and are reclaimed by the OS at process exit; in-flight async
+// snapshot saves are fire-and-forget (an interrupted save leaves at
+// most one orphan OSS object, reaped by the next sweep).
 type Client struct {
 	rdb        *redis.Client
 	writer     *index.Writer
@@ -33,12 +33,9 @@ type Client struct {
 	storage storage.Storage
 	config  *config.Config
 
-	snapFlight   xsync.SingleFlight[string]    // dedupe concurrent snapshot saves on (catalog, stop)
-	sampleFlight xsync.SingleFlight[string]    // dedupe concurrent Sample[T] loaders on (catalog, indicator, score)
+	snapFlight   xsync.SingleFlight[string]   // dedupe concurrent snapshot saves on (catalog, stop)
+	sampleFlight xsync.SingleFlight[string]   // dedupe concurrent Sample[T] loaders on (catalog, indicator, score)
 	clearFlight  xsync.SingleFlight[struct{}] // dedupe concurrent ClearHistory on (catalog)
-
-	snapWG    sync.WaitGroup // accounts for in-flight async snapshot saves so Close can drain them
-	closeOnce sync.Once
 
 	eventHandlers []EventHandler
 }
@@ -51,7 +48,6 @@ type option struct {
 
 // NewLake creates a Lake client. Config (storage backend, bucket, etc.)
 // is loaded lazily on first operation from the Redis key "lake.setting".
-// The returned Client must be closed with Close.
 func NewLake(metaUrl string, opts ...func(*option)) *Client {
 	redisOpt, err := redis.ParseURL(metaUrl)
 	if err != nil {
@@ -84,12 +80,11 @@ func NewLake(metaUrl string, opts ...func(*option)) *Client {
 	}
 }
 
-func WithSnapCache(c cache.Cache) func(*option)  { return func(o *option) { o.SnapCacheProvider = c } }
-func WithDeltaCache(c cache.Cache) func(*option) { return func(o *option) { o.DeltaCacheProvider = c } }
+func WithSnapCache(c cache.Cache) func(*option)   { return func(o *option) { o.SnapCacheProvider = c } }
+func WithDeltaCache(c cache.Cache) func(*option)  { return func(o *option) { o.DeltaCacheProvider = c } }
 func WithStorage(s storage.Storage) func(*option) { return func(o *option) { o.Storage = s } }
 
 // WithSnapCacheMetaURL builds a Redis-backed snapshot cache from a URL.
-// The cache owns the resulting redis.Client and closes it on Close.
 func WithSnapCacheMetaURL(metaUrl string, ttl time.Duration) func(*option) {
 	c, err := cache.NewRedisCacheWithURL(metaUrl, ttl)
 	if err != nil {
@@ -99,7 +94,6 @@ func WithSnapCacheMetaURL(metaUrl string, ttl time.Duration) func(*option) {
 }
 
 // WithDeltaCacheMetaURL builds a Redis-backed delta cache from a URL.
-// The cache owns the resulting redis.Client and closes it on Close.
 func WithDeltaCacheMetaURL(metaUrl string, ttl time.Duration) func(*option) {
 	c, err := cache.NewRedisCacheWithURL(metaUrl, ttl)
 	if err != nil {
@@ -108,32 +102,9 @@ func WithDeltaCacheMetaURL(metaUrl string, ttl time.Duration) func(*option) {
 	return WithDeltaCache(c)
 }
 
-// Close stops background goroutines, drains in-flight async snapshot
-// saves, then closes the caches and the main redis.Client. Idempotent.
-func (c *Client) Close() error {
-	var firstErr error
-	c.closeOnce.Do(func() {
-		c.reader.Close()
-		c.snapWG.Wait()
-		closeIfCloser(c.snapCache, &firstErr)
-		closeIfCloser(c.deltaCache, &firstErr)
-		if err := c.rdb.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	})
-	return firstErr
-}
-
-func closeIfCloser(v any, firstErr *error) {
-	if c, ok := v.(io.Closer); ok {
-		if err := c.Close(); err != nil && *firstErr == nil {
-			*firstErr = err
-		}
-	}
-}
-
-// ensureInitialized loads lake.setting on first use and wires the storage
-// prefix into the index reader/writer. Idempotent and concurrent-safe.
+// ensureInitialized loads lake.setting on first use and wires the
+// storage prefix into the index reader/writer. Idempotent and
+// concurrent-safe.
 func (c *Client) ensureInitialized(ctx context.Context) error {
 	c.mu.RLock()
 	if c.storage != nil {

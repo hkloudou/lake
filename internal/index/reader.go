@@ -3,32 +3,26 @@ package index
 import (
 	"context"
 	"fmt"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
-// Reader reads Lake's Redis index. Maintains a 5-second-resolution clock
-// (redisTimeUnix) for snapshot freshness checks. Callers must Close the
-// Reader to stop the background ticker.
+// Reader reads Lake's Redis index. Maintains a 5-second-resolution
+// clock (redisTimeUnix) for snapshot freshness checks. The background
+// ticker runs for the process lifetime; Lake is intended to be used
+// with one Client per process, so OS reclaim on exit is sufficient.
 type Reader struct {
 	rdb           *redis.Client
 	redisTimeUnix atomic.Int64
-	done          chan struct{}
-	closeOnce     sync.Once
 	indexIO
 }
 
 func NewReader(rdb *redis.Client) *Reader {
-	r := &Reader{rdb: rdb, done: make(chan struct{})}
+	r := &Reader{rdb: rdb}
 	go r.timeUpdater()
 	return r
-}
-
-func (r *Reader) Close() {
-	r.closeOnce.Do(func() { close(r.done) })
 }
 
 // SnapInfo records that a catalog has been snapshotted up to StopTsSeq.
@@ -205,14 +199,9 @@ func (r *Reader) timeUpdater() {
 	}
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
-	for {
-		select {
-		case <-r.done:
-			return
-		case <-ticker.C:
-			if ts, err := r.serverUnix(context.Background()); err == nil {
-				r.redisTimeUnix.Store(ts)
-			}
+	for range ticker.C {
+		if ts, err := r.serverUnix(context.Background()); err == nil {
+			r.redisTimeUnix.Store(ts)
 		}
 	}
 }

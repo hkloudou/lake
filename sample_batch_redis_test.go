@@ -39,7 +39,6 @@ func TestBatchSample_HitsAndMisses_Redis(t *testing.T) {
 	c := NewLake("redis://127.0.0.1:6379/14",
 		WithStorage(storage.NewMemoryStorage("test")),
 	)
-	t.Cleanup(func() { _ = c.Close() })
 
 	ctx := context.Background()
 	if err := c.ensureInitialized(ctx); err != nil {

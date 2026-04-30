@@ -8,14 +8,13 @@ import (
 	"github.com/hkloudou/lake/v3/internal/xsync"
 )
 
-// MemoryCache is a process-local TTL cache. Close stops the cleanup loop.
+// MemoryCache is a process-local TTL cache. The background cleanup
+// loop runs for the process lifetime.
 type MemoryCache struct {
-	mu        sync.RWMutex
-	data      map[string]cacheEntry
-	ttl       time.Duration
-	flight    xsync.SingleFlight[[]byte]
-	done      chan struct{}
-	closeOnce sync.Once
+	mu     sync.RWMutex
+	data   map[string]cacheEntry
+	ttl    time.Duration
+	flight xsync.SingleFlight[[]byte]
 }
 
 type cacheEntry struct {
@@ -28,16 +27,9 @@ func NewMemoryCache(ttl time.Duration) *MemoryCache {
 		data:   make(map[string]cacheEntry),
 		ttl:    ttl,
 		flight: xsync.NewSingleFlight[[]byte](),
-		done:   make(chan struct{}),
 	}
 	go c.cleanupLoop()
 	return c
-}
-
-// Close stops the background cleanup goroutine. Idempotent.
-func (c *MemoryCache) Close() error {
-	c.closeOnce.Do(func() { close(c.done) })
-	return nil
 }
 
 func (c *MemoryCache) Take(ctx context.Context, namespace, key string, loader func() ([]byte, error)) ([]byte, error) {
@@ -60,23 +52,18 @@ func (c *MemoryCache) Take(ctx context.Context, namespace, key string, loader fu
 	})
 }
 
-// cleanupLoop sweeps expired entries every minute until Close.
+// cleanupLoop sweeps expired entries every minute, forever.
 func (c *MemoryCache) cleanupLoop() {
 	t := time.NewTicker(1 * time.Minute)
 	defer t.Stop()
-	for {
-		select {
-		case <-c.done:
-			return
-		case <-t.C:
-			now := time.Now()
-			c.mu.Lock()
-			for k, e := range c.data {
-				if now.After(e.expireTime) {
-					delete(c.data, k)
-				}
+	for range t.C {
+		now := time.Now()
+		c.mu.Lock()
+		for k, e := range c.data {
+			if now.After(e.expireTime) {
+				delete(c.data, k)
 			}
-			c.mu.Unlock()
 		}
+		c.mu.Unlock()
 	}
 }

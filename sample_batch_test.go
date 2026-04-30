@@ -15,7 +15,6 @@ import (
 func initedClient(t *testing.T) *Client {
 	t.Helper()
 	c := NewLake("127.0.0.1:1", WithStorage(storage.NewMemoryStorage("test")))
-	t.Cleanup(func() { _ = c.Close() })
 	if err := c.ensureInitialized(context.Background()); err != nil {
 		t.Fatalf("ensureInitialized: %v", err)
 	}

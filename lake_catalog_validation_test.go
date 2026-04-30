@@ -15,9 +15,7 @@ const unreachableRedis = "127.0.0.1:1"
 
 func newDeadClient(t *testing.T) *Client {
 	t.Helper()
-	c := NewLake(unreachableRedis)
-	t.Cleanup(func() { _ = c.Close() })
-	return c
+	return NewLake(unreachableRedis)
 }
 
 func isValidationErr(err error) bool {

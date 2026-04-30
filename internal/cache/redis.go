@@ -11,14 +11,12 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// RedisCache is a Redis-backed Cache. Implements Close to stop its
-// stat logger and (when applicable) release its owned redis.Client.
+// RedisCache is a Redis-backed Cache.
 type RedisCache struct {
-	client     *redis.Client
-	ttl        time.Duration
-	stat       *CacheStat
-	flight     xsync.SingleFlight[[]byte]
-	ownsClient bool
+	client *redis.Client
+	ttl    time.Duration
+	stat   *CacheStat
+	flight xsync.SingleFlight[[]byte]
 }
 
 func NewRedisCache(client *redis.Client, ttl time.Duration) *RedisCache {
@@ -30,27 +28,13 @@ func NewRedisCache(client *redis.Client, ttl time.Duration) *RedisCache {
 	}
 }
 
-// NewRedisCacheWithURL builds a RedisCache from a URL; the returned
-// cache owns the underlying redis.Client and closes it on Close.
+// NewRedisCacheWithURL builds a RedisCache from a URL.
 func NewRedisCacheWithURL(metaUrl string, ttl time.Duration) (*RedisCache, error) {
 	opt, err := redis.ParseURL(metaUrl)
 	if err != nil {
 		return nil, err
 	}
-	c := NewRedisCache(redis.NewClient(opt), ttl)
-	c.ownsClient = true
-	return c, nil
-}
-
-// Close stops the stat logger; if the redis.Client is owned, closes it too.
-func (c *RedisCache) Close() error {
-	if c.stat != nil {
-		c.stat.Close()
-	}
-	if c.ownsClient {
-		return c.client.Close()
-	}
-	return nil
+	return NewRedisCache(redis.NewClient(opt), ttl), nil
 }
 
 func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader func() ([]byte, error)) ([]byte, error) {
@@ -82,7 +66,7 @@ func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader fun
 	})
 }
 
-// countKeys SCANs Redis for keys matching pattern (best-effort; returns 0 on error).
+// countKeys SCANs Redis for keys matching pattern (best-effort).
 func countKeys(client *redis.Client, pattern string) int {
 	ctx := context.Background()
 	var (
