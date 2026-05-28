@@ -11,7 +11,7 @@ import (
 
 // initedClient builds a Client whose ensureInitialized succeeds without
 // reaching Redis (memory storage injected). Tests that don't need a
-// real Redis use this to focus on BatchSample's branching logic.
+// real Redis use this to focus on Sampler.Batch's branching logic.
 func initedClient(t *testing.T) *Client {
 	t.Helper()
 	c := NewLake("127.0.0.1:1", WithStorage(storage.NewMemoryStorage("test")))
@@ -23,15 +23,16 @@ func initedClient(t *testing.T) *Client {
 
 // TestBatchSample_EmptyInput: zero catalogs in → empty map out, no panics.
 func TestBatchSample_EmptyInput(t *testing.T) {
-	out := BatchSample[int](context.Background(), nil, "x", func(*ListResult) (int, error) { return 0, nil })
+	s := NewSampler[int]("x", func(*ListResult) (int, error) { return 0, nil })
+	out := s.Batch(context.Background(), nil)
 	if len(out) != 0 {
 		t.Fatalf("expected empty result, got %v", out)
 	}
 }
 
-// TestBatchSample_PreservesPerCatalogErrors: list-level errors and
-// HasPending must surface on their own catalog only, never invoke
-// loader, and not be overridden by post-init paths.
+// TestBatchSample_PreservesPerCatalogErrors: list-level errors must surface
+// on their own catalog only, never invoke the loader, and not be overridden
+// by post-init paths.
 func TestBatchSample_PreservesPerCatalogErrors(t *testing.T) {
 	c := initedClient(t)
 
@@ -40,10 +41,11 @@ func TestBatchSample_PreservesPerCatalogErrors(t *testing.T) {
 		"with-err": {client: c, catalog: "with-err", Err: listErr},
 	}
 	loaderCalls := atomic.Int32{}
-	out := BatchSample[int](context.Background(), lists, "daily", func(*ListResult) (int, error) {
+	s := NewSampler[int]("daily", func(*ListResult) (int, error) {
 		loaderCalls.Add(1)
 		return 1, nil
 	})
+	out := s.Batch(context.Background(), lists)
 
 	if !errors.Is(out["with-err"].Err, listErr) {
 		t.Errorf("expected list err to surface, got %v", out["with-err"].Err)
@@ -61,7 +63,8 @@ func TestBatchSample_NilListEntry(t *testing.T) {
 		"valid": {client: c, catalog: "valid", Err: errors.New("dummy")},
 		"nil":   nil,
 	}
-	out := BatchSample[int](context.Background(), lists, "x", func(*ListResult) (int, error) { return 0, nil })
+	s := NewSampler[int]("x", func(*ListResult) (int, error) { return 0, nil })
+	out := s.Batch(context.Background(), lists)
 	if out["nil"].Err == nil {
 		t.Fatal("expected error for nil list entry")
 	}
@@ -75,7 +78,8 @@ func TestBatchSample_NoClientFallback(t *testing.T) {
 		"a": {catalog: "a"},
 		"b": {catalog: "b"},
 	}
-	out := BatchSample[int](context.Background(), lists, "x", func(*ListResult) (int, error) { return 0, nil })
+	s := NewSampler[int]("x", func(*ListResult) (int, error) { return 0, nil })
+	out := s.Batch(context.Background(), lists)
 	if len(out) != 2 || out["a"].Err == nil || out["b"].Err == nil {
 		t.Fatalf("expected per-catalog errors when no client is available, got %+v", out)
 	}

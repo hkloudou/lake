@@ -34,7 +34,7 @@ type Client struct {
 	config  *config.Config
 
 	snapFlight   xsync.SingleFlight[string]   // dedupe concurrent snapshot saves on (catalog, stop)
-	sampleFlight xsync.SingleFlight[string]   // dedupe concurrent Sample[T] loaders on (catalog, indicator, score)
+	sampleFlight xsync.SingleFlight[string]   // dedupe concurrent Sampler[T] loaders on (catalog, indicator, score)
 	clearFlight  xsync.SingleFlight[struct{}] // dedupe concurrent ClearHistory on (catalog)
 
 	eventHandlers []EventHandler

@@ -6,24 +6,124 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
-// Sample returns the cached sample of type T for the given indicator
-// applied to list's catalog. If the catalog changed since the last
-// sample (compared by ListResult.LastUpdated), loader is invoked and
-// the new value is cached for future calls.
+// Sampler[T] is the single entry point for derived, cached sampling.
 //
-// Storage layout: all catalogs sharing one indicator live inside
-// "<prefix>:samples:<indicator>" Hash, with catalog as field and
-// "[score, data]" JSON as value. Indicator-wide bulk operations stay
-// single-key.
-func Sample[T any](ctx context.Context, list *ListResult, indicator string, loader func(*ListResult) (T, error)) (T, error) {
-	var zero T
+// A "sample" is a value of type T computed from a catalog's raw state
+// (snap + deltas) by a loader, then memoised in the
+// "<prefix>:samples:<indicator>" Redis Hash (catalog = field). Construct
+// one Sampler per (indicator, T, loader) and reuse it: the staleness
+// policy and error fallback are bound at construction so every call site
+// stays uniform.
+//
+// Validity is layered. The data-version floor is mandatory — if the
+// catalog advanced past the version the sample was computed at, it is
+// recomputed. WithMaxAge and WithShouldRefresh add further triggers (the
+// analog of React's shouldComponentUpdate: force a "re-render" even when
+// the data version is unchanged); they can only cause MORE recomputes,
+// never serve a value staler than the floor allows.
+//
+// The cache only ever holds genuinely computed values. A loader error,
+// and any fallback substituted for it, is returned to the caller but
+// never written back — so a transient failure cannot poison the cache
+// until the catalog's next write.
+type Sampler[T any] struct {
+	indicator     string
+	loader        func(*ListResult) (T, error)
+	maxAge        time.Duration
+	shouldRefresh func(SampleMeta, *ListResult) bool
+	onLoaderErr   func(error) (T, bool)
+}
 
+// SampleMeta is the metadata stored alongside each cached sample, and the
+// input a WithShouldRefresh predicate compares against.
+type SampleMeta struct {
+	// Score is the catalog's data version (ListResult.LastUpdated) at the
+	// moment the sample was computed.
+	Score float64
+	// UpdatedAt is the Redis-server wall clock (unix seconds) when the
+	// sample was computed; the basis for WithMaxAge.
+	UpdatedAt int64
+}
+
+// SampleResult is one entry of Batch's output: a value, or an error
+// scoped to that single catalog.
+type SampleResult[T any] struct {
+	Value T
+	Err   error
+}
+
+// SamplerOption configures a Sampler at construction.
+type SamplerOption[T any] func(*Sampler[T])
+
+// NewSampler builds a reusable Sampler for one indicator. loader computes
+// the sample from a catalog's ListResult on a cache miss. It panics if
+// indicator is empty or loader is nil (programmer error — fail-fast, per
+// package policy).
+func NewSampler[T any](indicator string, loader func(*ListResult) (T, error), opts ...SamplerOption[T]) *Sampler[T] {
+	if indicator == "" {
+		panic("lake: NewSampler indicator must be non-empty")
+	}
+	if loader == nil {
+		panic("lake: NewSampler loader must be non-nil")
+	}
+	s := &Sampler[T]{indicator: indicator, loader: loader}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+// WithMaxAge forces a recompute when the cached sample is older than d,
+// measured by the Redis server clock (~5s resolution), regardless of data
+// version. Use it for time-sensitive derivations whose correctness depends
+// on wall-clock and not just catalog data (e.g. a "today" report). d <= 0
+// disables the check.
+func WithMaxAge[T any](d time.Duration) SamplerOption[T] {
+	return func(s *Sampler[T]) { s.maxAge = d }
+}
+
+// WithShouldRefresh installs a custom staleness predicate — the analog of
+// React's shouldComponentUpdate. It receives the cached entry's metadata
+// and the current list and returns true to force a recompute even when the
+// data version is unchanged (cross-catalog dependencies, external inputs).
+//
+// It runs on every cache hit, so it MUST be pure and cheap: do no I/O.
+// Cross-catalog dependencies should compare versions already in hand
+// (e.g. fetched by the same BatchList), never fetch them here.
+func WithShouldRefresh[T any](fn func(SampleMeta, *ListResult) bool) SamplerOption[T] {
+	return func(s *Sampler[T]) { s.shouldRefresh = fn }
+}
+
+// WithLoaderErrorFallback substitutes a value when the loader returns an
+// error. fn inspects that error and returns (value, true) to serve the
+// value for this call only, or (_, false) to propagate the error. The
+// substitute is transient — it is NEVER written to the cache, so the next
+// call retries the loader. fn may run concurrently (Batch) and should be
+// safe to call from multiple goroutines.
+func WithLoaderErrorFallback[T any](fn func(error) (T, bool)) SamplerOption[T] {
+	return func(s *Sampler[T]) { s.onLoaderErr = fn }
+}
+
+// WithLoaderErrorDefault is WithLoaderErrorFallback that always serves v on
+// any loader error.
+func WithLoaderErrorDefault[T any](v T) SamplerOption[T] {
+	return func(s *Sampler[T]) { s.onLoaderErr = func(error) (T, bool) { return v, true } }
+}
+
+// Sample returns the sample for list's catalog, computing and caching it
+// on a miss or when the staleness policy fires.
+func (s *Sampler[T]) Sample(ctx context.Context, list *ListResult) (T, error) {
+	var zero T
+	if list == nil || list.client == nil {
+		return zero, errors.New("lake: Sample requires a ListResult from List/BatchList")
+	}
 	c := list.client
-	c.emitEvent(list.catalog, "Sample", map[string]any{"indicator": indicator})
+	c.emitEvent(list.catalog, "Sample", map[string]any{"indicator": s.indicator})
 
 	if list.Err != nil {
 		return zero, list.Err
@@ -31,54 +131,24 @@ func Sample[T any](ctx context.Context, list *ListResult, indicator string, load
 	if err := c.ensureInitialized(ctx); err != nil {
 		return zero, err
 	}
-
-	lastUpdated := list.LastUpdated()
-	hashKey := c.reader.MakeSampleIndicatorKey(indicator)
-
-	// Cache hit fast-path: one HGET; values are "[score, data]" JSON arrays.
-	if cached, err := c.rdb.HGet(ctx, hashKey, list.catalog).Bytes(); err == nil {
-		if score, data, derr := unmarshalSampleCache[T](cached); derr == nil && score >= lastUpdated && score > 0 {
-			return data, nil
-		}
-	} else if err != redis.Nil {
-		return zero, err
-	}
-
-	return loadAndCacheSample(ctx, c, list, indicator, hashKey, lastUpdated, loader)
+	return s.finalize(s.sampleCore(ctx, c, list))
 }
 
-// BatchSampleResult is one entry in BatchSample's output: either a
-// loaded/cached value or an error scoped to that catalog.
-type BatchSampleResult[T any] struct {
-	Value T
-	Err   error
-}
-
-// BatchSample fetches the same indicator for many catalogs in one
-// HMGet of "<prefix>:samples:<indicator>". Cache hits return immediately;
-// misses run loader concurrently (10 workers) and write back via HSet
-// inside the same per-(catalog, indicator, score) SingleFlight that
-// Sample uses, so concurrent Sample + BatchSample calls dedupe.
-//
-// Errors are isolated per catalog: a list with Err / HasPending / a
-// failing loader only poisons its own BatchSampleResult.
-//
-// Designed to be piped from BatchList:
+// Batch fetches the same indicator for many catalogs in one HMGet, running
+// the loader concurrently (10 workers) only for misses; cache hits return
+// immediately. Errors are isolated per catalog. Misses dedupe against the
+// same SingleFlight as Sample, so concurrent Sample + Batch calls share a
+// loader run. Designed to be piped from BatchList:
 //
 //	lists := client.BatchList(ctx, catalogs)
-//	results := lake.BatchSample[Report](ctx, lists, "daily", loader)
-func BatchSample[T any](
-	ctx context.Context,
-	lists map[string]*ListResult,
-	indicator string,
-	loader func(*ListResult) (T, error),
-) map[string]*BatchSampleResult[T] {
-	out := make(map[string]*BatchSampleResult[T], len(lists))
+//	results := sampler.Batch(ctx, lists)
+func (s *Sampler[T]) Batch(ctx context.Context, lists map[string]*ListResult) map[string]*SampleResult[T] {
+	out := make(map[string]*SampleResult[T], len(lists))
 	if len(lists) == 0 {
 		return out
 	}
 
-	// Pick any client; ListResults from BatchList all share one.
+	// Any ListResult from BatchList carries the same client.
 	var c *Client
 	for _, l := range lists {
 		if l != nil && l.client != nil {
@@ -87,34 +157,32 @@ func BatchSample[T any](
 		}
 	}
 	if c == nil {
-		err := errors.New("BatchSample: no client (empty or invalid lists)")
+		err := errors.New("lake: Batch has no client (empty or invalid lists)")
 		for cat := range lists {
-			out[cat] = &BatchSampleResult[T]{Err: err}
+			out[cat] = &SampleResult[T]{Err: err}
 		}
 		return out
 	}
 
-	// Emit per catalog before any early return (mirrors BatchList).
 	for cat := range lists {
-		c.emitEvent(cat, "BatchSample", map[string]any{"indicator": indicator})
+		c.emitEvent(cat, "BatchSample", map[string]any{"indicator": s.indicator})
 	}
-
 	if err := c.ensureInitialized(ctx); err != nil {
 		for cat := range lists {
-			out[cat] = &BatchSampleResult[T]{Err: err}
+			out[cat] = &SampleResult[T]{Err: err}
 		}
 		return out
 	}
 
-	// Partition: drop catalogs that already have list-level errors;
-	// remaining go into the HMGet probe.
+	// Partition: drop catalogs that already have list-level errors; the
+	// rest go into the HMGet probe.
 	probe := make([]string, 0, len(lists))
 	for cat, l := range lists {
 		switch {
 		case l == nil:
-			out[cat] = &BatchSampleResult[T]{Err: errors.New("nil list")}
+			out[cat] = &SampleResult[T]{Err: errors.New("nil list")}
 		case l.Err != nil:
-			out[cat] = &BatchSampleResult[T]{Err: l.Err}
+			out[cat] = &SampleResult[T]{Err: l.Err}
 		default:
 			probe = append(probe, cat)
 		}
@@ -123,18 +191,19 @@ func BatchSample[T any](
 		return out
 	}
 
-	hashKey := c.reader.MakeSampleIndicatorKey(indicator)
+	now := c.reader.NowUnix()
+	hashKey := c.reader.MakeSampleIndicatorKey(s.indicator)
 
-	// One HMGet to surface every cache hit at once.
 	cached, err := c.rdb.HMGet(ctx, hashKey, probe...).Result()
 	if err != nil && err != redis.Nil {
+		// Cache-read failure: degrade to recompute-all rather than fail
+		// the batch (the cache is an optimization, not the truth).
 		for _, cat := range probe {
-			out[cat] = &BatchSampleResult[T]{Err: fmt.Errorf("hmget samples: %w", err)}
+			c.emitEvent(cat, "SampleCacheError", map[string]any{"op": "hmget", "err": err.Error()})
 		}
-		return out
+		cached = make([]any, len(probe))
 	}
 
-	// Classify: hit serves immediately, miss queues for the worker pool.
 	var (
 		mu     sync.Mutex
 		misses []string
@@ -142,10 +211,9 @@ func BatchSample[T any](
 	for i, raw := range cached {
 		cat := probe[i]
 		l := lists[cat]
-		lastUpdated := l.LastUpdated()
-		if s, ok := raw.(string); ok {
-			if score, data, derr := unmarshalSampleCache[T]([]byte(s)); derr == nil && score >= lastUpdated && score > 0 {
-				out[cat] = &BatchSampleResult[T]{Value: data}
+		if str, ok := raw.(string); ok {
+			if meta, data, derr := unmarshalSampleCache[T]([]byte(str)); derr == nil && !s.isStale(meta, l, now) {
+				out[cat] = &SampleResult[T]{Value: data}
 				continue
 			}
 		}
@@ -155,7 +223,6 @@ func BatchSample[T any](
 		return out
 	}
 
-	// Worker pool: 10 concurrent loaders, dedupe via sampleFlight.
 	workers := 10
 	if len(misses) < workers {
 		workers = len(misses)
@@ -166,9 +233,9 @@ func BatchSample[T any](
 		wg.Go(func() {
 			for cat := range jobs {
 				l := lists[cat]
-				value, err := loadAndCacheSample(ctx, c, l, indicator, hashKey, l.LastUpdated(), loader)
+				v, e := s.finalize(s.loadAndCache(ctx, c, l, hashKey, l.LastUpdated(), now))
 				mu.Lock()
-				out[cat] = &BatchSampleResult[T]{Value: value, Err: err}
+				out[cat] = &SampleResult[T]{Value: v, Err: e}
 				mu.Unlock()
 			}
 		})
@@ -178,64 +245,125 @@ func BatchSample[T any](
 	}
 	close(jobs)
 	wg.Wait()
-
 	return out
 }
 
-// loadAndCacheSample is the shared cache-fill path for Sample and
-// BatchSample. Wraps loader in the (catalog, indicator, score)
-// SingleFlight, encodes as "[score, data]", and HSets the result.
-//
-// Generic free function (not a method) because Go forbids generic
-// methods on a non-generic receiver.
-func loadAndCacheSample[T any](
-	ctx context.Context,
-	c *Client,
-	list *ListResult,
-	indicator, hashKey string,
-	lastUpdated float64,
-	loader func(*ListResult) (T, error),
-) (T, error) {
+// isStale decides whether a cached entry must be recomputed. The data-
+// version floor is mandatory; maxAge and shouldRefresh only ADD triggers
+// (they can force a refresh, never suppress one the data version requires).
+func (s *Sampler[T]) isStale(meta SampleMeta, list *ListResult, now int64) bool {
+	lastUpdated := list.LastUpdated()
+	if !(meta.Score >= lastUpdated && meta.Score > 0) {
+		return true // data advanced past the cached version (or none) → refresh
+	}
+	if s.maxAge > 0 && now > 0 && meta.UpdatedAt > 0 && now-meta.UpdatedAt >= int64(s.maxAge.Seconds()) {
+		return true
+	}
+	if s.shouldRefresh != nil && s.shouldRefresh(meta, list) {
+		return true
+	}
+	return false
+}
+
+// sampleCore is the cache-or-compute path for a single catalog: one HGET,
+// then load on miss/stale. A cache-READ failure degrades to recompute — it
+// never fails the call.
+func (s *Sampler[T]) sampleCore(ctx context.Context, c *Client, list *ListResult) (T, error) {
+	lastUpdated := list.LastUpdated()
+	now := c.reader.NowUnix()
+	hashKey := c.reader.MakeSampleIndicatorKey(s.indicator)
+
+	if cached, err := c.rdb.HGet(ctx, hashKey, list.catalog).Bytes(); err == nil {
+		if meta, data, derr := unmarshalSampleCache[T](cached); derr == nil && !s.isStale(meta, list, now) {
+			return data, nil
+		}
+	} else if err != redis.Nil {
+		c.emitEvent(list.catalog, "SampleCacheError", map[string]any{"op": "hget", "err": err.Error()})
+	}
+	return s.loadAndCache(ctx, c, list, hashKey, lastUpdated, now)
+}
+
+// loadAndCache runs the loader under the (catalog, indicator, version)
+// SingleFlight, stamps [score, updatedAt, data], and writes it back
+// best-effort. A loader error is wrapped (loaderError) so finalize can
+// distinguish it from an internal encode error; a cache-WRITE failure is
+// swallowed — the computed value is already correct and is returned anyway.
+func (s *Sampler[T]) loadAndCache(ctx context.Context, c *Client, list *ListResult, hashKey string, lastUpdated float64, now int64) (T, error) {
 	var zero T
-	flightKey := fmt.Sprintf("%s:%s:%.6f", list.catalog, indicator, lastUpdated)
+	flightKey := fmt.Sprintf("%s:%s:%.6f", list.catalog, s.indicator, lastUpdated)
 	raw, err := c.sampleFlight.Do(flightKey, func() (string, error) {
-		result, err := loader(list)
-		if err != nil {
-			return "", err
+		result, lerr := s.loader(list)
+		if lerr != nil {
+			return "", &loaderError{err: lerr}
 		}
-		data, err := marshalSampleCache(lastUpdated, result)
-		if err != nil {
-			return "", fmt.Errorf("marshal sample: %w", err)
+		data, merr := marshalSampleCache(SampleMeta{Score: lastUpdated, UpdatedAt: now}, result)
+		if merr != nil {
+			return "", fmt.Errorf("marshal sample: %w", merr)
 		}
-		if err := c.rdb.HSet(ctx, hashKey, list.catalog, data).Err(); err != nil {
-			return "", fmt.Errorf("hset sample: %w", err)
+		if werr := c.rdb.HSet(ctx, hashKey, list.catalog, data).Err(); werr != nil {
+			c.emitEvent(list.catalog, "SampleCacheError", map[string]any{"op": "hset", "err": werr.Error()})
 		}
 		return string(data), nil
 	})
 	if err != nil {
 		return zero, err
 	}
-	_, value, err := unmarshalSampleCache[T]([]byte(raw))
-	return value, err
+	_, value, derr := unmarshalSampleCache[T]([]byte(raw))
+	return value, derr
 }
 
-func marshalSampleCache[T any](score float64, data T) ([]byte, error) {
-	return json.Marshal([2]any{score, data})
-}
-
-func unmarshalSampleCache[T any](raw []byte) (float64, T, error) {
-	var arr [2]json.RawMessage
+// finalize applies the loader-error fallback. A substituted value is
+// returned to the caller only — never cached. Internal (non-loader) errors
+// and a declined fallback propagate; the caller always sees their original
+// loader error (unwrapped) so errors.Is on their own sentinels still works.
+func (s *Sampler[T]) finalize(v T, err error) (T, error) {
 	var zero T
-	if err := json.Unmarshal(raw, &arr); err != nil {
-		return 0, zero, err
+	if err == nil {
+		return v, nil
 	}
-	var score float64
-	if err := json.Unmarshal(arr[0], &score); err != nil {
-		return 0, zero, err
+	var le *loaderError
+	if errors.As(err, &le) {
+		if s.onLoaderErr != nil {
+			if d, ok := s.onLoaderErr(le.err); ok {
+				return d, nil
+			}
+		}
+		return zero, le.err
+	}
+	return zero, err
+}
+
+// loaderError tags an error as originating from the caller's loader (vs an
+// internal encode failure), so finalize can scope the fallback correctly.
+type loaderError struct{ err error }
+
+func (e *loaderError) Error() string { return e.err.Error() }
+func (e *loaderError) Unwrap() error { return e.err }
+
+// Cache value format: a JSON array "[score, updatedAt, data]". score is the
+// data version and updatedAt the compute wall-clock; data is the sample.
+func marshalSampleCache[T any](meta SampleMeta, data T) ([]byte, error) {
+	return json.Marshal([3]any{meta.Score, meta.UpdatedAt, data})
+}
+
+func unmarshalSampleCache[T any](raw []byte) (SampleMeta, T, error) {
+	var (
+		arr  [3]json.RawMessage
+		meta SampleMeta
+		zero T
+	)
+	if err := json.Unmarshal(raw, &arr); err != nil {
+		return meta, zero, err
+	}
+	if err := json.Unmarshal(arr[0], &meta.Score); err != nil {
+		return meta, zero, err
+	}
+	if err := json.Unmarshal(arr[1], &meta.UpdatedAt); err != nil {
+		return meta, zero, err
 	}
 	var data T
-	if err := json.Unmarshal(arr[1], &data); err != nil {
-		return 0, zero, err
+	if err := json.Unmarshal(arr[2], &data); err != nil {
+		return meta, zero, err
 	}
-	return score, data, nil
+	return meta, data, nil
 }

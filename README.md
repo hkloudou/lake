@@ -19,8 +19,8 @@
 - **⚡ High Throughput** — Up to 999,999 writes/sec per catalog (Lua-bound seqid)
 - **💾 Smart Caching** — Redis snapshot cache + in-memory delta cache
 - **🎯 Snapshot Acceleration** — Time-range packed snapshots, async generation
-- **🧮 Generic Sampling** — `Sample[T]` computes derived data on demand and
-  caches it atomically; replaces v2's separate "meta" concept
+- **🧮 Generic Sampling** — `NewSampler[T]` computes derived data on demand
+  with a layered staleness policy; replaces v2's separate "meta" concept
 - **🔍 Event Middleware** — `client.Use(handler)` for logging / monitoring
 - **🔐 Optional AES-GCM Encryption** — minimal overhead, configurable via
   `lake.setting`
@@ -222,33 +222,64 @@ profile, err := lake.Read[UserProfile](ctx, list)
 
 ### Sample (computed, cached)
 
-`Sample[T]` is the canonical way to derive secondary state from a catalog.
-The first call invokes `loader`, and subsequent calls reuse the cached value
-unless the catalog has changed (compared by `LastUpdated()`).
+`NewSampler[T]` is the single entry point for deriving secondary state from a
+catalog. Construct one `Sampler` per `(indicator, T, loader)` and reuse it: it
+memoises each catalog's computed value in Redis and recomputes only when the
+value is stale.
 
-| Function | File | Description |
-|----------|------|-------------|
-| `Sample[T](ctx, *ListResult, indicator, loader) (T, error)` | [sample.go](sample.go) | Generic cached sampling |
-| `ErrPendingWrites` | [sample.go](sample.go) | Returned when the list reports pending writes |
+| API | File | Description |
+|-----|------|-------------|
+| `NewSampler[T](indicator, loader, …opts) *Sampler[T]` | [sample.go](sample.go) | Build a reusable sampler |
+| `(*Sampler[T]) Sample(ctx, *ListResult) (T, error)` | [sample.go](sample.go) | One catalog: hit → 1 HGET, miss → loader + HSET |
+| `(*Sampler[T]) Batch(ctx, map[string]*ListResult) map[string]*SampleResult[T]` | [sample.go](sample.go) | Many catalogs: 1 HMGET + concurrent loaders for misses |
 
 ```go
-list := client.List(ctx, "users")
-report, err := lake.Sample[Report](ctx, list, "daily",
+sampler := lake.NewSampler[Report]("daily",
     func(l *lake.ListResult) (Report, error) {
         data, err := lake.ReadMap(ctx, l)
         if err != nil {
             return Report{}, err
         }
         return buildReport(data), nil
-    })
-// data unchanged → 1× HGET, returns cached Report
-// data changed   → loader runs, result is HSET'd atomically with the score
+    },
+    lake.WithMaxAge(time.Hour),                              // recompute hourly even if data is unchanged
+    lake.WithLoaderErrorDefault(Report{Status: "degraded"}), // serve a default if the loader fails (never cached)
+)
+
+list := client.List(ctx, "users")
+report, err := sampler.Sample(ctx, list)
 ```
 
-**Storage layout**: Sample results live in
-`{prefix}:samples:{indicator}` Redis Hashes, with each catalog as a field
-holding a `[score, data]` JSON array. All catalogs sharing one indicator are
-colocated, so indicator-wide enumeration / clearing is single-key.
+**Staleness is layered.** A cached sample is reused only while fresh:
+
+1. **Data-version floor (always on)** — if the catalog advanced past the
+   version the sample was computed at (`ListResult.LastUpdated()`), it is
+   recomputed. But the data version alone is not the whole story: the *same*
+   version can still need a refresh, because a derived value can depend on
+   more than the catalog's own bytes.
+2. **`WithMaxAge(d)`** — recompute when the entry is older than `d` by the
+   Redis server clock. For time-sensitive derivations (a "today" report is
+   correct only for today, not forever).
+3. **`WithShouldRefresh(fn)`** — a custom predicate, the analog of React's
+   `shouldComponentUpdate`: return `true` to force a recompute even when the
+   data version is unchanged (cross-catalog dependencies, external inputs).
+   It runs on every cache hit, so it must be pure and cheap — no I/O; compare
+   versions you already hold (e.g. from the same `BatchList`).
+
+These triggers can only *add* recomputes; none serves a value older than the
+data-version floor allows.
+
+**Errors never poison the cache.** A loader error — or its
+`WithLoaderErrorDefault` / `WithLoaderErrorFallback` substitute — is a
+per-call response and is never written back, so a transient blip (a database
+hiccup) cannot freeze a degraded value into the cache until the next write.
+Cache-tier failures degrade gracefully too: a failed read recomputes, a
+failed write still returns the freshly computed value.
+
+**Storage layout**: samples live in `{prefix}:samples:{indicator}` Redis
+Hashes, each catalog a field holding a `[score, updatedAt, data]` JSON array
+(`score` = data version, `updatedAt` = compute time). All catalogs sharing one
+indicator are colocated, so indicator-wide enumeration / clearing is single-key.
 
 ### Cleanup
 
@@ -307,7 +338,7 @@ lake/
 ├── helpers.go           # ReadBytes, ReadString, ReadMap, Read[T]
 ├── clear.go             # ClearHistory entry points
 ├── clear_optimized.go   # Concurrent storage delete + batch ZREM
-├── sample.go            # Sample[T], ErrPendingWrites
+├── sample.go            # Sampler[T] (NewSampler): cached derived sampling
 ├── snapshot.go          # Async snapshot save under SingleFlight
 ├── export.go            # MergeType re-exports
 └── internal/
@@ -472,7 +503,8 @@ back later. Callers must therefore avoid `:` and `|` in catalog names today.
 
 {prefix}:samples:{indicator}   Hash
   field = catalog
-  value = [score, data]                         # JSON array, atomic per HSET
+  value = [score, updatedAt, data]              # JSON array, atomic per HSET
+                                                # score=data version, updatedAt=compute time
 ```
 
 ### Object storage
@@ -568,12 +600,14 @@ v3 is **not** wire-compatible with v2 callers. Concretely:
 
 - **Module path**: `github.com/hkloudou/lake/v2` → `github.com/hkloudou/lake/v3`
 - **`WriteRequest.Meta` removed.** v2's catalog-level meta is gone — derived
-  state now goes through `Sample[T]` instead. Callers that stored meta-as-JSON
-  alongside writes should compute it lazily inside a `Sample[T]` loader.
+  state now goes through `NewSampler[T]` instead. Callers that stored
+  meta-as-JSON alongside writes should compute it lazily inside a sampler's loader.
 - **File API removed.** `WriteFile`, `FileExists`, `FilesAndMeta`,
   `WriteFileRequest`, and `Storage.MakeFileKey` are gone. Lake v3 handles
   JSON documents only.
-- **`MotionSample` (v1 sample) removed.** Use generic `Sample[T]` instead.
+- **`MotionSample` (v1 sample) removed.** Use `NewSampler[T]` instead — its
+  `WithShouldRefresh` predicate and `Batch` over many catalogs subsume v1's
+  `shouldUpdated` callback and `motionCatalogs` cross-catalog sampling.
 - **Sample storage layout inverted.** v2 used
   `{prefix}:{catalog}:sample` Hashes with the indicator as the field. v3 uses
   `{prefix}:samples:{indicator}` Hashes with the catalog as the field. v2
@@ -591,8 +625,6 @@ v3 is **not** wire-compatible with v2 callers. Concretely:
 - **`merge.Merge` signature** changed: dropped the unused `catalog` parameter
   and the always-empty second return value. (Internal API.)
 - **`Writer.Commit` signature** dropped the meta argument. (Internal API.)
-- **Named error**: pending writes now surface as `lake.ErrPendingWrites`,
-  compatible with `errors.Is`.
 
 If you depend on any of the removed surfaces and cannot rewrite, **stay on
 the v2 line**: it remains maintained on the [`v2` branch](https://github.com/hkloudou/lake/tree/v2)
