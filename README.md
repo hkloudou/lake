@@ -39,16 +39,17 @@ go get github.com/hkloudou/lake/v3@v3.0.0-alpha.1
 package main
 
 import (
+    "bytes"
     "context"
     "fmt"
     "log"
+    "net/http"
 
     "github.com/hkloudou/lake/v3"
 )
 
 func main() {
     client := lake.NewLake("redis://localhost:6379")
-    defer client.Close()
 
     client.Use(func(catalog, event string, attrs map[string]any) {
         log.Printf("[lake] %s %s %v", catalog, event, attrs)
@@ -305,25 +306,26 @@ round-trip.
 
 ### Examples
 
+The merge semantics are selected by `MergeType` on `WriteBegin`; the body you
+PUT to the signed URL is the patch document (see the upload + `WriteNotify`
+steps in Quick Start above).
+
 ```go
-// RFC 7396 — partial update; null deletes a field
-client.Write(ctx, lake.WriteRequest{
+// RFC 7396 — partial merge patch; null deletes a field.
+// Upload body: {"age":31,"city":"NYC","oldField":null}
+h, _ := client.WriteBegin(ctx, lake.WriteBeginRequest{
     Catalog:   "users",
     Path:      "/profile",
-    Body:      []byte(`{"age":31,"city":"NYC","oldField":null}`),
     MergeType: lake.MergeTypeRFC7396,
 })
 
-// RFC 6902 — explicit operations
-client.Write(ctx, lake.WriteRequest{
+// RFC 6902 — explicit JSON Patch operations.
+// Upload body: [{"op":"add","path":"/tags","value":["vip"]}]
+h, _ = client.WriteBegin(ctx, lake.WriteBeginRequest{
     Catalog:   "users",
     Path:      "/",
-    Body:      []byte(`[{"op":"add","path":"/tags","value":["vip"]}]`),
     MergeType: lake.MergeTypeRFC6902,
 })
-
-// Strict consistency — any pending write blocks the read
-list := client.List(ctx, "users", lake.WithStrictPending())
 ```
 
 ### File Structure
@@ -332,9 +334,9 @@ list := client.List(ctx, "users", lake.WithStrictPending())
 lake/
 ├── lake.go              # Client, options, ensureInitialized
 ├── middleware.go        # Use(), EventHandler
-├── write.go             # Write, WriteRequest
+├── write.go             # WriteBegin, WriteNotify, WriteHandle
 ├── read.go              # Internal readData (parallel snap + deltas + merge)
-├── list.go              # List, BatchList, ListResult, WithStrictPending
+├── list.go              # List, BatchList, ListResult
 ├── helpers.go           # ReadBytes, ReadString, ReadMap, Read[T]
 ├── clear.go             # ClearHistory entry points
 ├── clear_optimized.go   # Concurrent storage delete + batch ZREM
@@ -428,9 +430,12 @@ client.Use(func(catalog, event string, attrs map[string]any) {
 |-------|-------|-------|
 | `List` | — | Single-catalog list |
 | `BatchList` | — | One event per catalog inside the batch |
-| `Write` | `path`, `mergeType` | After validation, before any I/O |
+| `WriteBegin` | `path`, `mergeType` | Emitted before path validation |
+| `WriteNotify` | `path`, `uuid` | Emitted on commit to the delta index |
 | `Sample` | `indicator` | Once per Sample call (cache hit or miss) |
-| `ClearHistory` | `keepSnaps` | Once per catalog clear |
+| `BatchSample` | `indicator` | One event per catalog inside the batch |
+| `SampleCacheError` | `op`, `err` | Cache read/write failed; degraded to recompute / best-effort write |
+| `ClearHistory` | — | Once per catalog clear |
 
 > For distributed tracing, instrument the underlying Redis / OSS clients
 > (e.g. `redisotel.InstrumentTracing`); Lake intentionally avoids dragging in
@@ -632,9 +637,9 @@ and still resolves at `go get github.com/hkloudou/lake/v2@latest`.
 
 ## 📚 Examples
 
-- [example_test.go](./example_test.go) — Write, Read, RFC patches
-- [cache_example_test.go](./cache_example_test.go) — Two-Redis cache setup
-- [trace_example_test.go](./trace_example_test.go) — Event handler usage
+- **Quick Start** above — `WriteBegin` → upload → `WriteNotify` → `List` → `Read`
+- [sample_test.go](./sample_test.go), [sample_batch_test.go](./sample_batch_test.go) — `Sampler[T]` staleness policy and batch behavior
+- [middleware_event_test.go](./middleware_event_test.go) — event handler / middleware usage
 
 ## 🤝 Contributing
 
