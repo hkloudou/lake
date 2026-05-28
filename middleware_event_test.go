@@ -96,10 +96,9 @@ func TestEmit_SampleFiresOnListErr(t *testing.T) {
 	// Hand-craft a ListResult with Err so Sample short-circuits;
 	// emit must still fire.
 	list := &ListResult{client: c, catalog: "users", Err: errIntentional}
-	_, err := Sample[map[string]any](
-		context.Background(), list, "report",
-		func(*ListResult) (map[string]any, error) { return nil, nil },
-	)
+	sampler := NewSampler[map[string]any]("report",
+		func(*ListResult) (map[string]any, error) { return nil, nil })
+	_, err := sampler.Sample(context.Background(), list)
 	if err == nil {
 		t.Fatal("expected list-err propagation, got nil")
 	}

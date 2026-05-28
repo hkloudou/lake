@@ -56,7 +56,7 @@ func TestBatchSample_HitsAndMisses_Redis(t *testing.T) {
 	stop := index.TimeSeqID{Timestamp: 1700000100, SeqID: 500}
 
 	// Pre-seed a cache hit for "users" at score == lastUpdated.
-	primed, err := marshalSampleCache(stop.Score(), 7)
+	primed, err := marshalSampleCache(SampleMeta{Score: stop.Score(), UpdatedAt: time.Now().Unix()}, 7)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestBatchSample_HitsAndMisses_Redis(t *testing.T) {
 		t.Errorf("loader unexpectedly invoked for %q", l.catalog)
 		return 0, nil
 	}
-	out := BatchSample[int](ctx, lists, "daily", loader)
+	out := NewSampler[int]("daily", loader).Batch(ctx, lists)
 
 	if got := calls.Load(); got != 2 {
 		t.Errorf("loader call count: got %d, want 2 (one per miss)", got)

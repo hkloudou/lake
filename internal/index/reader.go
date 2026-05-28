@@ -206,6 +206,16 @@ func (r *Reader) timeUpdater() {
 	}
 }
 
+// NowUnix returns Lake's notion of the current time in unix seconds,
+// taken from the Redis server clock (refreshed every 5s). During the
+// brief window before the first sync it falls back to the local clock.
+func (r *Reader) NowUnix() int64 {
+	if t := r.redisTimeUnix.Load(); t > 0 {
+		return t
+	}
+	return time.Now().Unix()
+}
+
 func (r *Reader) serverUnix(ctx context.Context) (int64, error) {
 	res, err := r.rdb.Eval(ctx, `return tonumber(redis.call("TIME")[1])`, nil).Result()
 	if err != nil {
