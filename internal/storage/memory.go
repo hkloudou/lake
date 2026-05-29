@@ -3,7 +3,6 @@ package storage
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/hkloudou/lake/v3/internal/index"
@@ -43,25 +42,6 @@ func (m *memoryStorage) Delete(ctx context.Context, key string) error {
 	delete(m.data, key)
 	m.mu.Unlock()
 	return nil
-}
-
-func (m *memoryStorage) Exists(ctx context.Context, key string) (bool, error) {
-	m.mu.RLock()
-	_, ok := m.data[key]
-	m.mu.RUnlock()
-	return ok, nil
-}
-
-func (m *memoryStorage) List(ctx context.Context, prefix string) ([]string, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	var keys []string
-	for k := range m.data {
-		if strings.HasPrefix(k, prefix) {
-			keys = append(keys, k)
-		}
-	}
-	return keys, nil
 }
 
 func (m *memoryStorage) RedisPrefix() string { return m.name }

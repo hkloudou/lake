@@ -23,8 +23,6 @@ type Storage interface {
 	Put(ctx context.Context, key string, data []byte) error
 	Get(ctx context.Context, key string) ([]byte, error)
 	Delete(ctx context.Context, key string) error
-	Exists(ctx context.Context, key string) (bool, error)
-	List(ctx context.Context, prefix string) ([]string, error)
 
 	// RedisPrefix is the deployment-level Redis namespace (lake.setting Name).
 	RedisPrefix() string

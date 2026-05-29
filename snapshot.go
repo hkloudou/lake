@@ -7,25 +7,16 @@ import (
 	"github.com/hkloudou/lake/v3/internal/index"
 )
 
-// AllSnaps collects every catalog's snap metadata into a map (HSCAN under
-// the hood; no Redis op blocks the server's main thread for more than a
-// few hundred fields at a time). Backup tooling can feed each (catalog,
-// info.StopTsSeq) into Storage.MakeSnapKey to enumerate every OSS snap
-// key without a LIST.
-//
-// For very large fleets prefer IterateSnaps so the full map is never
-// materialised in memory.
-func (c *Client) AllSnaps(ctx context.Context) (map[string]SnapInfo, error) {
-	if err := c.ensureInitialized(ctx); err != nil {
-		return nil, err
-	}
-	return c.reader.AllSnaps(ctx)
-}
-
-// IterateSnaps streams every catalog's snap to fn — the scalable form of
-// AllSnaps. Stops early when fn returns false; honours ctx cancellation.
-// See (*index.Reader).IterateSnaps for the concurrent-modification
-// semantics inherited from HSCAN.
+// IterateSnaps streams every catalog's snap to fn via HSCAN — the single
+// primitive for enumerating snap metadata (e.g. for backup tooling that
+// feeds each (catalog, snap.StopTsSeq) into Storage.MakeSnapKey to locate
+// every OSS snap object without an OSS LIST). Stops early when fn returns
+// false; honours ctx cancellation. No Redis op blocks the server's main
+// thread for more than a few hundred fields, so it scales to large fleets
+// without materialising the full set in memory. See
+// (*index.Reader).IterateSnaps for the concurrent-modification semantics
+// inherited from HSCAN. Callers that want the whole set in a map can
+// accumulate one inside fn.
 func (c *Client) IterateSnaps(ctx context.Context, fn func(catalog string, snap SnapInfo) bool) error {
 	if err := c.ensureInitialized(ctx); err != nil {
 		return err

@@ -109,10 +109,10 @@ func TestSnapHashOverwrite(t *testing.T) {
 	}
 }
 
-// TestAllSnapsBatchBackup is the headline use-case test: AllSnaps (via
-// HSCAN under the hood) returns every catalog's snap so backup tooling
+// TestIterateSnapsBatchBackup is the headline use-case test: IterateSnaps
+// (via HSCAN under the hood) yields every catalog's snap so backup tooling
 // can enumerate the full set of OSS snap keys without an OSS LIST.
-func TestAllSnapsBatchBackup(t *testing.T) {
+func TestIterateSnapsBatchBackup(t *testing.T) {
 	rdb := snapHashTestRedis(t)
 	w := NewWriter(rdb)
 	r := NewReader(rdb)
@@ -132,17 +132,20 @@ func TestAllSnapsBatchBackup(t *testing.T) {
 		}
 	}
 
-	all, err := r.AllSnaps(ctx)
-	if err != nil {
-		t.Fatalf("AllSnaps: %v", err)
+	all := make(map[string]SnapInfo)
+	if err := r.IterateSnaps(ctx, func(catalog string, snap SnapInfo) bool {
+		all[catalog] = snap
+		return true
+	}); err != nil {
+		t.Fatalf("IterateSnaps: %v", err)
 	}
 	if got := len(all); got != len(stops) {
-		t.Fatalf("AllSnaps length: got %d, want %d", got, len(stops))
+		t.Fatalf("IterateSnaps count: got %d, want %d", got, len(stops))
 	}
 	for catalog, want := range stops {
 		got, ok := all[catalog]
 		if !ok {
-			t.Errorf("missing catalog %q in AllSnaps", catalog)
+			t.Errorf("missing catalog %q from IterateSnaps", catalog)
 			continue
 		}
 		if got.StopTsSeq != want {

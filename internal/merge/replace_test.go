@@ -124,4 +124,3 @@ func TestMergersMap(t *testing.T) {
 
 	t.Log("✓ All mergers in map are initialized")
 }
-

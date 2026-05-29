@@ -38,14 +38,12 @@ func MergeTypeFromInt(i int) MergeType {
 	return MergeType(i)
 }
 
-// EncodeDeltaMember formats a delta zset member.
-//
-// V3 layout: "delta|{type}|{path}|{tsSeq}|{uuid}". The uuid is the OSS
-// object identifier (allocated client-side at WriteBegin); it lives in
-// the member so Read can resolve the storage key without a side hash.
-func EncodeDeltaMember(field string, mergeType MergeType, tsSeq TimeSeqID, uuid string) string {
-	return fmt.Sprintf("delta|%d|%s|%s|%s", mergeType, field, tsSeq, uuid)
-}
+// Delta zset member layout: "delta|{type}|{path}|{tsSeq}|{uuid}". The uuid
+// is the OSS object identifier (allocated client-side at WriteBegin); it
+// lives in the member so Read can resolve the storage key without a side
+// hash. The member is *written* by the notify Lua script (see
+// writer_atomic.go) — that script is the single authoritative encoder.
+// DecodeDeltaMember below is the matching reader and its tests pin the format.
 
 // DecodeDeltaMember parses a delta member and verifies its score
 // matches the embedded tsSeq.
