@@ -4,27 +4,6 @@ import "testing"
 
 const testUUID = "0123456789abcdef0123456789abcdef"
 
-func TestEncodeMember(t *testing.T) {
-	tests := []struct {
-		field     string
-		mergeType MergeType
-		tsSeq     TimeSeqID
-		expected  string
-	}{
-		{"/user/name", MergeTypeReplace, TimeSeqID{1700000000, 1}, "delta|1|/user/name|1700000000_1|" + testUUID},
-		{"/profile", MergeTypeRFC7396, TimeSeqID{1700000000, 2}, "delta|2|/profile|1700000000_2|" + testUUID},
-		{"/", MergeTypeRFC6902, TimeSeqID{1700000000, 3}, "delta|3|/|1700000000_3|" + testUUID},
-		{"/user.info", MergeTypeReplace, TimeSeqID{1700000100, 123}, "delta|1|/user.info|1700000100_123|" + testUUID},
-	}
-	for _, tt := range tests {
-		got := EncodeDeltaMember(tt.field, tt.mergeType, tt.tsSeq, testUUID)
-		if got != tt.expected {
-			t.Errorf("EncodeDeltaMember(%q, %d, %v, uuid) = %q, want %q",
-				tt.field, tt.mergeType, tt.tsSeq, got, tt.expected)
-		}
-	}
-}
-
 func TestDecodeMember(t *testing.T) {
 	const u = testUUID
 	tests := []struct {
@@ -38,15 +17,15 @@ func TestDecodeMember(t *testing.T) {
 	}{
 		{"delta|1|/user/name|1700000000_1|" + u, 1700000000.000001, "/user/name", MergeTypeReplace, TimeSeqID{1700000000, 1}, u, false},
 		{"delta|2|/profile|1700000000_2|" + u, 1700000000.000002, "/profile", MergeTypeRFC7396, TimeSeqID{1700000000, 2}, u, false},
-		{"delta|3|/|1700000000_3|" + u, 1700000000.000003, "/", MergeTypeRFC6902, TimeSeqID{1700000000, 3}, u, false},
 		// Invalid formats
 		{"invalid", 0, "", 0, TimeSeqID{}, "", true},
 		{"delta|only", 0, "", 0, TimeSeqID{}, "", true},
-		{"data|1|field|1700000000_1|" + u, 0, "", 0, TimeSeqID{}, "", true},                // wrong prefix
-		{"delta|1|/x|1700000000_1", 0, "", 0, TimeSeqID{}, "", true},                       // 4 parts (legacy)
-		{"delta|1|/x|1700000000_1|" + u + "|extra", 0, "", 0, TimeSeqID{}, "", true},       // 6 parts
-		{"delta|1|/x|1700000000_1|", 1700000000.000001, "", 0, TimeSeqID{}, "", true},      // empty uuid
+		{"data|1|field|1700000000_1|" + u, 0, "", 0, TimeSeqID{}, "", true},           // wrong prefix
+		{"delta|1|/x|1700000000_1", 0, "", 0, TimeSeqID{}, "", true},                  // 4 parts (legacy)
+		{"delta|1|/x|1700000000_1|" + u + "|extra", 0, "", 0, TimeSeqID{}, "", true},  // 6 parts
+		{"delta|1|/x|1700000000_1|", 1700000000.000001, "", 0, TimeSeqID{}, "", true}, // empty uuid
 		{"delta|0|/user/name|1700000000_1|" + u, 1700000000.000001, "", 0, TimeSeqID{}, "", true},
+		{"delta|3|/|1700000000_3|" + u, 1700000000.000003, "", 0, TimeSeqID{}, "", true}, // type 3 (RFC6902) removed
 		{"delta|4|/user/name|1700000000_1|" + u, 1700000000.000001, "", 0, TimeSeqID{}, "", true},
 		{"delta|abc|/user/name|1700000000_1|" + u, 1700000000.000001, "", 0, TimeSeqID{}, "", true},
 		{"delta|1|user/name|1700000000_1|" + u, 1700000000.000001, "", 0, TimeSeqID{}, "", true},

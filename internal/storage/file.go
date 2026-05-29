@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/hkloudou/lake/v3/internal/index"
 )
@@ -73,43 +72,6 @@ func (s *fileStorage) Delete(ctx context.Context, key string) error {
 		return fmt.Errorf("delete %s: %w", key, err)
 	}
 	return nil
-}
-
-func (s *fileStorage) Exists(ctx context.Context, key string) (bool, error) {
-	_, err := os.Stat(filepath.Join(s.basePath, key))
-	if err == nil {
-		return true, nil
-	}
-	if os.IsNotExist(err) {
-		return false, nil
-	}
-	return false, err
-}
-
-func (s *fileStorage) List(ctx context.Context, prefix string) ([]string, error) {
-	root := filepath.Join(s.basePath, prefix)
-	var keys []string
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() || strings.HasSuffix(path, ".tmp") {
-			return nil
-		}
-		rel, err := filepath.Rel(s.basePath, path)
-		if err != nil {
-			return err
-		}
-		keys = append(keys, filepath.ToSlash(rel))
-		return nil
-	})
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []string{}, nil
-		}
-		return nil, fmt.Errorf("walk: %w", err)
-	}
-	return keys, nil
 }
 
 func (s *fileStorage) RedisPrefix() string { return s.name }

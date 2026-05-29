@@ -9,7 +9,6 @@ const (
 	MergeTypeUnknown = index.MergeTypeUnknown
 	MergeTypeReplace = index.MergeTypeReplace // simple field set
 	MergeTypeRFC7396 = index.MergeTypeRFC7396 // JSON Merge Patch
-	MergeTypeRFC6902 = index.MergeTypeRFC6902 // JSON Patch
 )
 
 // SnapInfo records a catalog's latest snapshot point.

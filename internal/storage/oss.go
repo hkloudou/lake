@@ -62,11 +62,11 @@ func NewOSSStorage(cfg OSSConfig) (*ossStorage, error) {
 }
 
 func (s *ossStorage) Put(ctx context.Context, key string, data []byte) error {
-	return s.bucket.PutObject(key, bytes.NewReader(data))
+	return s.bucket.PutObject(key, bytes.NewReader(data), oss.WithContext(ctx))
 }
 
 func (s *ossStorage) Get(ctx context.Context, key string) ([]byte, error) {
-	r, err := s.bucket.GetObject(key)
+	r, err := s.bucket.GetObject(key, oss.WithContext(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("get %s: %w", key, err)
 	}
@@ -75,35 +75,13 @@ func (s *ossStorage) Get(ctx context.Context, key string) ([]byte, error) {
 }
 
 func (s *ossStorage) Delete(ctx context.Context, key string) error {
-	if err := s.bucket.DeleteObject(key); err != nil {
+	if err := s.bucket.DeleteObject(key, oss.WithContext(ctx)); err != nil {
 		if e, ok := err.(oss.ServiceError); ok && (e.StatusCode == 404 || e.Code == "NoSuchKey") {
 			return nil
 		}
 		return err
 	}
 	return nil
-}
-
-func (s *ossStorage) Exists(ctx context.Context, key string) (bool, error) {
-	return s.bucket.IsObjectExist(key)
-}
-
-func (s *ossStorage) List(ctx context.Context, prefix string) ([]string, error) {
-	var keys []string
-	marker := ""
-	for {
-		res, err := s.bucket.ListObjects(oss.Prefix(prefix), oss.Marker(marker))
-		if err != nil {
-			return nil, fmt.Errorf("list %s: %w", prefix, err)
-		}
-		for _, o := range res.Objects {
-			keys = append(keys, o.Key)
-		}
-		if !res.IsTruncated {
-			return keys, nil
-		}
-		marker = res.NextMarker
-	}
 }
 
 func (s *ossStorage) RedisPrefix() string { return s.name }

@@ -140,18 +140,6 @@ func (r *Reader) IterateSnaps(ctx context.Context, fn func(catalog string, snap 
 	}
 }
 
-// AllSnaps collects every catalog's snap into a map. Convenience over
-// IterateSnaps for small / moderate deployments; for very large fleets,
-// prefer IterateSnaps to avoid materialising the full map at once.
-func (r *Reader) AllSnaps(ctx context.Context) (map[string]SnapInfo, error) {
-	out := make(map[string]SnapInfo)
-	err := r.IterateSnaps(ctx, func(catalog string, snap SnapInfo) bool {
-		out[catalog] = snap
-		return true
-	})
-	return out, err
-}
-
 // BatchList runs an HMGet on snaps + a pipelined ZRange for every
 // catalog — 2 round-trips total regardless of catalog count.
 func (r *Reader) BatchList(ctx context.Context, catalogs []string) map[string]*BatchListResult {

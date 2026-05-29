@@ -27,7 +27,7 @@ const (
 type WriteBeginRequest struct {
 	Catalog   string    `json:"catalog"`
 	Path      string    `json:"path"`      // JSON path; "/" means root
-	MergeType MergeType `json:"mergeType"` // Replace, RFC7396, or RFC6902
+	MergeType MergeType `json:"mergeType"` // Replace or RFC7396
 }
 
 // WriteHandle is what WriteBegin returns and WriteNotify consumes. It
@@ -94,7 +94,7 @@ func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...
 	if err := utils.ValidateFieldPath(req.Path); err != nil {
 		return nil, err
 	}
-	if req.MergeType < MergeTypeReplace || req.MergeType > MergeTypeRFC6902 {
+	if req.MergeType < MergeTypeReplace || req.MergeType > MergeTypeRFC7396 {
 		return nil, fmt.Errorf("invalid mergeType: %d", req.MergeType)
 	}
 	if err := c.ensureInitialized(ctx); err != nil {
@@ -150,7 +150,7 @@ func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...
 //
 // Notify is NOT idempotent — duplicate calls produce duplicate deltas
 // (each with its own tsSeq, all referencing the same OSS uuid). For
-// Replace / RFC7396 / RFC6902, applying the same body twice is benign;
+// Replace / RFC7396, applying the same body twice is benign;
 // nevertheless, callers should retry only after the previous Notify
 // definitively errored.
 func (c *Client) WriteNotify(ctx context.Context, h *WriteHandle) error {

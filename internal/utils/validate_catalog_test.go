@@ -15,8 +15,8 @@ func TestValidateCatalog_Accepted(t *testing.T) {
 		"a1.b2-c3_d",
 		"tenantA/users",
 		"tenant/sub/leaf",
-		"_users",        // underscore-led segment OK
-		"123-tenant",    // digit-led segment OK
+		"_users",     // underscore-led segment OK
+		"123-tenant", // digit-led segment OK
 		"v3.0.0-alpha.1",
 	}
 	for _, c := range cases {

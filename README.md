@@ -13,17 +13,16 @@
 
 ## ✨ Key Features
 
-- **🔒 Atomic Writes** — Two-phase commit with pending state, no data loss under
-  concurrent writers and slow object storage
-- **📜 RFC Standards** — Full RFC 7396 (Merge Patch) and RFC 6902 (JSON Patch)
+- **🔒 Atomic Writes** — direct-upload then notify; the index entry (and its
+  tsSeq) is allocated only after the upload succeeds, so a slow / aborted
+  upload never appears in the index — no pending phase, nothing to roll back
+- **📜 RFC Standard** — Full RFC 7396 (JSON Merge Patch), plus simple field Replace
 - **⚡ High Throughput** — Up to 999,999 writes/sec per catalog (Lua-bound seqid)
 - **💾 Smart Caching** — Redis snapshot cache + in-memory delta cache
 - **🎯 Snapshot Acceleration** — Time-range packed snapshots, async generation
 - **🧮 Generic Sampling** — `NewSampler[T]` computes derived data on demand
   with a layered staleness policy; replaces v2's separate "meta" concept
 - **🔍 Event Middleware** — `client.Use(handler)` for logging / monitoring
-- **🔐 Optional AES-GCM Encryption** — minimal overhead, configurable via
-  `lake.setting`
 
 ## 🚀 Quick Start
 
@@ -127,7 +126,7 @@ process:
 type WriteBeginRequest struct {
     Catalog   string    `json:"catalog"`
     Path      string    `json:"path"`      // "/" means root
-    MergeType MergeType `json:"mergeType"` // 1=Replace, 2=RFC7396, 3=RFC6902
+    MergeType MergeType `json:"mergeType"` // 1=Replace, 2=RFC7396
 }
 ```
 
@@ -143,7 +142,7 @@ type WriteHandle struct {
     UploadURL     string            `json:"uploadURL"`
     UploadMethod  string            `json:"uploadMethod"`
     UploadHeaders map[string]string `json:"uploadHeaders"`
-    ExpiresAt     time.Time         `json:"expiresAt"`
+    ExpiresAt     int64             `json:"expiresAt"` // unix seconds
 }
 ```
 
@@ -174,7 +173,6 @@ lake.WithUploadContentType("application/json")
 ```go
 lake.MergeTypeReplace  // = 1: simple field replacement
 lake.MergeTypeRFC7396  // = 2: RFC 7396 JSON Merge Patch (null removes)
-lake.MergeTypeRFC6902  // = 3: RFC 6902 JSON Patch (operations array)
 ```
 
 > **Storage support**: WriteBegin requires a `Presigner`-capable storage
@@ -197,12 +195,11 @@ lake.MergeTypeRFC6902  // = 3: RFC 6902 JSON Patch (operations array)
 
 ```go
 type ListResult struct {
-    Err        error // non-nil on Redis / decode failures
-    HasPending bool  // a pending write (< 120s old) overlaps the result
-    // ...other fields are read-only details
+    Err error // non-nil on Redis / decode failures
+    // LatestSnap and Entries are exported read-only details.
 }
 
-func (m ListResult) Exist() bool         // catalog has snapshot or deltas
+func (m ListResult) Exist() bool          // catalog has snapshot or deltas
 func (m ListResult) LastUpdated() float64 // score of the most recent change
 ```
 
@@ -212,9 +209,6 @@ func (m ListResult) LastUpdated() float64 // score of the most recent change
 list := client.List(ctx, "users")
 if list.Err != nil {
     return list.Err
-}
-if list.HasPending {
-    return errors.New("write in progress, retry")
 }
 
 // Pick the read shape you want:
@@ -333,21 +327,20 @@ retention concept; `ClearHistoryWithRetention` from earlier drafts is removed.
 
 | Function | File | Description |
 |----------|------|-------------|
-| `(*Client) AllSnaps(ctx) (map[string]SnapInfo, error)` | [snapshot.go](snapshot.go) | Collect every catalog's snap into a map via HSCAN |
 | `(*Client) IterateSnaps(ctx, fn) error` | [snapshot.go](snapshot.go) | Stream each `(catalog, snap)` to `fn`; stops when `fn` returns false |
 
-`AllSnaps` is the convenient form for small to moderate fleets: it walks
-`<prefix>:s` via HSCAN under the hood and accumulates every entry into a
-map. For very large deployments — or any case where you don't want the
-full map in memory — use `IterateSnaps`, which yields one entry at a time
-and honours early termination.
+`IterateSnaps` is the single enumeration primitive: it walks `<prefix>:s`
+via HSCAN under the hood, yielding one entry at a time and honouring early
+termination. Callers that want the whole set in a map just accumulate one
+inside `fn` — Lake intentionally does not bundle a map-collecting helper or
+an actual archive/copy step; that belongs in caller-side backup tooling (a
+future `cmd`), not the core library.
 
-Both forms avoid a full OSS `LIST`, which is slow and paginated. Neither
-form ever issues a single Redis op that blocks the server's main thread for
-more than ~500 fields, so even a million-catalog hash backs up without
-stalling concurrent reads and writes. Feed each `(catalog, StopTsSeq)` into
-`Storage.MakeSnapKey` to obtain the OSS object key, then copy that object to
-your archive bucket.
+This avoids a full OSS `LIST`, which is slow and paginated. No single Redis
+op blocks the server's main thread for more than ~500 fields, so even a
+million-catalog hash backs up without stalling concurrent reads and writes.
+Feed each `(catalog, StopTsSeq)` into `Storage.MakeSnapKey` to obtain the
+OSS object key, then copy that object to your archive bucket.
 
 ```go
 // Streaming, budget-friendly backup loop.
@@ -372,12 +365,12 @@ h, _ := client.WriteBegin(ctx, lake.WriteBeginRequest{
     MergeType: lake.MergeTypeRFC7396,
 })
 
-// RFC 6902 — explicit JSON Patch operations.
-// Upload body: [{"op":"add","path":"/tags","value":["vip"]}]
+// Replace — set a field (or the whole doc at "/") to the uploaded value.
+// Upload body: {"name":"Alice","age":30}
 h, _ = client.WriteBegin(ctx, lake.WriteBeginRequest{
     Catalog:   "users",
-    Path:      "/",
-    MergeType: lake.MergeTypeRFC6902,
+    Path:      "/profile",
+    MergeType: lake.MergeTypeReplace,
 })
 ```
 
@@ -399,11 +392,10 @@ lake/
 └── internal/
     ├── index/           # Redis ZSet operations, TimeSeqID, Lua scripts
     ├── storage/         # Memory / File / OSS backends
-    ├── merge/           # Replace / RFC7396 / RFC6902 mergers
-    ├── cache/           # Redis + Memory caches with SingleFlight
+    ├── merge/           # Replace / RFC7396 mergers
+    ├── cache/           # Redis (gzip) + Memory caches with SingleFlight
     ├── config/          # lake.setting loader
     ├── encode/          # Catalog name encoding chokepoint
-    ├── encrypt/         # AES-GCM + gzip
     ├── utils/           # Path validation
     └── xsync/           # SingleFlight primitive
 ```
@@ -422,7 +414,6 @@ Lake loads its bucket / storage choice from the Redis key `lake.setting`:
   "Endpoint": "oss-cn-hangzhou",
   "AccessKey": "your-access-key",
   "SecretKey": "your-secret-key",
-  "AESPwd": "optional-encryption-key",
   "BasePath": ""
 }
 ```
@@ -557,7 +548,7 @@ back later. Callers must therefore avoid `:` and `|` in catalog names today.
 {prefix}:s                 Hash     # snap — deployment-wide, field = catalog
   value = "{stopTsSeq}"                         # one entry per catalog,
                                                 # overwritten on each save;
-                                                # HGETALL drives backup tooling
+                                                # HSCAN (IterateSnaps) drives backup tooling
 
 {prefix}:m:{indicator}     Hash     # sample (memo) — per-indicator, field = catalog
   value = [score, updatedAt, data]              # JSON array, atomic per HSET
@@ -647,13 +638,35 @@ errors from the data path.
 A snapshot is an optimization. If the async save fails, the next read simply
 regenerates it. Reads never wait for a snapshot to be persisted.
 
-### Orphan cleanup is via `ClearHistory`
+### `ClearHistory` is compaction, not orphan reaping
 
-Two-phase commit can leave behind a pending member + storage object if the
-process dies between step 2 and step 3. There is no background reaper —
-instead, `ClearHistory` is the single, explicit cleanup entry point. Pending
-members carry enough information (mergeType + path + tsSeq) to reconstruct
-the storage key and delete it.
+`ClearHistory` drops delta entries (and their OSS objects) at or before the
+catalog's latest snap — i.e. the deltas already folded into a snapshot. It
+is compaction, run explicitly by the caller; there is no background reaper.
+
+Aborted writes are a *separate* concern. Because the delta member is written
+only at `WriteNotify` (after the upload), a client that uploads to the signed
+URL but never notifies leaves an OSS object with no Redis reference at all —
+not a "pending member". Such objects are invisible to `ClearHistory` (it
+walks the index, and they are not in it); reclaiming them needs a future
+sweep tool that diffs the bucket against the delta zset.
+
+### A patch body is the client's responsibility
+
+Every committed delta is replayed by `merge` on **every read** (and on each
+snapshot save). `WriteNotify` does not fetch or validate the uploaded body —
+that is the point of direct upload. So a body that cannot be applied (invalid
+JSON, an RFC 7396 patch that does not parse) will fail merge, and because the
+same merge gates snapshotting, the failure is sticky: every read of that
+catalog errors until the bad delta is removed. There is intentionally no
+read-time skip/quarantine — Lake does not silently drop a write.
+
+The merge error names the offending delta (`path`, `tsSeq`, `uuid`, plus
+`catalog` at the read site). Recovery today is manual: rebuild the OSS key
+with `MakeDeltaKey(catalog, uuid)`, then `ZREM` the member from
+`{prefix}:d:{catalog}`. Keeping bodies valid before upload is the contract;
+the surface for malformed bodies shrank in v3-alpha when RFC 6902 (the
+op-array merge type, most prone to apply-time failure) was removed.
 
 ## 🔄 Migrating from v2 to v3
 
@@ -666,6 +679,11 @@ v3 is **not** wire-compatible with v2 callers. Concretely:
 - **File API removed.** `WriteFile`, `FileExists`, `FilesAndMeta`,
   `WriteFileRequest`, and `Storage.MakeFileKey` are gone. Lake v3 handles
   JSON documents only.
+- **RFC 6902 (JSON Patch) removed** (v3-alpha). Only `MergeTypeReplace` (1)
+  and `MergeTypeRFC7396` (2) remain; `MergeTypeRFC6902` and its merger are
+  gone — the op-array syntax was complex and the most apply-failure-prone
+  merge type. Any existing `mergeType=3` delta is no longer decodable; flush
+  such deltas. Most RFC 6902 intents express as RFC 7396 or Replace.
 - **`MotionSample` (v1 sample) removed.** Use `NewSampler[T]` instead — its
   `WithShouldRefresh` predicate and `Batch` over many catalogs subsume v1's
   `shouldUpdated` callback and `motionCatalogs` cross-catalog sampling.
@@ -676,17 +694,19 @@ v3 is **not** wire-compatible with v2 callers. Concretely:
 - **Snap storage replaced.** v2 stored snap metadata in per-catalog ZSets
   (`{prefix}:{catalog}:snap`) and tracked historical snapshots via a retention
   parameter. v3 stores a single latest snap per catalog as a field of one
-  global Hash (`{prefix}:s`), enabling whole-deployment backup via one
-  HGETALL. The previous OSS snap object on each save becomes orphan storage
-  (acceptable trade-off; reaped by future SweepOrphans tooling).
+  global Hash (`{prefix}:s`), enabling whole-deployment backup by an HSCAN
+  over one key. The previous OSS snap object on each save becomes orphan
+  storage (acceptable trade-off; reaped by future SweepOrphans tooling).
   `ClearHistoryWithRetention(ctx, catalog, keepSnaps)` is removed —
   use `ClearHistory(ctx, catalog)` instead.
 - **Delta key shape** changed to a `<type>:<axis>` layout, matching snap
   and sample: `{prefix}:{catalog}:delta` → `{prefix}:d:{catalog}`. Existing
   v3-alpha delta zsets are not visible after upgrade; flush and let writers
   repopulate (delta bodies in OSS are untouched).
-- **`Client.AllSnaps(ctx)`** is new: returns every catalog's snap metadata in
-  one HGETALL, intended for backup workflows.
+- **`Client.IterateSnaps(ctx, fn)`** is new: streams every catalog's snap
+  metadata via HSCAN, intended for backup workflows. (An earlier
+  `AllSnaps` map-collecting convenience was dropped — accumulate a map
+  inside `fn` if you want one.)
 - **`merge.Merge` signature** changed: dropped the unused `catalog` parameter
   and the always-empty second return value. (Internal API.)
 - **`Writer.Commit` signature** dropped the meta argument. (Internal API.)

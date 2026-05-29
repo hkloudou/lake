@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -10,11 +11,17 @@ import (
 func TestConfigManager(t *testing.T) {
 	// Use a test Redis instance
 	rdb := redis.NewClient(&redis.Options{
-		Addr: "localhost:6379",
-		DB:   15, // Use test database
+		Addr:        "localhost:6379",
+		DB:          15, // Use test database
+		DialTimeout: 200 * time.Millisecond,
 	})
 
 	ctx := context.Background()
+	pingCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	if err := rdb.Ping(pingCtx).Err(); err != nil {
+		t.Skipf("redis not reachable, skipping integration test: %v", err)
+	}
 
 	// Clean up
 	defer rdb.Del(ctx, "lake.setting")

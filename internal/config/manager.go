@@ -28,7 +28,6 @@ func NewManager(rdb *redis.Client) *Manager {
 type Config struct {
 	Name    string `json:"Name"`
 	Storage string `json:"Storage"` // "memory" | "oss" | "file"
-	AESPwd  string `json:"AESPwd"`
 
 	Bucket    string `json:"Bucket"`    // OSS
 	Endpoint  string `json:"Endpoint"`  // OSS

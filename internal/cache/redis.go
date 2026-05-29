@@ -6,16 +6,15 @@ import (
 	"time"
 
 	"github.com/hkloudou/lake/v3/internal/encode"
-	"github.com/hkloudou/lake/v3/internal/encrypt"
 	"github.com/hkloudou/lake/v3/internal/xsync"
 	"github.com/redis/go-redis/v9"
 )
 
-// RedisCache is a Redis-backed Cache.
+// RedisCache is a Redis-backed Cache. Values are gzip-compressed (a space
+// optimization, not encryption — the cache holds only rebuildable data).
 type RedisCache struct {
 	client *redis.Client
 	ttl    time.Duration
-	stat   *CacheStat
 	flight xsync.SingleFlight[[]byte]
 }
 
@@ -24,7 +23,6 @@ func NewRedisCache(client *redis.Client, ttl time.Duration) *RedisCache {
 		client: client,
 		ttl:    ttl,
 		flight: xsync.NewSingleFlight[[]byte](),
-		stat:   NewCacheStat("lake", func() int { return countKeys(client, "lake_cache:*") }),
 	}
 }
 
@@ -43,45 +41,27 @@ func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader fun
 		raw, err := c.client.GetEx(ctx, cacheKey, c.ttl).Bytes()
 		switch err {
 		case nil:
-			c.stat.IncrementHit()
-			return encrypt.Decrypt(raw, []byte("lake"))
+			// A value that fails to decompress (foreign / legacy format) is
+			// treated as a miss and recomputed below.
+			if data, derr := gunzip(raw); derr == nil {
+				return data, nil
+			}
 		case redis.Nil:
-			c.stat.IncrementMiss()
-			data, err := loader()
-			if err != nil {
-				return nil, err
-			}
-			enc, err := encrypt.Encrypt(data, []byte("lake"))
-			if err != nil {
-				return nil, err
-			}
-			if err := c.client.Set(ctx, cacheKey, enc, c.ttl).Err(); err != nil {
-				log.Printf("[Lake Cache] set %s: %v", cacheKey, err)
-			}
-			return data, nil
+			// miss → fall through to loader
 		default:
-			// Redis error → fall back to loader without caching.
+			// Redis error → serve from loader without caching.
 			return loader()
 		}
-	})
-}
 
-// countKeys SCANs Redis for keys matching pattern (best-effort).
-func countKeys(client *redis.Client, pattern string) int {
-	ctx := context.Background()
-	var (
-		cursor uint64
-		count  int
-	)
-	for {
-		keys, next, err := client.Scan(ctx, cursor, pattern, 1000).Result()
+		data, err := loader()
 		if err != nil {
-			return 0
+			return nil, err
 		}
-		count += len(keys)
-		cursor = next
-		if cursor == 0 {
-			return count
+		if enc, gerr := gzipCompress(data); gerr == nil {
+			if err := c.client.Set(ctx, cacheKey, enc, c.ttl).Err(); err != nil {
+				log.Printf("[lake cache] set %s: %v", cacheKey, err)
+			}
 		}
-	}
+		return data, nil
+	})
 }
