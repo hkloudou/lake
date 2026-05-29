@@ -31,11 +31,16 @@ import (
 // and any fallback substituted for it, is returned to the caller but
 // never written back — so a transient failure cannot poison the cache
 // until the catalog's next write.
+//
+// Physically the memo Hash may live on a dedicated cache-tier Redis
+// (Client option WithSampleCacheRedis / WithSampleCacheURL); a cache
+// Redis outage degrades gracefully — reads recompute, writes are
+// best-effort — so the authoritative store never depends on cache health.
 type Sampler[T any] struct {
 	indicator     string
 	loader        func(*ListResult) (T, error)
 	maxAge        time.Duration
-	shouldRefresh func(SampleMeta, *ListResult) bool
+	shouldRefresh func(SampleMeta, *ListResult, map[string]*ListResult) bool
 	onLoaderErr   func(error) (T, bool)
 }
 
@@ -88,14 +93,27 @@ func WithMaxAge[T any](d time.Duration) SamplerOption[T] {
 }
 
 // WithShouldRefresh installs a custom staleness predicate — the analog of
-// React's shouldComponentUpdate. It receives the cached entry's metadata
-// and the current list and returns true to force a recompute even when the
-// data version is unchanged (cross-catalog dependencies, external inputs).
+// React's shouldComponentUpdate. It receives:
 //
-// It runs on every cache hit, so it MUST be pure and cheap: do no I/O.
-// Cross-catalog dependencies should compare versions already in hand
-// (e.g. fetched by the same BatchList), never fetch them here.
-func WithShouldRefresh[T any](fn func(SampleMeta, *ListResult) bool) SamplerOption[T] {
+//   - meta:  the cached entry's metadata (its data version and compute time)
+//   - self:  this catalog's current ListResult
+//   - peers: every ListResult available in the current call's context. For
+//     Sampler.Batch this is the full lists map (including self under its
+//     own key); for Sampler.Sample it is a singleton {self.catalog: self}.
+//     Never nil.
+//
+// Returns true to force a recompute even when the data version is unchanged
+// (cross-catalog dependencies, external inputs). Runs on every cache hit,
+// so it MUST be pure and cheap: do no I/O.
+//
+// To act on a cross-catalog dependency, fan out a single BatchList covering
+// the catalogs you care about, then compare peers["B"].LastUpdated() against
+// whatever version of B the cached T recorded at compute time (T is the
+// natural place to carry "what I depended on" — Sampler does not track it).
+// If the relevant peer is absent from peers, the dependency cannot be
+// evaluated this call; either return false (accept the stale value this
+// time) or arrange for BatchList to include it next time.
+func WithShouldRefresh[T any](fn func(meta SampleMeta, self *ListResult, peers map[string]*ListResult) bool) SamplerOption[T] {
 	return func(s *Sampler[T]) { s.shouldRefresh = fn }
 }
 
@@ -131,7 +149,9 @@ func (s *Sampler[T]) Sample(ctx context.Context, list *ListResult) (T, error) {
 	if err := c.ensureInitialized(ctx); err != nil {
 		return zero, err
 	}
-	return s.finalize(s.sampleCore(ctx, c, list))
+	// Single-catalog context: the only "peer" available is self.
+	peers := map[string]*ListResult{list.catalog: list}
+	return s.finalize(s.sampleCore(ctx, c, list, peers))
 }
 
 // Batch fetches the same indicator for many catalogs in one HMGet, running
@@ -194,7 +214,7 @@ func (s *Sampler[T]) Batch(ctx context.Context, lists map[string]*ListResult) ma
 	now := c.reader.NowUnix()
 	hashKey := c.reader.MakeSampleIndicatorKey(s.indicator)
 
-	cached, err := c.rdb.HMGet(ctx, hashKey, probe...).Result()
+	cached, err := c.sampleRdb.HMGet(ctx, hashKey, probe...).Result()
 	if err != nil && err != redis.Nil {
 		// Cache-read failure: degrade to recompute-all rather than fail
 		// the batch (the cache is an optimization, not the truth).
@@ -212,7 +232,7 @@ func (s *Sampler[T]) Batch(ctx context.Context, lists map[string]*ListResult) ma
 		cat := probe[i]
 		l := lists[cat]
 		if str, ok := raw.(string); ok {
-			if meta, data, derr := unmarshalSampleCache[T]([]byte(str)); derr == nil && !s.isStale(meta, l, now) {
+			if meta, data, derr := unmarshalSampleCache[T]([]byte(str)); derr == nil && !s.isStale(meta, l, lists, now) {
 				out[cat] = &SampleResult[T]{Value: data}
 				continue
 			}
@@ -251,7 +271,7 @@ func (s *Sampler[T]) Batch(ctx context.Context, lists map[string]*ListResult) ma
 // isStale decides whether a cached entry must be recomputed. The data-
 // version floor is mandatory; maxAge and shouldRefresh only ADD triggers
 // (they can force a refresh, never suppress one the data version requires).
-func (s *Sampler[T]) isStale(meta SampleMeta, list *ListResult, now int64) bool {
+func (s *Sampler[T]) isStale(meta SampleMeta, list *ListResult, peers map[string]*ListResult, now int64) bool {
 	lastUpdated := list.LastUpdated()
 	if !(meta.Score >= lastUpdated && meta.Score > 0) {
 		return true // data advanced past the cached version (or none) → refresh
@@ -259,7 +279,7 @@ func (s *Sampler[T]) isStale(meta SampleMeta, list *ListResult, now int64) bool 
 	if s.maxAge > 0 && now > 0 && meta.UpdatedAt > 0 && now-meta.UpdatedAt >= int64(s.maxAge.Seconds()) {
 		return true
 	}
-	if s.shouldRefresh != nil && s.shouldRefresh(meta, list) {
+	if s.shouldRefresh != nil && s.shouldRefresh(meta, list, peers) {
 		return true
 	}
 	return false
@@ -268,13 +288,13 @@ func (s *Sampler[T]) isStale(meta SampleMeta, list *ListResult, now int64) bool 
 // sampleCore is the cache-or-compute path for a single catalog: one HGET,
 // then load on miss/stale. A cache-READ failure degrades to recompute — it
 // never fails the call.
-func (s *Sampler[T]) sampleCore(ctx context.Context, c *Client, list *ListResult) (T, error) {
+func (s *Sampler[T]) sampleCore(ctx context.Context, c *Client, list *ListResult, peers map[string]*ListResult) (T, error) {
 	lastUpdated := list.LastUpdated()
 	now := c.reader.NowUnix()
 	hashKey := c.reader.MakeSampleIndicatorKey(s.indicator)
 
-	if cached, err := c.rdb.HGet(ctx, hashKey, list.catalog).Bytes(); err == nil {
-		if meta, data, derr := unmarshalSampleCache[T](cached); derr == nil && !s.isStale(meta, list, now) {
+	if cached, err := c.sampleRdb.HGet(ctx, hashKey, list.catalog).Bytes(); err == nil {
+		if meta, data, derr := unmarshalSampleCache[T](cached); derr == nil && !s.isStale(meta, list, peers, now) {
 			return data, nil
 		}
 	} else if err != redis.Nil {
@@ -300,7 +320,7 @@ func (s *Sampler[T]) loadAndCache(ctx context.Context, c *Client, list *ListResu
 		if merr != nil {
 			return "", fmt.Errorf("marshal sample: %w", merr)
 		}
-		if werr := c.rdb.HSet(ctx, hashKey, list.catalog, data).Err(); werr != nil {
+		if werr := c.sampleRdb.HSet(ctx, hashKey, list.catalog, data).Err(); werr != nil {
 			c.emitEvent(list.catalog, "SampleCacheError", map[string]any{"op": "hset", "err": werr.Error()})
 		}
 		return string(data), nil
