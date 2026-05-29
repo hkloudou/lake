@@ -17,7 +17,7 @@ func NewWriter(rdb *redis.Client) *Writer {
 	return &Writer{rdb: rdb}
 }
 
-// AddSnap upserts the catalog's snap entry in "<prefix>:snaps".
+// AddSnap upserts the catalog's snap entry in "<prefix>:s".
 // HSet overwrites any prior entry; the previous OSS snap object is
 // left orphan in storage (V3 contract).
 func (w *Writer) AddSnap(ctx context.Context, catalog string, stopTsSeq TimeSeqID) error {

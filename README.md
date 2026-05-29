@@ -277,7 +277,7 @@ hiccup) cannot freeze a degraded value into the cache until the next write.
 Cache-tier failures degrade gracefully too: a failed read recomputes, a
 failed write still returns the freshly computed value.
 
-**Storage layout**: samples live in `{prefix}:samples:{indicator}` Redis
+**Storage layout**: samples live in `{prefix}:m:{indicator}` Redis
 Hashes, each catalog a field holding a `[score, updatedAt, data]` JSON array
 (`score` = data version, `updatedAt` = compute time). All catalogs sharing one
 indicator are colocated, so indicator-wide enumeration / clearing is single-key.
@@ -296,7 +296,7 @@ retention concept; `ClearHistoryWithRetention` from earlier drafts is removed.
 
 | Function | File | Description |
 |----------|------|-------------|
-| `(*Client) AllSnaps(ctx) (map[string]SnapInfo, error)` | [snapshot.go](snapshot.go) | Single HGETALL on `<prefix>:snaps` returns every catalog's snap metadata |
+| `(*Client) AllSnaps(ctx) (map[string]SnapInfo, error)` | [snapshot.go](snapshot.go) | Single HGETALL on `<prefix>:s` returns every catalog's snap metadata |
 
 `AllSnaps` is intended for backup tooling: feed each `(catalog, StartTsSeq, StopTsSeq)`
 triple into `Storage.MakeSnapKey` to obtain the OSS object key, then copy that
@@ -497,20 +497,23 @@ back later. Callers must therefore avoid `:` and `|` in catalog names today.
 ### Redis index
 
 ```
-{prefix}:{catalog}:delta   ZSet
+{prefix}:d:{catalog}       ZSet     # delta — per-catalog change log
   score  = timestamp + seqid / 1e6   (e.g. 1700000000.000123)
   member = "delta|{mergeType}|{path}|{ts}_{seqid}|{uuid}"
 
-{prefix}:snaps             Hash    field=catalog
+{prefix}:s                 Hash     # snap — deployment-wide, field = catalog
   value = "{stopTsSeq}"                         # one entry per catalog,
                                                 # overwritten on each save;
                                                 # HGETALL drives backup tooling
 
-{prefix}:samples:{indicator}   Hash
-  field = catalog
+{prefix}:m:{indicator}     Hash     # sample (memo) — per-indicator, field = catalog
   value = [score, updatedAt, data]              # JSON array, atomic per HSET
                                                 # score=data version, updatedAt=compute time
 ```
+
+All three follow a uniform `<prefix>:<type>:<axis>` layout — `d` delta,
+`s` snap, `m` sample (memo). The snap key has no third token because it
+is a singleton: the per-catalog axis lives as the Hash *field* inside.
 
 ### Object storage
 
@@ -615,16 +618,20 @@ v3 is **not** wire-compatible with v2 callers. Concretely:
   `shouldUpdated` callback and `motionCatalogs` cross-catalog sampling.
 - **Sample storage layout inverted.** v2 used
   `{prefix}:{catalog}:sample` Hashes with the indicator as the field. v3 uses
-  `{prefix}:samples:{indicator}` Hashes with the catalog as the field. v2
-  cache entries cannot be read by v3 and will be silently recomputed.
+  `{prefix}:m:{indicator}` Hashes with the catalog as the field. v2 cache
+  entries cannot be read by v3 and will be silently recomputed.
 - **Snap storage replaced.** v2 stored snap metadata in per-catalog ZSets
   (`{prefix}:{catalog}:snap`) and tracked historical snapshots via a retention
   parameter. v3 stores a single latest snap per catalog as a field of one
-  global Hash (`{prefix}:snaps`), enabling whole-deployment backup via one
+  global Hash (`{prefix}:s`), enabling whole-deployment backup via one
   HGETALL. The previous OSS snap object on each save becomes orphan storage
   (acceptable trade-off; reaped by future SweepOrphans tooling).
   `ClearHistoryWithRetention(ctx, catalog, keepSnaps)` is removed —
   use `ClearHistory(ctx, catalog)` instead.
+- **Delta key shape** changed to a `<type>:<axis>` layout, matching snap
+  and sample: `{prefix}:{catalog}:delta` → `{prefix}:d:{catalog}`. Existing
+  v3-alpha delta zsets are not visible after upgrade; flush and let writers
+  repopulate (delta bodies in OSS are untouched).
 - **`Client.AllSnaps(ctx)`** is new: returns every catalog's snap metadata in
   one HGETALL, intended for backup workflows.
 - **`merge.Merge` signature** changed: dropped the unused `catalog` parameter

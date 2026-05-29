@@ -8,7 +8,7 @@ import (
 )
 
 // AllSnaps returns the latest snap metadata for every catalog in this
-// deployment in a single Redis HGETALL on "<prefix>:snaps". Backup
+// deployment in a single Redis HGETALL on "<prefix>:s". Backup
 // tooling can feed each (catalog, info.StopTsSeq) into
 // Storage.MakeSnapKey to enumerate every OSS snap key without a LIST.
 func (c *Client) AllSnaps(ctx context.Context) (map[string]SnapInfo, error) {

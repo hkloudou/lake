@@ -23,22 +23,23 @@ func (w *indexIO) requirePrefix() {
 	}
 }
 
-// MakeDeltaZsetKey: per-catalog delta ZSet "<prefix>:<catalog>:delta".
+// MakeDeltaZsetKey: per-catalog delta ZSet "<prefix>:d:<catalog>".
 func (w *indexIO) MakeDeltaZsetKey(catalog string) string {
 	w.requirePrefix()
-	return fmt.Sprintf("%s:%s:delta", w.prefix, encode.EncodeRedisCatalogName(catalog))
+	return fmt.Sprintf("%s:d:%s", w.prefix, encode.EncodeRedisCatalogName(catalog))
 }
 
-// MakeSnapsHashKey: deployment-wide snap Hash "<prefix>:snaps", with
-// catalog as field. One HMGet/HGETALL surfaces every snap at once.
+// MakeSnapsHashKey: deployment-wide snap Hash "<prefix>:s", with catalog
+// as field. One HMGet/HGETALL surfaces every snap at once.
 func (w *indexIO) MakeSnapsHashKey() string {
 	w.requirePrefix()
-	return fmt.Sprintf("%s:snaps", w.prefix)
+	return fmt.Sprintf("%s:s", w.prefix)
 }
 
 // MakeSampleIndicatorKey: per-indicator sample Hash
-// "<prefix>:samples:<indicator>", with catalog as field.
+// "<prefix>:m:<indicator>", with catalog as field. "m" reads as "memo" —
+// a sample is the memoised output of a derived computation.
 func (w *indexIO) MakeSampleIndicatorKey(indicator string) string {
 	w.requirePrefix()
-	return fmt.Sprintf("%s:samples:%s", w.prefix, encode.EncodeRedisCatalogName(indicator))
+	return fmt.Sprintf("%s:m:%s", w.prefix, encode.EncodeRedisCatalogName(indicator))
 }
