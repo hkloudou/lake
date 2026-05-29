@@ -14,7 +14,7 @@ func TestMerge_ErrorIdentifiesOffendingDelta(t *testing.T) {
 	entries := []index.DeltaInfo{
 		{MergeType: index.MergeTypeReplace, Path: "/ok", Body: []byte(`"v"`),
 			TsSeq: index.TimeSeqID{Timestamp: 1700000000, SeqID: 1}, UUID: "uuid-good"},
-		{MergeType: index.MergeTypeRFC6902, Path: "/", Body: []byte(`[{"op":"remove","path":"/nope"}]`),
+		{MergeType: index.MergeTypeRFC7396, Path: "/", Body: []byte(`{not json`),
 			TsSeq: index.TimeSeqID{Timestamp: 1700000005, SeqID: 7}, UUID: "uuid-poison"},
 	}
 	_, err := Merge([]byte(`{}`), entries)

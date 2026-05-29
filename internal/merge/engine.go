@@ -10,13 +10,11 @@ import (
 var (
 	replaceMerger = NewReplaceMerger()
 	rfc7396Merger = NewRFC7396Merger()
-	rfc6902Merger = NewRFC6902Merger()
 )
 
 var mergers = map[int]Merger{
 	1: replaceMerger, // index.MergeTypeReplace
 	2: rfc7396Merger, // index.MergeTypeRFC7396
-	3: rfc6902Merger, // index.MergeTypeRFC6902
 }
 
 // Merge applies the given delta entries to baseData in order and returns the

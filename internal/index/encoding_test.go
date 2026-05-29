@@ -17,7 +17,6 @@ func TestDecodeMember(t *testing.T) {
 	}{
 		{"delta|1|/user/name|1700000000_1|" + u, 1700000000.000001, "/user/name", MergeTypeReplace, TimeSeqID{1700000000, 1}, u, false},
 		{"delta|2|/profile|1700000000_2|" + u, 1700000000.000002, "/profile", MergeTypeRFC7396, TimeSeqID{1700000000, 2}, u, false},
-		{"delta|3|/|1700000000_3|" + u, 1700000000.000003, "/", MergeTypeRFC6902, TimeSeqID{1700000000, 3}, u, false},
 		// Invalid formats
 		{"invalid", 0, "", 0, TimeSeqID{}, "", true},
 		{"delta|only", 0, "", 0, TimeSeqID{}, "", true},
@@ -26,6 +25,7 @@ func TestDecodeMember(t *testing.T) {
 		{"delta|1|/x|1700000000_1|" + u + "|extra", 0, "", 0, TimeSeqID{}, "", true},  // 6 parts
 		{"delta|1|/x|1700000000_1|", 1700000000.000001, "", 0, TimeSeqID{}, "", true}, // empty uuid
 		{"delta|0|/user/name|1700000000_1|" + u, 1700000000.000001, "", 0, TimeSeqID{}, "", true},
+		{"delta|3|/|1700000000_3|" + u, 1700000000.000003, "", 0, TimeSeqID{}, "", true}, // type 3 (RFC6902) removed
 		{"delta|4|/user/name|1700000000_1|" + u, 1700000000.000001, "", 0, TimeSeqID{}, "", true},
 		{"delta|abc|/user/name|1700000000_1|" + u, 1700000000.000001, "", 0, TimeSeqID{}, "", true},
 		{"delta|1|user/name|1700000000_1|" + u, 1700000000.000001, "", 0, TimeSeqID{}, "", true},

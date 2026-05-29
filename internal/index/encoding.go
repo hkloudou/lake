@@ -15,7 +15,6 @@ const (
 	MergeTypeUnknown MergeType = 0
 	MergeTypeReplace MergeType = 1 // simple field set
 	MergeTypeRFC7396 MergeType = 2 // JSON Merge Patch
-	MergeTypeRFC6902 MergeType = 3 // JSON Patch
 )
 
 func (m MergeType) String() string {
@@ -24,15 +23,13 @@ func (m MergeType) String() string {
 		return "replace"
 	case MergeTypeRFC7396:
 		return "rfc7396"
-	case MergeTypeRFC6902:
-		return "rfc6902"
 	default:
 		return "unknown"
 	}
 }
 
 func MergeTypeFromInt(i int) MergeType {
-	if i < 1 || i > 3 {
+	if i < 1 || i > 2 {
 		return MergeTypeUnknown
 	}
 	return MergeType(i)
@@ -53,7 +50,7 @@ func DecodeDeltaMember(member string, score float64) (*DeltaInfo, error) {
 		return nil, fmt.Errorf("invalid delta member %q", member)
 	}
 	mt, err := strconv.Atoi(parts[1])
-	if err != nil || mt < 1 || mt > 3 {
+	if err != nil || mt < 1 || mt > 2 {
 		return nil, fmt.Errorf("invalid merge type in %q", member)
 	}
 	if err := utils.ValidateFieldPath(parts[2]); err != nil {

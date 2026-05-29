@@ -16,7 +16,7 @@
 - **🔒 Atomic Writes** — direct-upload then notify; the index entry (and its
   tsSeq) is allocated only after the upload succeeds, so a slow / aborted
   upload never appears in the index — no pending phase, nothing to roll back
-- **📜 RFC Standards** — Full RFC 7396 (Merge Patch) and RFC 6902 (JSON Patch)
+- **📜 RFC Standard** — Full RFC 7396 (JSON Merge Patch), plus simple field Replace
 - **⚡ High Throughput** — Up to 999,999 writes/sec per catalog (Lua-bound seqid)
 - **💾 Smart Caching** — Redis snapshot cache + in-memory delta cache
 - **🎯 Snapshot Acceleration** — Time-range packed snapshots, async generation
@@ -126,7 +126,7 @@ process:
 type WriteBeginRequest struct {
     Catalog   string    `json:"catalog"`
     Path      string    `json:"path"`      // "/" means root
-    MergeType MergeType `json:"mergeType"` // 1=Replace, 2=RFC7396, 3=RFC6902
+    MergeType MergeType `json:"mergeType"` // 1=Replace, 2=RFC7396
 }
 ```
 
@@ -173,7 +173,6 @@ lake.WithUploadContentType("application/json")
 ```go
 lake.MergeTypeReplace  // = 1: simple field replacement
 lake.MergeTypeRFC7396  // = 2: RFC 7396 JSON Merge Patch (null removes)
-lake.MergeTypeRFC6902  // = 3: RFC 6902 JSON Patch (operations array)
 ```
 
 > **Storage support**: WriteBegin requires a `Presigner`-capable storage
@@ -366,12 +365,12 @@ h, _ := client.WriteBegin(ctx, lake.WriteBeginRequest{
     MergeType: lake.MergeTypeRFC7396,
 })
 
-// RFC 6902 — explicit JSON Patch operations.
-// Upload body: [{"op":"add","path":"/tags","value":["vip"]}]
+// Replace — set a field (or the whole doc at "/") to the uploaded value.
+// Upload body: {"name":"Alice","age":30}
 h, _ = client.WriteBegin(ctx, lake.WriteBeginRequest{
     Catalog:   "users",
-    Path:      "/",
-    MergeType: lake.MergeTypeRFC6902,
+    Path:      "/profile",
+    MergeType: lake.MergeTypeReplace,
 })
 ```
 
@@ -393,11 +392,10 @@ lake/
 └── internal/
     ├── index/           # Redis ZSet operations, TimeSeqID, Lua scripts
     ├── storage/         # Memory / File / OSS backends
-    ├── merge/           # Replace / RFC7396 / RFC6902 mergers
-    ├── cache/           # Redis + Memory caches with SingleFlight
+    ├── merge/           # Replace / RFC7396 mergers
+    ├── cache/           # Redis (gzip) + Memory caches with SingleFlight
     ├── config/          # lake.setting loader
     ├── encode/          # Catalog name encoding chokepoint
-    ├── encrypt/         # AES-GCM + gzip
     ├── utils/           # Path validation
     └── xsync/           # SingleFlight primitive
 ```
@@ -653,6 +651,23 @@ not a "pending member". Such objects are invisible to `ClearHistory` (it
 walks the index, and they are not in it); reclaiming them needs a future
 sweep tool that diffs the bucket against the delta zset.
 
+### A patch body is the client's responsibility
+
+Every committed delta is replayed by `merge` on **every read** (and on each
+snapshot save). `WriteNotify` does not fetch or validate the uploaded body —
+that is the point of direct upload. So a body that cannot be applied (invalid
+JSON, an RFC 7396 patch that does not parse) will fail merge, and because the
+same merge gates snapshotting, the failure is sticky: every read of that
+catalog errors until the bad delta is removed. There is intentionally no
+read-time skip/quarantine — Lake does not silently drop a write.
+
+The merge error names the offending delta (`path`, `tsSeq`, `uuid`, plus
+`catalog` at the read site). Recovery today is manual: rebuild the OSS key
+with `MakeDeltaKey(catalog, uuid)`, then `ZREM` the member from
+`{prefix}:d:{catalog}`. Keeping bodies valid before upload is the contract;
+the surface for malformed bodies shrank in v3-alpha when RFC 6902 (the
+op-array merge type, most prone to apply-time failure) was removed.
+
 ## 🔄 Migrating from v2 to v3
 
 v3 is **not** wire-compatible with v2 callers. Concretely:
@@ -664,6 +679,11 @@ v3 is **not** wire-compatible with v2 callers. Concretely:
 - **File API removed.** `WriteFile`, `FileExists`, `FilesAndMeta`,
   `WriteFileRequest`, and `Storage.MakeFileKey` are gone. Lake v3 handles
   JSON documents only.
+- **RFC 6902 (JSON Patch) removed** (v3-alpha). Only `MergeTypeReplace` (1)
+  and `MergeTypeRFC7396` (2) remain; `MergeTypeRFC6902` and its merger are
+  gone — the op-array syntax was complex and the most apply-failure-prone
+  merge type. Any existing `mergeType=3` delta is no longer decodable; flush
+  such deltas. Most RFC 6902 intents express as RFC 7396 or Replace.
 - **`MotionSample` (v1 sample) removed.** Use `NewSampler[T]` instead — its
   `WithShouldRefresh` predicate and `Batch` over many catalogs subsume v1's
   `shouldUpdated` callback and `motionCatalogs` cross-catalog sampling.
