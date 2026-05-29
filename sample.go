@@ -15,7 +15,7 @@ import (
 //
 // A "sample" is a value of type T computed from a catalog's raw state
 // (snap + deltas) by a loader, then memoised in the
-// "<prefix>:samples:<indicator>" Redis Hash (catalog = field). Construct
+// "<prefix>:m:<indicator>" Redis Hash (catalog = field). Construct
 // one Sampler per (indicator, T, loader) and reuse it: the staleness
 // policy and error fallback are bound at construction so every call site
 // stays uniform.

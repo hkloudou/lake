@@ -31,8 +31,8 @@ func snapHashTestRedis(t *testing.T) *redis.Client {
 }
 
 // TestSnapHashRoundTrip exercises the AddSnap → HGet path on the real
-// Redis Hash and verifies the layout is "<prefix>:snaps" with catalog
-// as field, value = "{stopTsSeq}".
+// Redis Hash and verifies the layout is "<prefix>:s" with catalog as
+// field, value = "{stopTsSeq}".
 func TestSnapHashRoundTrip(t *testing.T) {
 	rdb := snapHashTestRedis(t)
 	w := NewWriter(rdb)
@@ -47,7 +47,7 @@ func TestSnapHashRoundTrip(t *testing.T) {
 		t.Fatalf("AddSnap: %v", err)
 	}
 
-	val, err := rdb.HGet(ctx, "test:snaps", "users").Result()
+	val, err := rdb.HGet(ctx, "test:s", "users").Result()
 	if err != nil {
 		t.Fatalf("HGet: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestSnapHashOverwrite(t *testing.T) {
 		t.Fatalf("after overwrite: got %+v, want stop=%v", got, stop2)
 	}
 
-	cnt, err := rdb.HLen(ctx, "test:snaps").Result()
+	cnt, err := rdb.HLen(ctx, "test:s").Result()
 	if err != nil {
 		t.Fatalf("HLen: %v", err)
 	}

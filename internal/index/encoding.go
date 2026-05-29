@@ -82,7 +82,7 @@ func DecodeDeltaMember(member string, score float64) (*DeltaInfo, error) {
 }
 
 // EncodeSnapValue / DecodeSnapValue handle the value stored under
-// "<prefix>:snaps", keyed by catalog. The value is just "{stopTsSeq}".
+// "<prefix>:s", keyed by catalog. The value is just "{stopTsSeq}".
 func EncodeSnapValue(stopTsSeq TimeSeqID) string { return stopTsSeq.String() }
 
 func DecodeSnapValue(value string) (TimeSeqID, error) {
