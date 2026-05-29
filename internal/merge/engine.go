@@ -37,7 +37,11 @@ func Merge(baseData []byte, entries []index.DeltaInfo) ([]byte, error) {
 		var err error
 		merged, err = merger.Merge(merged, entry.Body, ToGjsonPath(entry.Path))
 		if err != nil {
-			return nil, fmt.Errorf("merge failed (type=%d): %w", entry.MergeType, err)
+			// Identify the exact offending delta: a single unappliable patch
+			// fails every read of the catalog, so operators need its tsSeq /
+			// uuid to locate (MakeDeltaKey) and remove it.
+			return nil, fmt.Errorf("merge failed (path=%s tsSeq=%s uuid=%s type=%d): %w",
+				entry.Path, entry.TsSeq, entry.UUID, entry.MergeType, err)
 		}
 	}
 	return merged, nil

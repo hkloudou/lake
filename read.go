@@ -49,7 +49,7 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 
 	resultData, err := merge.Merge(baseData, list.Entries)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("merge catalog %s: %w", list.catalog, err)
 	}
 
 	// Async snapshot save: fire-and-forget on a background context so an
