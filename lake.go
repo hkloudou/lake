@@ -22,7 +22,8 @@ import (
 // snapshot saves are fire-and-forget (an interrupted save leaves at
 // most one orphan OSS object, reaped by the next sweep).
 type Client struct {
-	rdb        *redis.Client
+	rdb        *redis.Client // authoritative: snap hash, delta zset, seqid
+	sampleRdb  *redis.Client // sample (memo) hash; defaults to rdb. Pluggable so cache-tier failures cannot threaten the authoritative store.
 	writer     *index.Writer
 	reader     *index.Reader
 	configMgr  *config.Manager
@@ -44,6 +45,7 @@ type option struct {
 	Storage            storage.Storage
 	SnapCacheProvider  cache.Cache
 	DeltaCacheProvider cache.Cache
+	SampleRdb          *redis.Client // nil → use the authoritative rdb
 }
 
 // NewLake creates a Lake client. Config (storage backend, bucket, etc.)
@@ -65,9 +67,13 @@ func NewLake(metaUrl string, opts ...func(*option)) *Client {
 	if o.DeltaCacheProvider == nil {
 		o.DeltaCacheProvider = cache.NewMemoryCache(1 * time.Minute)
 	}
+	if o.SampleRdb == nil {
+		o.SampleRdb = rdb // colocated by default
+	}
 
 	return &Client{
 		rdb:          rdb,
+		sampleRdb:    o.SampleRdb,
 		writer:       index.NewWriter(rdb),
 		reader:       index.NewReader(rdb),
 		configMgr:    config.NewManager(rdb),
@@ -100,6 +106,25 @@ func WithDeltaCacheMetaURL(metaUrl string, ttl time.Duration) func(*option) {
 		panic(err)
 	}
 	return WithDeltaCache(c)
+}
+
+// WithSampleCacheRedis routes the Sampler memo hash ("<prefix>:m:*") to a
+// separate Redis instance instead of the authoritative one. Sample is a
+// derived cache — a separate hot tier can absorb scan / flush / restart
+// without threatening the authoritative store. Defaults to the
+// authoritative rdb when omitted.
+func WithSampleCacheRedis(rdb *redis.Client) func(*option) {
+	return func(o *option) { o.SampleRdb = rdb }
+}
+
+// WithSampleCacheURL is the URL form of WithSampleCacheRedis. Panics on
+// an invalid URL (programmer error at construction time, per package policy).
+func WithSampleCacheURL(url string) func(*option) {
+	opt, err := redis.ParseURL(url)
+	if err != nil {
+		panic(fmt.Errorf("lake: invalid sample-cache URL: %w", err))
+	}
+	return WithSampleCacheRedis(redis.NewClient(opt))
 }
 
 // ensureInitialized loads lake.setting on first use and wires the

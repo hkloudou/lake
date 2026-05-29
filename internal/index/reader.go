@@ -96,19 +96,60 @@ func (r *Reader) GetLatestSnap(ctx context.Context, catalog string) (*SnapInfo, 
 	return &SnapInfo{StopTsSeq: stop}, nil
 }
 
-// AllSnaps returns every catalog's snap metadata via a single HGETALL.
-func (r *Reader) AllSnaps(ctx context.Context) (map[string]SnapInfo, error) {
-	all, err := r.rdb.HGetAll(ctx, r.MakeSnapsHashKey()).Result()
-	if err != nil {
-		return nil, err
-	}
-	out := make(map[string]SnapInfo, len(all))
-	for catalog, val := range all {
-		if stop, err := DecodeSnapValue(val); err == nil {
-			out[catalog] = SnapInfo{StopTsSeq: stop}
+// snapScanBatch is the HSCAN page size. Tuned so each Redis call returns
+// in well under a millisecond on the server (single-threaded event loop
+// tolerates ~10⁴ small fields per op without noticeable jitter); larger
+// values trade pipeline depth for hash-table coverage per page.
+const snapScanBatch = 500
+
+// IterateSnaps streams every catalog's snap to fn via HSCAN — no single
+// Redis op holds the server's main thread for more than ~snapScanBatch
+// fields, so this scales to multi-million-catalog deployments without
+// stalling concurrent reads/writes. Iteration stops when fn returns false
+// or the hash is exhausted; ctx cancellation is honoured between pages.
+//
+// Each (catalog, snap) is yielded at most once for snap values that
+// existed throughout the scan; a catalog that is added or removed *during*
+// the scan may be observed once, twice, or not at all (HSCAN's standard
+// concurrent-modification semantics). Values that fail to decode are
+// skipped silently.
+func (r *Reader) IterateSnaps(ctx context.Context, fn func(catalog string, snap SnapInfo) bool) error {
+	key := r.MakeSnapsHashKey()
+	var cursor uint64
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
+		pairs, next, err := r.rdb.HScan(ctx, key, cursor, "", snapScanBatch).Result()
+		if err != nil {
+			return err
+		}
+		for i := 0; i+1 < len(pairs); i += 2 {
+			stop, derr := DecodeSnapValue(pairs[i+1])
+			if derr != nil {
+				continue
+			}
+			if !fn(pairs[i], SnapInfo{StopTsSeq: stop}) {
+				return nil
+			}
+		}
+		if next == 0 {
+			return nil
+		}
+		cursor = next
 	}
-	return out, nil
+}
+
+// AllSnaps collects every catalog's snap into a map. Convenience over
+// IterateSnaps for small / moderate deployments; for very large fleets,
+// prefer IterateSnaps to avoid materialising the full map at once.
+func (r *Reader) AllSnaps(ctx context.Context) (map[string]SnapInfo, error) {
+	out := make(map[string]SnapInfo)
+	err := r.IterateSnaps(ctx, func(catalog string, snap SnapInfo) bool {
+		out[catalog] = snap
+		return true
+	})
+	return out, err
 }
 
 // BatchList runs an HMGet on snaps + a pipelined ZRange for every

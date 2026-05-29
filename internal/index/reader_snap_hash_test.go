@@ -2,6 +2,7 @@ package index
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -108,9 +109,9 @@ func TestSnapHashOverwrite(t *testing.T) {
 	}
 }
 
-// TestAllSnapsBatchBackup is the headline use-case test: HGETALL returns
-// every catalog's snap in one call so backup tooling can enumerate the
-// full set of OSS snap keys without an OSS LIST.
+// TestAllSnapsBatchBackup is the headline use-case test: AllSnaps (via
+// HSCAN under the hood) returns every catalog's snap so backup tooling
+// can enumerate the full set of OSS snap keys without an OSS LIST.
 func TestAllSnapsBatchBackup(t *testing.T) {
 	rdb := snapHashTestRedis(t)
 	w := NewWriter(rdb)
@@ -163,5 +164,36 @@ func TestGetLatestSnapMissingReturnsNilNil(t *testing.T) {
 	}
 	if got != nil {
 		t.Fatalf("expected nil SnapInfo, got %+v", got)
+	}
+}
+
+// TestIterateSnapsEarlyStop confirms IterateSnaps honours fn returning
+// false (caller stops iteration mid-stream) without consuming the whole
+// hash — the property backup tools rely on for budgeted scans.
+func TestIterateSnapsEarlyStop(t *testing.T) {
+	rdb := snapHashTestRedis(t)
+	w := NewWriter(rdb)
+	r := NewReader(rdb)
+	w.SetPrefix("test")
+	r.SetPrefix("test")
+
+	ctx := context.Background()
+	for i := 0; i < 50; i++ {
+		cat := fmt.Sprintf("c%02d", i)
+		if err := w.AddSnap(ctx, cat, TimeSeqID{Timestamp: 1700000000 + int64(i), SeqID: 1}); err != nil {
+			t.Fatalf("AddSnap %s: %v", cat, err)
+		}
+	}
+
+	var seen int
+	err := r.IterateSnaps(ctx, func(string, SnapInfo) bool {
+		seen++
+		return seen < 3 // request stop after the 3rd item
+	})
+	if err != nil {
+		t.Fatalf("IterateSnaps: %v", err)
+	}
+	if seen != 3 {
+		t.Fatalf("early-stop: callback ran %d times, want 3", seen)
 	}
 }

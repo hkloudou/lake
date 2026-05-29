@@ -43,40 +43,78 @@ func TestSampleCacheCodec(t *testing.T) {
 // refresh triggers — never suppress one the data version requires.
 func TestSamplerIsStale(t *testing.T) {
 	base := NewSampler[int]("x", func(*ListResult) (int, error) { return 0, nil })
+	noPeers := map[string]*ListResult(nil) // tests don't exercise peers here
 
 	// Floor satisfied: cached version >= current, positive → fresh.
-	if base.isStale(SampleMeta{Score: 100}, listAt(100), 0) {
+	if base.isStale(SampleMeta{Score: 100}, listAt(100), noPeers, 0) {
 		t.Error("equal version should be fresh")
 	}
 	// Data advanced → stale regardless of anything else.
-	if !base.isStale(SampleMeta{Score: 100}, listAt(200), 0) {
+	if !base.isStale(SampleMeta{Score: 100}, listAt(200), noPeers, 0) {
 		t.Error("advanced data version must be stale")
 	}
 	// Sentinel score 0 is never a valid hit (matches the score>0 rule).
-	if !base.isStale(SampleMeta{Score: 0}, listAt(0), 0) {
+	if !base.isStale(SampleMeta{Score: 0}, listAt(0), noPeers, 0) {
 		t.Error("zero score must be stale")
 	}
 
 	// maxAge: fresh within the window, stale past it.
 	aged := NewSampler[int]("x", base.loader, WithMaxAge[int](10*time.Second))
-	if aged.isStale(SampleMeta{Score: 100, UpdatedAt: 1000}, listAt(100), 1005) {
+	if aged.isStale(SampleMeta{Score: 100, UpdatedAt: 1000}, listAt(100), noPeers, 1005) {
 		t.Error("within maxAge should be fresh")
 	}
-	if !aged.isStale(SampleMeta{Score: 100, UpdatedAt: 1000}, listAt(100), 1015) {
+	if !aged.isStale(SampleMeta{Score: 100, UpdatedAt: 1000}, listAt(100), noPeers, 1015) {
 		t.Error("past maxAge should be stale")
 	}
 
 	// shouldRefresh is additive: true forces a refresh even when fresh...
 	force := NewSampler[int]("x", base.loader, WithShouldRefresh[int](
-		func(SampleMeta, *ListResult) bool { return true }))
-	if !force.isStale(SampleMeta{Score: 100}, listAt(100), 0) {
+		func(SampleMeta, *ListResult, map[string]*ListResult) bool { return true }))
+	if !force.isStale(SampleMeta{Score: 100}, listAt(100), noPeers, 0) {
 		t.Error("shouldRefresh=true must force a refresh")
 	}
 	// ...and false cannot suppress the data-version floor.
 	keep := NewSampler[int]("x", base.loader, WithShouldRefresh[int](
-		func(SampleMeta, *ListResult) bool { return false }))
-	if !keep.isStale(SampleMeta{Score: 100}, listAt(200), 0) {
+		func(SampleMeta, *ListResult, map[string]*ListResult) bool { return false }))
+	if !keep.isStale(SampleMeta{Score: 100}, listAt(200), noPeers, 0) {
 		t.Error("shouldRefresh=false must not override the data-version floor")
+	}
+}
+
+// TestSamplerCrossCatalogRefresh: the shouldRefresh predicate can read
+// a peer's LastUpdated() and force a recompute when the peer has moved
+// past the version the sample recorded as its dependency baseline.
+func TestSamplerCrossCatalogRefresh(t *testing.T) {
+	// Sentinel for "the sample was computed assuming peer B at version 50".
+	const baselineB = 50.0
+
+	sampler := NewSampler[int]("x",
+		func(*ListResult) (int, error) { return 0, nil },
+		WithShouldRefresh[int](func(_ SampleMeta, _ *ListResult, peers map[string]*ListResult) bool {
+			b := peers["B"]
+			return b != nil && b.LastUpdated() > baselineB
+		}),
+	)
+	meta := SampleMeta{Score: 100} // self's data version unchanged
+
+	// Peer B still at baseline → fresh.
+	peers := map[string]*ListResult{"A": listAt(100), "B": listAt(baselineB)}
+	if sampler.isStale(meta, peers["A"], peers, 0) {
+		t.Error("peer at baseline must NOT trigger refresh")
+	}
+
+	// Peer B advanced → predicate fires, refresh required.
+	peers["B"] = listAt(baselineB + 1)
+	if !sampler.isStale(meta, peers["A"], peers, 0) {
+		t.Error("peer past baseline MUST trigger refresh")
+	}
+
+	// Peer absent from batch context: predicate can't see B → no refresh.
+	// Caller is responsible for including B in BatchList if they want
+	// this dependency evaluated.
+	peers = map[string]*ListResult{"A": listAt(100)}
+	if sampler.isStale(meta, peers["A"], peers, 0) {
+		t.Error("absent peer must not trigger refresh (predicate sees nil)")
 	}
 }
 

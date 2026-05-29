@@ -61,7 +61,7 @@ func TestBatchSample_HitsAndMisses_Redis(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	hashKey := c.reader.MakeSampleIndicatorKey("daily")
-	if err := c.rdb.HSet(ctx, hashKey, "users", primed).Err(); err != nil {
+	if err := c.sampleRdb.HSet(ctx, hashKey, "users", primed).Err(); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -102,7 +102,7 @@ func TestBatchSample_HitsAndMisses_Redis(t *testing.T) {
 		}
 	}
 
-	cnt, err := c.rdb.HLen(ctx, hashKey).Result()
+	cnt, err := c.sampleRdb.HLen(ctx, hashKey).Result()
 	if err != nil {
 		t.Fatalf("HLen: %v", err)
 	}
