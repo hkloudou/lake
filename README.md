@@ -106,6 +106,8 @@ import "github.com/hkloudou/lake/v3"
 | `WithDeltaCacheMetaURL(url, ttl) func(*option)` | [lake.go](lake.go) | Use a separate Redis for delta cache |
 | `WithSnapCache(cache.Cache) func(*option)` | [lake.go](lake.go) | Provide a `cache.Cache` directly |
 | `WithDeltaCache(cache.Cache) func(*option)` | [lake.go](lake.go) | Same, for delta cache |
+| `WithSampleCacheURL(url) func(*option)` | [lake.go](lake.go) | Route the Sampler memo hash (`<prefix>:m:*`) to a separate Redis |
+| `WithSampleCacheRedis(*redis.Client) func(*option)` | [lake.go](lake.go) | Same, with a caller-managed `*redis.Client` |
 | `(*Client) Use(handler EventHandler)` | [middleware.go](middleware.go) | Register an event handler |
 
 ### Write — three-step direct upload
@@ -262,10 +264,36 @@ report, err := sampler.Sample(ctx, list)
    Redis server clock. For time-sensitive derivations (a "today" report is
    correct only for today, not forever).
 3. **`WithShouldRefresh(fn)`** — a custom predicate, the analog of React's
-   `shouldComponentUpdate`: return `true` to force a recompute even when the
-   data version is unchanged (cross-catalog dependencies, external inputs).
-   It runs on every cache hit, so it must be pure and cheap — no I/O; compare
-   versions you already hold (e.g. from the same `BatchList`).
+   `shouldComponentUpdate`. Signature:
+   ```go
+   func(meta SampleMeta, self *ListResult, peers map[string]*ListResult) bool
+   ```
+   Returns `true` to force a recompute even when the data version is
+   unchanged (cross-catalog dependencies, external inputs). `peers` is the
+   full set of `ListResult`s available in the current call's context —
+   `BatchList`'s lists map for `Sampler.Batch`, a singleton `{self.catalog:
+   self}` for `Sampler.Sample`. **Runs on every cache hit**, so it must be
+   pure and cheap (no I/O); compare versions already in hand.
+
+   Cross-catalog example — `A` depends on `B`, both sampled in one batch:
+   ```go
+   type Report struct {
+       Value     int
+       BSeenAt   float64 // version of B this report was computed against
+   }
+   sampler := lake.NewSampler[Report]("daily", loadReport,
+       lake.WithShouldRefresh(func(_ lake.SampleMeta, _ *lake.ListResult, peers map[string]*lake.ListResult) bool {
+           // Refresh A when B has moved past the version A recorded as its dependency.
+           // The cached Report carries BSeenAt; loader populates it at compute time.
+           // Read it back off T inside the predicate via your own decode path,
+           // or store it on SampleMeta via a richer wrapper.
+           b, ok := peers["B"]
+           return ok && b.LastUpdated() > /* the BSeenAt you stamped */ 0
+       }),
+   )
+   lists := client.BatchList(ctx, []string{"A", "B"})
+   results := sampler.Batch(ctx, lists)
+   ```
 
 These triggers can only *add* recomputes; none serves a value older than the
 data-version floor allows.
@@ -282,6 +310,15 @@ Hashes, each catalog a field holding a `[score, updatedAt, data]` JSON array
 (`score` = data version, `updatedAt` = compute time). All catalogs sharing one
 indicator are colocated, so indicator-wide enumeration / clearing is single-key.
 
+**Cache-tier separation (optional but recommended at scale).** The Sampler
+memo hash can live on a dedicated Redis instance via
+`lake.WithSampleCacheURL(...)` / `lake.WithSampleCacheRedis(rdb)`. Sample is
+a derived cache — outage, scan, restart, or flush of the cache tier merely
+recomputes; the authoritative Redis (snap, delta, seqid) never depends on
+cache health. This narrows the "must-not-lose" Redis surface to a small
+metadata working set and lets the cache tier scale on its own dimensions
+(memory, CPU). Defaults to the authoritative Redis when omitted.
+
 ### Cleanup
 
 | Function | File | Description |
@@ -296,13 +333,29 @@ retention concept; `ClearHistoryWithRetention` from earlier drafts is removed.
 
 | Function | File | Description |
 |----------|------|-------------|
-| `(*Client) AllSnaps(ctx) (map[string]SnapInfo, error)` | [snapshot.go](snapshot.go) | Single HGETALL on `<prefix>:s` returns every catalog's snap metadata |
+| `(*Client) AllSnaps(ctx) (map[string]SnapInfo, error)` | [snapshot.go](snapshot.go) | Collect every catalog's snap into a map via HSCAN |
+| `(*Client) IterateSnaps(ctx, fn) error` | [snapshot.go](snapshot.go) | Stream each `(catalog, snap)` to `fn`; stops when `fn` returns false |
 
-`AllSnaps` is intended for backup tooling: feed each `(catalog, StartTsSeq, StopTsSeq)`
-triple into `Storage.MakeSnapKey` to obtain the OSS object key, then copy that
-object to your archive bucket. This avoids a full OSS `LIST`, which is slow and
-paginated, and gives you a consistent snapshot of the deployment in one Redis
-round-trip.
+`AllSnaps` is the convenient form for small to moderate fleets: it walks
+`<prefix>:s` via HSCAN under the hood and accumulates every entry into a
+map. For very large deployments — or any case where you don't want the
+full map in memory — use `IterateSnaps`, which yields one entry at a time
+and honours early termination.
+
+Both forms avoid a full OSS `LIST`, which is slow and paginated. Neither
+form ever issues a single Redis op that blocks the server's main thread for
+more than ~500 fields, so even a million-catalog hash backs up without
+stalling concurrent reads and writes. Feed each `(catalog, StopTsSeq)` into
+`Storage.MakeSnapKey` to obtain the OSS object key, then copy that object to
+your archive bucket.
+
+```go
+// Streaming, budget-friendly backup loop.
+err := client.IterateSnaps(ctx, func(catalog string, snap lake.SnapInfo) bool {
+    ossKey := storage.MakeSnapKey(catalog, snap.StopTsSeq)
+    return copyToArchive(ctx, ossKey) == nil // stop on first failure
+})
+```
 
 ### Examples
 
