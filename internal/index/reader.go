@@ -26,7 +26,10 @@ func NewReader(rdb *redis.Client) *Reader {
 }
 
 // SnapInfo records that a catalog has been snapshotted up to StopTsSeq.
-type SnapInfo struct{ StopTsSeq TimeSeqID }
+type SnapInfo struct {
+	StopTsSeq TimeSeqID
+	URI       string // storage locator provider://bucket/path of the snap object
+}
 
 func (s SnapInfo) Score() float64 { return s.StopTsSeq.Score() }
 func (s SnapInfo) Dump() string   { return fmt.Sprintf("  Stop: %s\n", s.StopTsSeq) }
@@ -38,7 +41,7 @@ type DeltaInfo struct {
 	TsSeq     TimeSeqID
 	MergeType MergeType
 	Path      string
-	UUID      string // OSS object identifier (allocated by WriteBegin)
+	URI       string // storage locator provider://bucket/path (carried in the member)
 	Body      []byte // populated lazily by readers
 }
 
@@ -65,22 +68,6 @@ func (r *Reader) ReadRange(ctx context.Context, catalog string, minTimestamp, ma
 	return r.readRange(ctx, catalog, fmt.Sprintf("%.6f", minTimestamp), fmt.Sprintf("%.6f", maxTimestamp))
 }
 
-// ReadSafeRemoveDeltas returns deltas safely removable for a catalog
-// (those at or before the latest snap, snap older than 60s).
-func (r *Reader) ReadSafeRemoveDeltas(ctx context.Context, catalog string) *ReadIndexResult {
-	snap, err := r.GetLatestSnap(ctx, catalog)
-	if err != nil {
-		return &ReadIndexResult{Catalog: catalog, Err: fmt.Errorf("get latest snap: %w", err)}
-	}
-	if snap == nil {
-		return &ReadIndexResult{Catalog: catalog}
-	}
-	if r.redisTimeUnix.Load()-int64(snap.StopTsSeq.Score()) < 60 {
-		return &ReadIndexResult{Catalog: catalog, Err: fmt.Errorf("snapshot is too new: %s", snap.StopTsSeq)}
-	}
-	return r.ReadRange(ctx, catalog, 0, snap.StopTsSeq.Score())
-}
-
 func (r *Reader) GetLatestSnap(ctx context.Context, catalog string) (*SnapInfo, error) {
 	val, err := r.rdb.HGet(ctx, r.MakeSnapsHashKey(), catalog).Result()
 	if err == redis.Nil {
@@ -89,11 +76,11 @@ func (r *Reader) GetLatestSnap(ctx context.Context, catalog string) (*SnapInfo, 
 	if err != nil {
 		return nil, err
 	}
-	stop, err := DecodeSnapValue(val)
+	stop, uri, err := DecodeSnapValue(val)
 	if err != nil {
 		return nil, err
 	}
-	return &SnapInfo{StopTsSeq: stop}, nil
+	return &SnapInfo{StopTsSeq: stop, URI: uri}, nil
 }
 
 // snapScanBatch is the HSCAN page size. Tuned so each Redis call returns
@@ -125,11 +112,11 @@ func (r *Reader) IterateSnaps(ctx context.Context, fn func(catalog string, snap 
 			return err
 		}
 		for i := 0; i+1 < len(pairs); i += 2 {
-			stop, derr := DecodeSnapValue(pairs[i+1])
+			stop, uri, derr := DecodeSnapValue(pairs[i+1])
 			if derr != nil {
 				continue
 			}
-			if !fn(pairs[i], SnapInfo{StopTsSeq: stop}) {
+			if !fn(pairs[i], SnapInfo{StopTsSeq: stop, URI: uri}) {
 				return nil
 			}
 		}
@@ -164,12 +151,12 @@ func (r *Reader) BatchList(ctx context.Context, catalogs []string) map[string]*B
 		if !ok {
 			continue
 		}
-		stop, err := DecodeSnapValue(s)
+		stop, uri, err := DecodeSnapValue(s)
 		if err != nil {
 			out[c].ReadResult = &ReadIndexResult{Catalog: c, Err: fmt.Errorf("decode snap: %w", err)}
 			continue
 		}
-		out[c].Snap = &SnapInfo{StopTsSeq: stop}
+		out[c].Snap = &SnapInfo{StopTsSeq: stop, URI: uri}
 	}
 
 	pipe := r.rdb.Pipeline()

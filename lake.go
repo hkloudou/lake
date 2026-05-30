@@ -1,94 +1,109 @@
 package lake
 
 import (
-	"context"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/hkloudou/lake/v3/internal/cache"
-	"github.com/hkloudou/lake/v3/internal/config"
 	"github.com/hkloudou/lake/v3/internal/index"
-	"github.com/hkloudou/lake/v3/internal/storage"
 	"github.com/hkloudou/lake/v3/internal/xsync"
+	"github.com/hkloudou/lake/v3/storage"
 	"github.com/redis/go-redis/v9"
 )
 
 // Client is the main entry point for Lake v3.
 //
-// A Client is intended to live for the process lifetime. Background
-// goroutines (Redis time updater, cache cleanup / stat) tick forever
-// and are reclaimed by the OS at process exit; in-flight async
-// snapshot saves are fire-and-forget (an interrupted save leaves at
-// most one orphan OSS object, reaped by the next sweep).
+// Everything is wired explicitly at New: prefix (namespaces every Redis key
+// and the seqid counter), the authoritative index Redis, and a storage
+// Resolver. There is no lake.setting bootstrap and no global state — Lake core
+// never imports a cloud SDK; it only ever calls the Storage the Resolver
+// returns.
+//
+// A Client is intended to live for the process lifetime. Background goroutines
+// (Redis time updater, cache cleanup) tick forever and are reclaimed by the OS
+// at exit; in-flight async snapshot saves are fire-and-forget.
 type Client struct {
 	rdb        *redis.Client // authoritative: snap hash, delta zset, seqid
-	sampleRdb  *redis.Client // sample (memo) hash; defaults to rdb. Pluggable so cache-tier failures cannot threaten the authoritative store.
+	sampleRdb  *redis.Client // sample (memo) hash; defaults to rdb
 	writer     *index.Writer
 	reader     *index.Reader
-	configMgr  *config.Manager
 	snapCache  cache.Cache
 	deltaCache cache.Cache
 
-	mu      sync.RWMutex
-	storage storage.Storage
-	config  *config.Config
+	resolve      storage.Resolver
+	snapProvider string // WithSnapTarget; "" disables auto-snapshotting
+	snapBucket   string
 
-	snapFlight   xsync.SingleFlight[string]   // dedupe concurrent snapshot saves on (catalog, stop)
-	sampleFlight xsync.SingleFlight[string]   // dedupe concurrent Sampler[T] loaders on (catalog, indicator, score)
-	clearFlight  xsync.SingleFlight[struct{}] // dedupe concurrent ClearHistory on (catalog)
+	storMu sync.RWMutex // guards stores
+	stores map[string]storage.Storage
+
+	snapFlight   xsync.SingleFlight[string] // dedupe concurrent snapshot saves on (catalog, stop)
+	sampleFlight xsync.SingleFlight[string] // dedupe concurrent Sampler[T] loaders on (catalog, indicator, score)
 
 	eventHandlers []EventHandler
 }
 
 type option struct {
-	Storage            storage.Storage
-	SnapCacheProvider  cache.Cache
-	DeltaCacheProvider cache.Cache
-	SampleRdb          *redis.Client // nil → use the authoritative rdb
+	snapCache    cache.Cache
+	deltaCache   cache.Cache
+	sampleRdb    *redis.Client
+	snapProvider string
+	snapBucket   string
 }
 
-// NewLake creates a Lake client. Config (storage backend, bucket, etc.)
-// is loaded lazily on first operation from the Redis key "lake.setting".
-func NewLake(metaUrl string, opts ...func(*option)) *Client {
-	redisOpt, err := redis.ParseURL(metaUrl)
-	if err != nil {
-		redisOpt = &redis.Options{Addr: metaUrl}
+// New creates a Lake client.
+//
+//   - prefix   namespaces every Redis key (and the seqid counter).
+//   - rdb      the authoritative index Redis (durable).
+//   - resolve  the single storage-injection point: maps (provider, bucket) to
+//     a bucket-scoped storage.Storage. Lake memoises the result per pair.
+//
+// Panics on a nil/empty required argument (programmer error, per package policy).
+func New(prefix string, rdb *redis.Client, resolve storage.Resolver, opts ...func(*option)) *Client {
+	if prefix == "" {
+		panic("lake: New requires a non-empty prefix")
 	}
-	rdb := redis.NewClient(redisOpt)
-
+	if rdb == nil {
+		panic("lake: New requires an index *redis.Client")
+	}
+	if resolve == nil {
+		panic("lake: New requires a storage.Resolver")
+	}
 	o := &option{}
-	for _, opt := range opts {
-		opt(o)
+	for _, fn := range opts {
+		fn(o)
 	}
-	if o.SnapCacheProvider == nil {
-		o.SnapCacheProvider = cache.NewRedisCache(rdb, 2*time.Hour)
+	if o.snapCache == nil {
+		o.snapCache = cache.NewRedisCache(rdb, 2*time.Hour)
 	}
-	if o.DeltaCacheProvider == nil {
-		o.DeltaCacheProvider = cache.NewMemoryCache(1 * time.Minute)
+	if o.deltaCache == nil {
+		o.deltaCache = cache.NewMemoryCache(1 * time.Minute)
 	}
-	if o.SampleRdb == nil {
-		o.SampleRdb = rdb // colocated by default
+	if o.sampleRdb == nil {
+		o.sampleRdb = rdb
 	}
-
-	return &Client{
+	c := &Client{
 		rdb:          rdb,
-		sampleRdb:    o.SampleRdb,
+		sampleRdb:    o.sampleRdb,
 		writer:       index.NewWriter(rdb),
 		reader:       index.NewReader(rdb),
-		configMgr:    config.NewManager(rdb),
-		storage:      o.Storage, // nil → loaded lazily
-		snapCache:    o.SnapCacheProvider,
-		deltaCache:   o.DeltaCacheProvider,
+		snapCache:    o.snapCache,
+		deltaCache:   o.deltaCache,
+		resolve:      resolve,
+		snapProvider: o.snapProvider,
+		snapBucket:   o.snapBucket,
+		stores:       make(map[string]storage.Storage),
 		snapFlight:   xsync.NewSingleFlight[string](),
 		sampleFlight: xsync.NewSingleFlight[string](),
-		clearFlight:  xsync.NewSingleFlight[struct{}](),
 	}
+	c.writer.SetPrefix(prefix)
+	c.reader.SetPrefix(prefix)
+	return c
 }
 
-func WithSnapCache(c cache.Cache) func(*option)   { return func(o *option) { o.SnapCacheProvider = c } }
-func WithDeltaCache(c cache.Cache) func(*option)  { return func(o *option) { o.DeltaCacheProvider = c } }
-func WithStorage(s storage.Storage) func(*option) { return func(o *option) { o.Storage = s } }
+func WithSnapCache(c cache.Cache) func(*option)  { return func(o *option) { o.snapCache = c } }
+func WithDeltaCache(c cache.Cache) func(*option) { return func(o *option) { o.deltaCache = c } }
 
 // WithSnapCacheMetaURL builds a Redis-backed snapshot cache from a URL.
 func WithSnapCacheMetaURL(metaUrl string, ttl time.Duration) func(*option) {
@@ -108,17 +123,22 @@ func WithDeltaCacheMetaURL(metaUrl string, ttl time.Duration) func(*option) {
 	return WithDeltaCache(c)
 }
 
-// WithSampleCacheRedis routes the Sampler memo hash ("<prefix>:m:*") to a
-// separate Redis instance instead of the authoritative one. Sample is a
-// derived cache — a separate hot tier can absorb scan / flush / restart
-// without threatening the authoritative store. Defaults to the
-// authoritative rdb when omitted.
-func WithSampleCacheRedis(rdb *redis.Client) func(*option) {
-	return func(o *option) { o.SampleRdb = rdb }
+// WithSnapTarget sets where Lake writes the snapshots it auto-generates on the
+// read path (resolved via the client's Resolver). Omit it to disable
+// auto-snapshotting: reads then replay all deltas from "{}" — correct, just
+// slower for long histories.
+func WithSnapTarget(provider, bucket string) func(*option) {
+	return func(o *option) { o.snapProvider, o.snapBucket = provider, bucket }
 }
 
-// WithSampleCacheURL is the URL form of WithSampleCacheRedis. Panics on
-// an invalid URL (programmer error at construction time, per package policy).
+// WithSampleCacheRedis routes the Sampler memo hash ("<prefix>:m:*") to a
+// separate Redis instance. Defaults to the authoritative rdb.
+func WithSampleCacheRedis(rdb *redis.Client) func(*option) {
+	return func(o *option) { o.sampleRdb = rdb }
+}
+
+// WithSampleCacheURL is the URL form of WithSampleCacheRedis. Panics on an
+// invalid URL (programmer error at construction time).
 func WithSampleCacheURL(url string) func(*option) {
 	opt, err := redis.ParseURL(url)
 	if err != nil {
@@ -127,38 +147,31 @@ func WithSampleCacheURL(url string) func(*option) {
 	return WithSampleCacheRedis(redis.NewClient(opt))
 }
 
-// ensureInitialized loads lake.setting on first use and wires the
-// storage prefix into the index reader/writer. Idempotent and
-// concurrent-safe.
-func (c *Client) ensureInitialized(ctx context.Context) error {
-	c.mu.RLock()
-	if c.storage != nil {
-		c.mu.RUnlock()
-		return nil
+// storageFor resolves and memoises a bucket-scoped Storage for (provider,
+// bucket). The Resolver is invoked at most once per distinct pair.
+func (c *Client) storageFor(provider, bucket string) (storage.Storage, error) {
+	if provider == "" || bucket == "" {
+		return nil, fmt.Errorf("lake: empty provider/bucket (%q/%q)", provider, bucket)
 	}
-	c.mu.RUnlock()
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.storage != nil {
-		return nil
+	key := provider + "|" + bucket
+	c.storMu.RLock()
+	s := c.stores[key]
+	c.storMu.RUnlock()
+	if s != nil {
+		return s, nil
 	}
-
-	if c.config == nil {
-		cfg, err := c.configMgr.Load(ctx)
-		if err != nil {
-			return fmt.Errorf("load lake.setting: %w", err)
-		}
-		c.config = cfg
+	c.storMu.Lock()
+	defer c.storMu.Unlock()
+	if s = c.stores[key]; s != nil {
+		return s, nil
 	}
-	stor, err := c.config.CreateStorage()
+	s, err := c.resolve(provider, bucket)
 	if err != nil {
-		return fmt.Errorf("create %s storage: %w", c.config.Storage, err)
+		return nil, fmt.Errorf("lake: resolve %s://%s: %w", provider, bucket, err)
 	}
-	c.storage = stor
-
-	prefix := stor.RedisPrefix()
-	c.writer.SetPrefix(prefix)
-	c.reader.SetPrefix(prefix)
-	return nil
+	if s == nil {
+		return nil, fmt.Errorf("lake: resolver returned nil storage for %s://%s", provider, bucket)
+	}
+	c.stores[key] = s
+	return s, nil
 }

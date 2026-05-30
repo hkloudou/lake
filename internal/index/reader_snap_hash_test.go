@@ -43,8 +43,9 @@ func TestSnapHashRoundTrip(t *testing.T) {
 
 	ctx := context.Background()
 	stop := TimeSeqID{Timestamp: 1700000100, SeqID: 500}
+	uri := "oss://my-bucket/4f3a/(users/1700000100_500.snap"
 
-	if err := w.AddSnap(ctx, "users", stop); err != nil {
+	if err := w.AddSnap(ctx, "users", stop, uri); err != nil {
 		t.Fatalf("AddSnap: %v", err)
 	}
 
@@ -52,7 +53,7 @@ func TestSnapHashRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HGet: %v", err)
 	}
-	want := EncodeSnapValue(stop)
+	want, _ := EncodeSnapValue(stop, uri)
 	if val != want {
 		t.Fatalf("hash value: got %q, want %q", val, want)
 	}
@@ -66,6 +67,9 @@ func TestSnapHashRoundTrip(t *testing.T) {
 	}
 	if got.StopTsSeq != stop {
 		t.Fatalf("got %+v, want stop=%v", got, stop)
+	}
+	if got.URI != uri {
+		t.Fatalf("URI: got %q, want %q", got.URI, uri)
 	}
 	if got.Score() != stop.Score() {
 		t.Fatalf("Score(): got %v, want %v", got.Score(), stop.Score())
@@ -85,10 +89,10 @@ func TestSnapHashOverwrite(t *testing.T) {
 	stop1 := TimeSeqID{Timestamp: 1700000100, SeqID: 500}
 	stop2 := TimeSeqID{Timestamp: 1700000200, SeqID: 999}
 
-	if err := w.AddSnap(ctx, "users", stop1); err != nil {
+	if err := w.AddSnap(ctx, "users", stop1, "oss://b/"+stop1.String()+".snap"); err != nil {
 		t.Fatalf("first AddSnap: %v", err)
 	}
-	if err := w.AddSnap(ctx, "users", stop2); err != nil {
+	if err := w.AddSnap(ctx, "users", stop2, "oss://b/"+stop2.String()+".snap"); err != nil {
 		t.Fatalf("second AddSnap: %v", err)
 	}
 
@@ -127,7 +131,7 @@ func TestIterateSnapsBatchBackup(t *testing.T) {
 	}
 
 	for catalog, stop := range stops {
-		if err := w.AddSnap(ctx, catalog, stop); err != nil {
+		if err := w.AddSnap(ctx, catalog, stop, "oss://b/"+stop.String()+".snap"); err != nil {
 			t.Fatalf("AddSnap %s: %v", catalog, err)
 		}
 	}
@@ -183,7 +187,8 @@ func TestIterateSnapsEarlyStop(t *testing.T) {
 	ctx := context.Background()
 	for i := 0; i < 50; i++ {
 		cat := fmt.Sprintf("c%02d", i)
-		if err := w.AddSnap(ctx, cat, TimeSeqID{Timestamp: 1700000000 + int64(i), SeqID: 1}); err != nil {
+		ts := TimeSeqID{Timestamp: 1700000000 + int64(i), SeqID: 1}
+		if err := w.AddSnap(ctx, cat, ts, "oss://b/"+ts.String()+".snap"); err != nil {
 			t.Fatalf("AddSnap %s: %v", cat, err)
 		}
 	}

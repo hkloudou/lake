@@ -15,7 +15,7 @@ const unreachableRedis = "127.0.0.1:1"
 
 func newDeadClient(t *testing.T) *Client {
 	t.Helper()
-	return NewLake(unreachableRedis)
+	return newTestClient(unreachableRedis)
 }
 
 func isValidationErr(err error) bool {
@@ -62,20 +62,11 @@ func TestCatalogValidation_BatchListMixesGoodAndBad(t *testing.T) {
 	}
 }
 
-func TestCatalogValidation_ClearHistory(t *testing.T) {
-	c := newDeadClient(t)
-
-	err := c.ClearHistory(context.Background(), "tenant//users")
-	if !isValidationErr(err) {
-		t.Fatalf("expected catalog validation error, got %v", err)
-	}
-}
-
 func TestCatalogValidation_AcceptsHierarchy(t *testing.T) {
 	c := newDeadClient(t)
 
-	// Internal "/" is allowed. Call should fail later (Redis unreachable
-	// → ensureInitialized fails) but NOT at validation.
+	// Internal "/" is allowed. Call should fail later (missing Provider/Bucket)
+	// but NOT at catalog validation.
 	_, err := c.WriteBegin(context.Background(), WriteBeginRequest{
 		Catalog:   "tenantA/users",
 		Path:      "/x",

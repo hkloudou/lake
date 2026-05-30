@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/hkloudou/lake/v3/internal/index"
-	"github.com/hkloudou/lake/v3/internal/storage"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -36,14 +35,9 @@ func TestBatchSample_HitsAndMisses_Redis(t *testing.T) {
 	}
 	_ = probe.Close()
 
-	c := NewLake("redis://127.0.0.1:6379/14",
-		WithStorage(storage.NewMemoryStorage("test")),
-	)
+	c := newTestClientRDB(redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379", DB: 14}))
 
 	ctx := context.Background()
-	if err := c.ensureInitialized(ctx); err != nil {
-		t.Fatalf("ensureInitialized: %v", err)
-	}
 
 	mkList := func(cat string, ts index.TimeSeqID) *ListResult {
 		return &ListResult{

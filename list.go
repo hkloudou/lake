@@ -66,7 +66,7 @@ func (m ListResult) Dump() string {
 		fmt.Fprintf(&b, "\n[%d/%d] --------------------------------\n", i+1, len(m.Entries))
 		fmt.Fprintf(&b, "  Path: %s\n", e.Path)
 		fmt.Fprintf(&b, "  TsSeq: %s\n", e.TsSeq)
-		fmt.Fprintf(&b, "  UUID: %s\n", e.UUID)
+		fmt.Fprintf(&b, "  URI: %s\n", e.URI)
 		fmt.Fprintf(&b, "  MergeType: %d (%s)\n", e.MergeType, e.MergeType.String())
 		fmt.Fprintf(&b, "  Score: %.6f\n", e.Score)
 	}
@@ -79,9 +79,6 @@ func (c *Client) List(ctx context.Context, catalog string) *ListResult {
 	c.emitEvent(catalog, "List", nil)
 
 	if err := utils.ValidateCatalog(catalog); err != nil {
-		return &ListResult{client: c, catalog: catalog, Err: err}
-	}
-	if err := c.ensureInitialized(ctx); err != nil {
 		return &ListResult{client: c, catalog: catalog, Err: err}
 	}
 
@@ -118,13 +115,6 @@ func (c *Client) BatchList(ctx context.Context, catalogs []string) map[string]*L
 			continue
 		}
 		valid = append(valid, cat)
-	}
-
-	if err := c.ensureInitialized(ctx); err != nil {
-		for _, cat := range valid {
-			out[cat] = &ListResult{client: c, catalog: cat, Err: err}
-		}
-		return out
 	}
 
 	results := c.reader.BatchList(ctx, valid)

@@ -11,8 +11,8 @@ const (
 	MergeTypeRFC7396 = index.MergeTypeRFC7396 // JSON Merge Patch
 )
 
-// SnapInfo records a catalog's latest snapshot point.
-// The OSS object key is Storage.MakeSnapKey(catalog, info.StopTsSeq).
+// SnapInfo records a catalog's latest snapshot point. The snapshot object
+// lives at info.URI (provider://bucket/path).
 type SnapInfo = index.SnapInfo
 
 // TimeSeqID is the (timestamp, seqid) pair Lake stamps onto every write.

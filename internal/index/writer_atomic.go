@@ -7,19 +7,21 @@ import (
 	"github.com/hkloudou/lake/v3/internal/encode"
 )
 
-// notifyScript atomically allocates a TimeSeqID and adds the committed
-// delta member in a single ZADD. V3 dispenses with the v2 pending →
-// committed swap entirely: tsSeq is allocated only when notify fires
-// (after the OSS upload has succeeded), so a slow / aborted upload
-// never appears in the index — no pending phase, no 120s timeout, no
-// rollback API.
+// notifyScript atomically allocates a TimeSeqID and adds the committed delta
+// member in a single ZADD. tsSeq is allocated only when notify fires (after
+// the client's upload has succeeded), so a slow / aborted upload never appears
+// in the index — no pending phase, no rollback.
 //
-// The seqid counter is namespaced by ARGV[3] (deployment Name) so that
-// multiple deployments sharing one Redis under different Names get
-// independent 999,999/sec budgets.
+// The member is the JSON array [mergeType, fieldPath, tsSeq, uri], assembled
+// here via cjson — this script is the single authoritative encoder. The uri
+// (provider://bucket/path) fully locates the body, so reads need no
+// key-derivation knowledge.
+//
+// The seqid counter is namespaced by prefix (deployment Name) + catalog + ts,
+// giving each catalog an independent 999,999/sec budget that resets each second.
 const notifyScript = `
 local catalog, zaddKey = KEYS[1], KEYS[2]
-local fieldPath, mergeType, prefix, uuid = ARGV[1], ARGV[2], ARGV[3], ARGV[4]
+local fieldPath, mergeType, prefix, uri = ARGV[1], ARGV[2], ARGV[3], ARGV[4]
 
 local ts = redis.call("TIME")[1]
 local seqKey = prefix .. ":seqid:" .. catalog .. ":" .. ts
@@ -32,24 +34,24 @@ if seqid > 999999 then
 end
 
 local tsSeq  = ts .. "_" .. seqid
-local member = "delta|" .. mergeType .. "|" .. fieldPath .. "|" .. tsSeq .. "|" .. uuid
+local member = cjson.encode({tonumber(mergeType), fieldPath, tsSeq, uri})
 local score  = tonumber(ts) + (tonumber(seqid) / 1000000.0)
 
 redis.call("ZADD", zaddKey, score, member)
 return {tonumber(ts), seqid, member}
 `
 
-// Notify allocates a TimeSeqID for an already-uploaded delta and
-// commits it to the Redis index. The uuid is the OSS object identifier
-// the client used at upload time; it is embedded in the delta member
-// so reads can resolve the storage key.
-func (w *Writer) Notify(ctx context.Context, catalog, fieldPath string, mergeType MergeType, uuid string) (TimeSeqID, string, error) {
+// Notify allocates a TimeSeqID for an already-uploaded delta and commits it to
+// the Redis index. uri is the storage locator (provider://bucket/path) the
+// client uploaded to; it is embedded in the member so reads resolve the body
+// without any storage-key knowledge.
+func (w *Writer) Notify(ctx context.Context, catalog, fieldPath string, mergeType MergeType, uri string) (TimeSeqID, string, error) {
 	if w.prefix == "" {
 		return TimeSeqID{}, "", fmt.Errorf("writer prefix not set; call SetPrefix")
 	}
 	res, err := w.rdb.Eval(ctx, notifyScript,
 		[]string{encode.EncodeRedisCatalogName(catalog), w.MakeDeltaZsetKey(catalog)},
-		fieldPath, int(mergeType), w.prefix, uuid,
+		fieldPath, int(mergeType), w.prefix, uri,
 	).Result()
 	if err != nil {
 		return TimeSeqID{}, "", fmt.Errorf("notify eval: %w", err)

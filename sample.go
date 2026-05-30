@@ -146,9 +146,6 @@ func (s *Sampler[T]) Sample(ctx context.Context, list *ListResult) (T, error) {
 	if list.Err != nil {
 		return zero, list.Err
 	}
-	if err := c.ensureInitialized(ctx); err != nil {
-		return zero, err
-	}
 	// Single-catalog context: the only "peer" available is self.
 	peers := map[string]*ListResult{list.catalog: list}
 	return s.finalize(s.sampleCore(ctx, c, list, peers))
@@ -186,12 +183,6 @@ func (s *Sampler[T]) Batch(ctx context.Context, lists map[string]*ListResult) ma
 
 	for cat := range lists {
 		c.emitEvent(cat, "BatchSample", map[string]any{"indicator": s.indicator})
-	}
-	if err := c.ensureInitialized(ctx); err != nil {
-		for cat := range lists {
-			out[cat] = &SampleResult[T]{Err: err}
-		}
-		return out
 	}
 
 	// Partition: drop catalogs that already have list-level errors; the
