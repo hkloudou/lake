@@ -385,8 +385,16 @@ client := lake.New("my-lake",
     redis.NewClient(&redis.Options{Addr: "main-redis:6379"}), // index (durable)
     resolve,
     lake.WithSnapTarget("oss", "my-snaps"),
+    lake.WithSampleCacheRedis(cacheRDB), // sample memo shares the same cache tier
 )
 ```
+
+Everything in the cache Redis — snap/delta bytes *and* the sample memo
+(`WithSampleCacheRedis`) — is rebuildable, so `maxmemory-policy allkeys-lru` plus
+per-key TTL evicts it safely; only the index Redis must persist. (Snap/delta
+bytes are one TTL'd string per object, evicted per-key; the sample memo is one
+Hash per indicator, so LRU drops a whole indicator at once — both just recompute
+on the next read.)
 
 | Property | Index Redis | Cache Redis |
 |----------|-------------|-------------|
