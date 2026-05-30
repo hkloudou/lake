@@ -4,11 +4,9 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/hkloudou/lake/v3/storage"
 	"github.com/hkloudou/lake/v3/storage/mem"
-	"github.com/redis/go-redis/v9"
 	"github.com/tidwall/gjson"
 )
 
@@ -24,21 +22,15 @@ func (presignBucket) PresignPut(context.Context, string, string, storage.Presign
 // Redis: WriteBegin (presign) → direct upload → WriteNotify (URI in the delta)
 // → List → Read (resolve URI → fetch → merge). Skips when Redis is unreachable.
 func TestWriteReadRoundTrip_Redis(t *testing.T) {
-	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379", DB: 13, DialTimeout: 200 * time.Millisecond})
-	pingCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	if err := rdb.Ping(pingCtx).Err(); err != nil {
-		t.Skipf("redis not reachable, skipping integration test: %v", err)
-	}
-	if err := rdb.FlushDB(pingCtx).Err(); err != nil {
-		t.Fatalf("FlushDB: %v", err)
-	}
+	rdb := redisTestDB(t, 13)
+	prefix := testPrefix(t)
+	cleanupKeys(t, rdb, prefix+":*")
 
 	store := mem.New()
 	resolve := func(provider, bucket string) (storage.Storage, error) {
 		return presignBucket{store.Bucket(bucket)}, nil
 	}
-	c := New("test", rdb, resolve, WithSnapTarget("mem", "snaps"))
+	c := New(prefix, rdb, resolve, WithSnapTarget("mem", "snaps"))
 
 	ctx := context.Background()
 	write := func(path string, mt MergeType, body string) {
@@ -81,5 +73,12 @@ func TestWriteReadRoundTrip_Redis(t *testing.T) {
 	}
 	if r.Get("profile.city").String() != "NYC" || r.Get("profile.age").Int() != 31 {
 		t.Errorf("profile = %s, want {city:NYC,age:31}", r.Get("profile").Raw)
+	}
+
+	// ReadString triggered an async snapshot save (WithSnapTarget). Wait for it to
+	// be indexed, both to exercise that path and so its <prefix>:s write lands
+	// before cleanup (a fire-and-forget goroutine otherwise writes after Cleanup).
+	if !waitFor(func() bool { s, _ := c.reader.GetLatestSnap(ctx, "users"); return s != nil }) {
+		t.Fatal("snapshot was not indexed within timeout")
 	}
 }

@@ -3,43 +3,57 @@ package index
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
-// snapHashTestRedis returns a real Redis client pointed at db 14, or
-// skips the test when Redis is unreachable. db 14 is a dedicated test
-// space and is FLUSHDB'd at the start of each test.
-func snapHashTestRedis(t *testing.T) *redis.Client {
+// snapHashTestRedis returns a real Redis client (db 13 — the snap hash is index
+// data, not cache) and a unique key prefix, or skips when Redis is unreachable.
+// It never flushes the DB: cleanup deletes only this test's "<prefix>:*" keys,
+// so any other data in db 13 is untouched.
+func snapHashTestRedis(t *testing.T) (*redis.Client, string) {
 	t.Helper()
-	rdb := redis.NewClient(&redis.Options{
-		Addr:        "127.0.0.1:6379",
-		DB:          14,
-		DialTimeout: 200 * time.Millisecond,
-	})
+	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379", DB: 13, DialTimeout: 200 * time.Millisecond})
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		t.Skipf("redis not reachable, skipping integration test: %v", err)
 	}
-	if err := rdb.FlushDB(ctx).Err(); err != nil {
-		t.Fatalf("FlushDB failed: %v", err)
-	}
-	t.Cleanup(func() { _ = rdb.Close() })
-	return rdb
+	prefix := fmt.Sprintf("laketest_%d_%s", os.Getpid(), strings.ReplaceAll(t.Name(), "/", "_"))
+	t.Cleanup(func() {
+		c := context.Background()
+		var cursor uint64
+		for {
+			keys, next, err := rdb.Scan(c, cursor, prefix+":*", 256).Result()
+			if err != nil {
+				break
+			}
+			if len(keys) > 0 {
+				rdb.Del(c, keys...)
+			}
+			if next == 0 {
+				break
+			}
+			cursor = next
+		}
+		_ = rdb.Close()
+	})
+	return rdb, prefix
 }
 
 // TestSnapHashRoundTrip exercises the AddSnap → HGet path on the real
 // Redis Hash and verifies the layout is "<prefix>:s" with catalog as
 // field, value = "{stopTsSeq}".
 func TestSnapHashRoundTrip(t *testing.T) {
-	rdb := snapHashTestRedis(t)
+	rdb, prefix := snapHashTestRedis(t)
 	w := NewWriter(rdb)
 	r := NewReader(rdb)
-	w.SetPrefix("test")
-	r.SetPrefix("test")
+	w.SetPrefix(prefix)
+	r.SetPrefix(prefix)
 
 	ctx := context.Background()
 	stop := TimeSeqID{Timestamp: 1700000100, SeqID: 500}
@@ -49,7 +63,7 @@ func TestSnapHashRoundTrip(t *testing.T) {
 		t.Fatalf("AddSnap: %v", err)
 	}
 
-	val, err := rdb.HGet(ctx, "test:s", "users").Result()
+	val, err := rdb.HGet(ctx, r.MakeSnapsHashKey(), "users").Result()
 	if err != nil {
 		t.Fatalf("HGet: %v", err)
 	}
@@ -79,11 +93,11 @@ func TestSnapHashRoundTrip(t *testing.T) {
 // TestSnapHashOverwrite confirms the V3 contract: each AddSnap on a
 // catalog overwrites its previous entry.
 func TestSnapHashOverwrite(t *testing.T) {
-	rdb := snapHashTestRedis(t)
+	rdb, prefix := snapHashTestRedis(t)
 	w := NewWriter(rdb)
 	r := NewReader(rdb)
-	w.SetPrefix("test")
-	r.SetPrefix("test")
+	w.SetPrefix(prefix)
+	r.SetPrefix(prefix)
 
 	ctx := context.Background()
 	stop1 := TimeSeqID{Timestamp: 1700000100, SeqID: 500}
@@ -104,7 +118,7 @@ func TestSnapHashOverwrite(t *testing.T) {
 		t.Fatalf("after overwrite: got %+v, want stop=%v", got, stop2)
 	}
 
-	cnt, err := rdb.HLen(ctx, "test:s").Result()
+	cnt, err := rdb.HLen(ctx, r.MakeSnapsHashKey()).Result()
 	if err != nil {
 		t.Fatalf("HLen: %v", err)
 	}
@@ -117,11 +131,11 @@ func TestSnapHashOverwrite(t *testing.T) {
 // (via HSCAN under the hood) yields every catalog's snap so backup tooling
 // can enumerate the full set of OSS snap keys without an OSS LIST.
 func TestIterateSnapsBatchBackup(t *testing.T) {
-	rdb := snapHashTestRedis(t)
+	rdb, prefix := snapHashTestRedis(t)
 	w := NewWriter(rdb)
 	r := NewReader(rdb)
-	w.SetPrefix("test")
-	r.SetPrefix("test")
+	w.SetPrefix(prefix)
+	r.SetPrefix(prefix)
 
 	ctx := context.Background()
 	stops := map[string]TimeSeqID{
@@ -160,9 +174,9 @@ func TestIterateSnapsBatchBackup(t *testing.T) {
 
 // TestGetLatestSnapMissingReturnsNilNil covers the "no snap yet" path.
 func TestGetLatestSnapMissingReturnsNilNil(t *testing.T) {
-	rdb := snapHashTestRedis(t)
+	rdb, prefix := snapHashTestRedis(t)
 	r := NewReader(rdb)
-	r.SetPrefix("test")
+	r.SetPrefix(prefix)
 
 	ctx := context.Background()
 	got, err := r.GetLatestSnap(ctx, "never-written")
@@ -178,11 +192,11 @@ func TestGetLatestSnapMissingReturnsNilNil(t *testing.T) {
 // false (caller stops iteration mid-stream) without consuming the whole
 // hash — the property backup tools rely on for budgeted scans.
 func TestIterateSnapsEarlyStop(t *testing.T) {
-	rdb := snapHashTestRedis(t)
+	rdb, prefix := snapHashTestRedis(t)
 	w := NewWriter(rdb)
 	r := NewReader(rdb)
-	w.SetPrefix("test")
-	r.SetPrefix("test")
+	w.SetPrefix(prefix)
+	r.SetPrefix(prefix)
 
 	ctx := context.Background()
 	for i := 0; i < 50; i++ {

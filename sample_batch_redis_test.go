@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/hkloudou/lake/v3/internal/index"
-	"github.com/redis/go-redis/v9"
 )
 
 // TestBatchSample_HitsAndMisses_Redis exercises BatchSample against a
@@ -19,23 +18,11 @@ import (
 //
 // Skips when Redis is unreachable.
 func TestBatchSample_HitsAndMisses_Redis(t *testing.T) {
-	probe := redis.NewClient(&redis.Options{
-		Addr:        "127.0.0.1:6379",
-		DB:          14,
-		DialTimeout: 200 * time.Millisecond,
-	})
-	pingCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	if err := probe.Ping(pingCtx).Err(); err != nil {
-		_ = probe.Close()
-		t.Skipf("redis not reachable, skipping integration test: %v", err)
-	}
-	if err := probe.FlushDB(pingCtx).Err(); err != nil {
-		t.Fatalf("FlushDB: %v", err)
-	}
-	_ = probe.Close()
+	rdb := redisTestDB(t, 14)
+	prefix := testPrefix(t)
+	cleanupKeys(t, rdb, prefix+":*")
 
-	c := newTestClientRDB(redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379", DB: 14}))
+	c := New(prefix, rdb, memResolver())
 
 	ctx := context.Background()
 
