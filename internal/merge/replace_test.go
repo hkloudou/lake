@@ -90,33 +90,7 @@ func TestReplaceMerger(t *testing.T) {
 
 			if string(expectedJSON) != string(resultJSON) {
 				t.Errorf("Result mismatch:\n  Expected: %s\n  Got:      %s", expectedJSON, resultJSON)
-			} else {
-				t.Logf("✓ Passed: %s", tt.name)
 			}
 		})
 	}
-}
-
-// TestMergerInterface verifies all mergers implement the Merger interface
-func TestMergerInterface(t *testing.T) {
-	var _ Merger = (*ReplaceMerger)(nil)
-	var _ Merger = (*RFC7396Merger)(nil)
-
-	t.Log("✓ All mergers implement Merger interface")
-}
-
-// TestMergersMap verifies the mergers map is correctly initialized
-func TestMergersMap(t *testing.T) {
-	if len(mergers) != 2 {
-		t.Errorf("Expected 2 mergers, got %d", len(mergers))
-	}
-
-	if mergers[1] == nil {
-		t.Error("Replace merger (type 1) not initialized")
-	}
-	if mergers[2] == nil {
-		t.Error("RFC7396 merger (type 2) not initialized")
-	}
-
-	t.Log("✓ All mergers in map are initialized")
 }

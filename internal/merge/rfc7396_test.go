@@ -126,8 +126,6 @@ func TestRFC7396Examples(t *testing.T) {
 
 			if string(expectedJSON) != string(resultJSON) {
 				t.Errorf("Result mismatch:\n  Expected: %s\n  Got:      %s", expectedJSON, resultJSON)
-			} else {
-				t.Logf("✓ Passed: %s", tt.name)
 			}
 		})
 	}
@@ -191,8 +189,6 @@ func TestRFC7396FieldScoping(t *testing.T) {
 
 			if string(expectedJSON) != string(resultJSON) {
 				t.Errorf("Result mismatch:\n  Expected: %s\n  Got:      %s", expectedJSON, resultJSON)
-			} else {
-				t.Logf("✓ Passed: %s", tt.name)
 			}
 		})
 	}

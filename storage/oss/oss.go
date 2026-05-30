@@ -16,6 +16,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	alioss "github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/hkloudou/lake/v3/storage"
@@ -111,7 +112,7 @@ func (b *bucket) PresignPut(_ context.Context, _ /*catalog*/, path string, opts 
 	}
 	ttl := opts.TTL
 	if ttl <= 0 {
-		ttl = 15 * 60 * 1e9 // 15m in ns
+		ttl = 15 * time.Minute
 	}
 	signOpts := []alioss.Option{}
 	headers := map[string]string{}

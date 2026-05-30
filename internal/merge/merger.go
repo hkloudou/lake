@@ -8,5 +8,4 @@ type Merger interface {
 	// field: optional field scope (empty "" means root document)
 	// Returns: the merged result
 	Merge(original, data []byte, field string) ([]byte, error)
-	// UpdatedMap(entries []index.DeltaInfo) map[string]index.TimeSeqID
 }
