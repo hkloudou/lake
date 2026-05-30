@@ -7,9 +7,10 @@
 > Distributed JSON document store with atomic writes, RFC-standard merging,
 > snapshot acceleration, and computed sampling.
 
-> **⚠️ v3 status: alpha — public API may still change before `v3.0.0` stable.**
-> Production users should pin v2 (`go get github.com/hkloudou/lake/v2@latest`)
-> until v3 stabilises. See [Migrating from v2 to v3](#-migrating-from-v2-to-v3).
+> **⚠️ Status: not production-ready.** No current release is sanctioned for
+> production use — v3 is alpha (its public API may still change before `v3.0.0`
+> stable), and the v2 line is not recommended for new production use either.
+> See [Migrating from v2 to v3](#-migrating-from-v2-to-v3).
 
 ## ✨ Key Features
 
@@ -157,6 +158,12 @@ type Resolver func(provider, bucket string) (Storage, error)
 Lake memoises the resolved `Storage` per `(provider, bucket)`, so your resolver
 is called at most once per distinct pair. Put credential / endpoint / pooling /
 multi-account routing inside the closure.
+
+`storage/cached` is a decorator, not a backend: `cached.Wrap(namespace, backend, cache)`
+adds read-through (Get) and write-through (Put) caching to any `Storage`, and
+`cached.Resolver(inner, policy)` applies a per-`(provider, bucket)` cache across a
+whole resolver. A snapshot save warms the cache so the next read skips a cold
+object-store fetch — see **Configuration** below.
 
 ### Write — three-step direct upload
 
@@ -359,14 +366,17 @@ read-path caching is opt-in and composed into your resolver with `storage/cached
 backed by an ephemeral, LRU-evictable **cache Redis**:
 
 ```go
-// Wrap each resolved backend with a cache chosen per (provider, bucket).
-// A snapshot Put warms the cache, so the next read skips a cold object-store GET.
-cacheRDB := redis.NewClient(&redis.Options{Addr: "cache-redis:6379"}) // ephemeral
-resolve := cached.Resolver(myResolver, func(provider, bucket string) cached.Cache {
+// `backends` is your provider→Storage resolver (the `resolve` from Quick Start).
+// cached.Resolver wraps each backend with a cache chosen per (provider, bucket);
+// a snapshot Put warms the cache (write-through), so the next read skips a cold
+// object-store GET. Routing by bucket lets snaps and deltas use different tiers —
+// which only differ when you give them different buckets.
+cacheRDB := redis.NewClient(&redis.Options{Addr: "cache-redis:6379"}) // ephemeral, LRU
+resolve := cached.Resolver(backends, func(provider, bucket string) cached.Cache {
     switch bucket {
-    case "my-bucket": // snapshots: shared across processes, long TTL
+    case "my-snaps": // the WithSnapTarget bucket: shared across processes, long TTL
         return cached.NewRedisCache(cacheRDB, 2*time.Hour)
-    default: // deltas: process-local, short TTL (immutable, soon folded into a snap)
+    default: // delta buckets: process-local, short TTL (immutable, soon folded into a snap)
         return cached.NewMemoryCache(time.Minute)
     }
 })
@@ -374,7 +384,7 @@ resolve := cached.Resolver(myResolver, func(provider, bucket string) cached.Cach
 client := lake.New("my-lake",
     redis.NewClient(&redis.Options{Addr: "main-redis:6379"}), // index (durable)
     resolve,
-    lake.WithSnapTarget("oss", "my-bucket"),
+    lake.WithSnapTarget("oss", "my-snaps"),
 )
 ```
 
@@ -419,8 +429,9 @@ exercised end-to-end with Redis present (`TestWriteReadRoundTrip_Redis`).
 ### "Object storage is the source of truth, Redis is the hot index"
 
 Every Redis key (with the partial exception of the `seqid` counter) is
-conceptually rebuildable. Sample results, snapshot caches, and delta caches are
-all *caches* — failing to write them never fails a user-visible operation.
+conceptually rebuildable. Sample results — and any read-path caches you compose
+via `storage/cached` — are all *caches*: failing to write them never fails a
+user-visible operation.
 
 ### A patch body is the client's responsibility
 
@@ -466,8 +477,10 @@ v3 is **not** wire-compatible with v2. The headline changes:
   removed (use `NewSampler[T]`).
 - **Snapshots auto-generate** to `WithSnapTarget`; omit it to disable.
 
-If you depend on a removed surface and cannot rewrite, **stay on the v2 line**
-(`go get github.com/hkloudou/lake/v2@latest`).
+If you depend on a removed surface and cannot rewrite yet, the v2 line is still
+available (`go get github.com/hkloudou/lake/v2@latest`) — but note that no
+current version, v2 included, is recommended for production (see the status note
+at the top).
 
 ## 🤝 Contributing
 
