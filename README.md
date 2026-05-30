@@ -101,6 +101,10 @@ func main() {
     rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
     oss, _ := lakeoss.New(lakeoss.Config{Endpoint: "oss-cn-hangzhou", AccessKey: ak, SecretKey: sk})
 
+    // The resolver is your only storage-injection point. Here it's bare OSS —
+    // bodies are fetched straight from the bucket on every read. To add a read
+    // cache tier (recommended for production), wrap it with cached.Resolver; see
+    // "Configuration" below.
     resolve := func(provider, bucket string) (storage.Storage, error) {
         switch provider {
         case "oss":
@@ -408,9 +412,9 @@ backed by an ephemeral, LRU-evictable **cache Redis**:
 ```go
 // Build the cache tiers ONCE and share the instances across buckets — don't
 // construct a cache inside the policy, or you get one cache (and one cleanup
-// goroutine) per bucket. `backends` is your provider→Storage resolver from
-// Quick Start. A snapshot Put warms the cache (write-through), so the next read
-// skips a cold object-store GET.
+// goroutine) per bucket. `backends` is the bare resolver from Quick Start; the
+// wrapped `resolve` is what you pass to lake.New. A snapshot Put warms the cache
+// (write-through), so the next read skips a cold object-store GET.
 cacheRDB := redis.NewClient(&redis.Options{Addr: "cache-redis:6379"}) // ephemeral, LRU
 snapCache := cached.NewRedisCache(cacheRDB, 2*time.Hour) // snapshots: shared, long TTL
 deltaCache := cached.NewMemoryCache(time.Minute)         // deltas: process-local, short TTL
