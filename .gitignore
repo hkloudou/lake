@@ -22,3 +22,6 @@ go.work
 
 
 testData/*
+
+# Claude Code per-user local settings (settings.json stays tracked)
+.claude/settings.local.json
