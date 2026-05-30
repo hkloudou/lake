@@ -1,9 +1,8 @@
 package index
 
 import (
+	"encoding/json"
 	"fmt"
-	"strconv"
-	"strings"
 
 	"github.com/hkloudou/lake/v3/internal/utils"
 )
@@ -35,57 +34,82 @@ func MergeTypeFromInt(i int) MergeType {
 	return MergeType(i)
 }
 
-// Delta zset member layout: "delta|{type}|{path}|{tsSeq}|{uuid}". The uuid
-// is the OSS object identifier (allocated client-side at WriteBegin); it
-// lives in the member so Read can resolve the storage key without a side
-// hash. The member is *written* by the notify Lua script (see
-// writer_atomic.go) — that script is the single authoritative encoder.
-// DecodeDeltaMember below is the matching reader and its tests pin the format.
+// Delta zset member layout: a JSON array [mergeType, fieldPath, tsSeq, uri].
+// It is *written* by the notify Lua script (the single authoritative encoder,
+// via cjson); DecodeDeltaMember below is the matching reader and its tests pin
+// the format. The uri (provider://bucket/path) is a complete object locator,
+// so the read path resolves the body without any key-derivation knowledge.
 
-// DecodeDeltaMember parses a delta member and verifies its score
-// matches the embedded tsSeq.
+// DecodeDeltaMember parses a delta member and verifies its score matches the
+// embedded tsSeq.
 func DecodeDeltaMember(member string, score float64) (*DeltaInfo, error) {
-	parts := strings.Split(member, "|")
-	if len(parts) != 5 || parts[0] != "delta" {
-		return nil, fmt.Errorf("invalid delta member %q", member)
+	var arr []json.RawMessage
+	if err := json.Unmarshal([]byte(member), &arr); err != nil {
+		return nil, fmt.Errorf("invalid delta member %q: %w", member, err)
 	}
-	mt, err := strconv.Atoi(parts[1])
-	if err != nil || mt < 1 || mt > 2 {
+	if len(arr) != 4 {
+		return nil, fmt.Errorf("invalid delta member %q (want 4 elements)", member)
+	}
+	var mt int
+	if err := json.Unmarshal(arr[0], &mt); err != nil || mt < 1 || mt > 2 {
 		return nil, fmt.Errorf("invalid merge type in %q", member)
 	}
-	if err := utils.ValidateFieldPath(parts[2]); err != nil {
+	var path string
+	if err := json.Unmarshal(arr[1], &path); err != nil {
 		return nil, fmt.Errorf("invalid path in %q: %w", member, err)
 	}
-	tsSeq, err := ParseTimeSeqID(parts[3])
+	if err := utils.ValidateFieldPath(path); err != nil {
+		return nil, fmt.Errorf("invalid path in %q: %w", member, err)
+	}
+	var tsSeqStr string
+	if err := json.Unmarshal(arr[2], &tsSeqStr); err != nil {
+		return nil, fmt.Errorf("invalid tsSeq in %q: %w", member, err)
+	}
+	tsSeq, err := ParseTimeSeqID(tsSeqStr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid tsSeq in %q: %w", member, err)
 	}
 	if tsSeq.Score() != score {
 		return nil, fmt.Errorf("score mismatch in %q (member=%.6f, redis=%.6f)", member, tsSeq.Score(), score)
 	}
-	if parts[4] == "" {
-		return nil, fmt.Errorf("empty uuid in %q", member)
+	var uri string
+	if err := json.Unmarshal(arr[3], &uri); err != nil || uri == "" {
+		return nil, fmt.Errorf("invalid uri in %q", member)
 	}
 	return &DeltaInfo{
 		Member:    member,
 		Score:     score,
-		Path:      parts[2],
+		Path:      path,
 		TsSeq:     tsSeq,
 		MergeType: MergeTypeFromInt(mt),
-		UUID:      parts[4],
+		URI:       uri,
 	}, nil
 }
 
-// EncodeSnapValue / DecodeSnapValue handle the value stored under
-// "<prefix>:s", keyed by catalog. The value is just "{stopTsSeq}".
-func EncodeSnapValue(stopTsSeq TimeSeqID) string { return stopTsSeq.String() }
-
-func DecodeSnapValue(value string) (TimeSeqID, error) {
-	t, err := ParseTimeSeqID(value)
+// Snap value layout: a JSON array [tsSeq, uri], stored as the field value
+// under "<prefix>:s" keyed by catalog.
+func EncodeSnapValue(stop TimeSeqID, uri string) (string, error) {
+	b, err := json.Marshal([2]string{stop.String(), uri})
 	if err != nil {
-		return TimeSeqID{}, fmt.Errorf("invalid snap value: %w", err)
+		return "", err
 	}
-	return t, nil
+	return string(b), nil
 }
 
-func IsDeltaMember(m string) bool { return strings.HasPrefix(m, "delta|") }
+func DecodeSnapValue(value string) (TimeSeqID, string, error) {
+	var arr [2]string
+	if err := json.Unmarshal([]byte(value), &arr); err != nil {
+		return TimeSeqID{}, "", fmt.Errorf("invalid snap value %q: %w", value, err)
+	}
+	stop, err := ParseTimeSeqID(arr[0])
+	if err != nil {
+		return TimeSeqID{}, "", fmt.Errorf("invalid snap value %q: %w", value, err)
+	}
+	if arr[1] == "" {
+		return TimeSeqID{}, "", fmt.Errorf("invalid snap value %q (empty uri)", value)
+	}
+	return stop, arr[1], nil
+}
+
+// IsDeltaMember reports whether a zset member looks like a delta (JSON array).
+func IsDeltaMember(m string) bool { return len(m) > 0 && m[0] == '[' }

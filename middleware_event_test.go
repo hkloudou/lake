@@ -38,9 +38,9 @@ func (s *spyHandler) seen(event string) bool {
 
 func newClientWithSpy(t *testing.T) (*Client, *spyHandler) {
 	t.Helper()
-	// Unreachable Redis → ensureInitialized always fails → exercises the
+	// Unreachable Redis → operations fail past the event emit → exercises the
 	// "emit before early return" contract for every API.
-	c := NewLake("127.0.0.1:1")
+	c := newTestClient("127.0.0.1:1")
 	spy := &spyHandler{}
 	c.Use(spy.handler())
 	return c, spy
@@ -54,7 +54,7 @@ func TestEmit_ListFiresOnInitFailure(t *testing.T) {
 		t.Fatalf("expected init failure, got nil error")
 	}
 	if !spy.seen("List") {
-		t.Fatal("List event must be emitted even when ensureInitialized fails")
+		t.Fatal("List event must be emitted even when the Redis read fails")
 	}
 }
 
@@ -63,7 +63,7 @@ func TestEmit_BatchListFiresOnInitFailure(t *testing.T) {
 
 	c.BatchList(context.Background(), []string{"a", "b"})
 	if !spy.seen("BatchList") {
-		t.Fatal("BatchList event must be emitted even when ensureInitialized fails")
+		t.Fatal("BatchList event must be emitted even when the Redis read fails")
 	}
 }
 
@@ -78,15 +78,6 @@ func TestEmit_WriteBeginFiresOnPathValidationFailure(t *testing.T) {
 	})
 	if !spy.seen("WriteBegin") {
 		t.Fatal("WriteBegin event must be emitted even when path validation fails")
-	}
-}
-
-func TestEmit_ClearHistoryFiresOnInitFailure(t *testing.T) {
-	c, spy := newClientWithSpy(t)
-
-	_ = c.ClearHistory(context.Background(), "users")
-	if !spy.seen("ClearHistory") {
-		t.Fatal("ClearHistory event must be emitted even when ensureInitialized fails")
 	}
 }
 

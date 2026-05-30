@@ -7,17 +7,15 @@ import (
 
 	"github.com/hkloudou/lake/v3/internal/index"
 	"github.com/hkloudou/lake/v3/internal/merge"
+	"github.com/hkloudou/lake/v3/internal/objkey"
 )
 
-// readData loads the snapshot bytes and delta bodies in parallel, merges
-// them into the resulting document, and asynchronously persists a new
-// snapshot if there are deltas past the latest snap.
+// readData loads the snapshot bytes and delta bodies in parallel, merges them
+// into the resulting document, and (when a snap target is configured)
+// asynchronously persists a new snapshot if there are deltas past the snap.
 func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error) {
 	if list.Err != nil {
 		return nil, list.Err
-	}
-	if err := c.ensureInitialized(ctx); err != nil {
-		return nil, err
 	}
 
 	var (
@@ -30,9 +28,9 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 			baseData = []byte("{}")
 			return
 		}
-		key := c.storage.MakeSnapKey(list.catalog, list.LatestSnap.StopTsSeq)
-		baseData, baseDataErr = c.snapCache.Take(ctx, c.storage.RedisPrefix(), key, func() ([]byte, error) {
-			return c.storage.Get(ctx, key)
+		uri := list.LatestSnap.URI
+		baseData, baseDataErr = c.snapCache.Take(ctx, c.reader.Prefix(), uri, func() ([]byte, error) {
+			return c.fetchURI(ctx, list.catalog, uri)
 		})
 	})
 	wg.Go(func() {
@@ -52,20 +50,34 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 		return nil, fmt.Errorf("merge catalog %s: %w", list.catalog, err)
 	}
 
-	// Async snapshot save: fire-and-forget on a background context so an
-	// aborted Read does not cancel a snapshot that benefits everyone else.
-	// An interrupted save leaves at most one orphan OSS object (reaped by
-	// the next sweep); the next read regenerates the snap, so reads remain
-	// correct. There is no drain on shutdown — a Client is process-lived.
-	if next := list.NextSnap(); next != nil {
-		go c.saveSnapshot(context.Background(), list.catalog, next.StopTsSeq, resultData)
+	// Async snapshot save: fire-and-forget on a background context so an aborted
+	// Read does not cancel a snapshot that benefits everyone else. Skipped
+	// entirely when no snap target is configured.
+	if c.snapProvider != "" {
+		if next := list.NextSnap(); next != nil {
+			go c.saveSnapshot(context.Background(), list.catalog, next.StopTsSeq, resultData)
+		}
 	}
 	return resultData, nil
 }
 
-// fillDeltasBody loads each delta's Body via deltaCache + storage,
-// using a worker pool capped at 10. Idempotent: skips deltas already
-// loaded. Cancels remaining workers on the first failure.
+// fetchURI resolves a storage URI (provider://bucket/path) to a backend and
+// fetches the object. catalog is passed to the backend as context.
+func (c *Client) fetchURI(ctx context.Context, catalog, uri string) ([]byte, error) {
+	provider, bucket, path, err := objkey.ParseURI(uri)
+	if err != nil {
+		return nil, err
+	}
+	st, err := c.storageFor(provider, bucket)
+	if err != nil {
+		return nil, err
+	}
+	return st.Get(ctx, catalog, path)
+}
+
+// fillDeltasBody loads each delta's Body via deltaCache + the resolved storage,
+// using a worker pool capped at 10. Idempotent: skips deltas already loaded.
+// Cancels remaining workers on the first failure.
 func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []index.DeltaInfo) error {
 	pending := 0
 	for i := range deltas {
@@ -98,9 +110,8 @@ func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []in
 				if len(d.Body) > 0 {
 					continue
 				}
-				key := c.storage.MakeDeltaKey(catalog, d.UUID)
-				data, err := c.deltaCache.Take(workerCtx, c.storage.RedisPrefix(), key, func() ([]byte, error) {
-					return c.storage.Get(workerCtx, key)
+				data, err := c.deltaCache.Take(workerCtx, c.reader.Prefix(), d.URI, func() ([]byte, error) {
+					return c.fetchURI(workerCtx, catalog, d.URI)
 				})
 				if err != nil {
 					select {

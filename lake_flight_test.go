@@ -8,7 +8,7 @@ import "testing"
 // collision being a "sample:" prefix in the key string. Splitting them
 // removes that fragile coupling and removes contention on a single mutex.
 func TestSampleFlightIsDistinctFromSnapFlight(t *testing.T) {
-	c := NewLake("127.0.0.1:1") // unreachable; we never call methods that need Redis
+	c := newTestClient("127.0.0.1:1") // unreachable; we never call methods that need Redis
 
 	if c.snapFlight == nil || c.sampleFlight == nil {
 		t.Fatalf("both flights must be initialized; snap=%v sample=%v", c.snapFlight, c.sampleFlight)

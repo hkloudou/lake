@@ -1,6 +1,6 @@
 # Lake V3
 
-[![Go Version](https://img.shields.io/badge/go-%3E%3D1.21-blue)](https://golang.org/)
+[![Go Version](https://img.shields.io/badge/go-%3E%3D1.25-blue)](https://golang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/hkloudou/lake)](https://github.com/hkloudou/lake/releases)
 
@@ -9,19 +9,22 @@
 
 > **⚠️ v3 status: alpha — public API may still change before `v3.0.0` stable.**
 > Production users should pin v2 (`go get github.com/hkloudou/lake/v2@latest`)
-> until v3 stabilises. See [Migrating from v2 to v3](#migrating-from-v2-to-v3).
+> until v3 stabilises. See [Migrating from v2 to v3](#-migrating-from-v2-to-v3).
 
 ## ✨ Key Features
 
 - **🔒 Atomic Writes** — direct-upload then notify; the index entry (and its
-  tsSeq) is allocated only after the upload succeeds, so a slow / aborted
-  upload never appears in the index — no pending phase, nothing to roll back
+  tsSeq) is allocated only after the upload succeeds, so a slow / aborted upload
+  never appears in the index — no pending phase, nothing to roll back
 - **📜 RFC Standard** — Full RFC 7396 (JSON Merge Patch), plus simple field Replace
 - **⚡ High Throughput** — Up to 999,999 writes/sec per catalog (Lua-bound seqid)
-- **💾 Smart Caching** — Redis snapshot cache + in-memory delta cache
-- **🎯 Snapshot Acceleration** — Time-range packed snapshots, async generation
-- **🧮 Generic Sampling** — `NewSampler[T]` computes derived data on demand
-  with a layered staleness policy; replaces v2's separate "meta" concept
+- **🧩 Storage-agnostic** — Lake core imports no cloud SDK. You inject one
+  `func(provider, bucket) (Storage, error)` resolver; each delta records its own
+  `provider://bucket/path` locator, so a catalog's bodies can span buckets/clouds
+- **💾 Smart Caching** — Redis snapshot cache (gzip) + in-memory delta cache
+- **🎯 Snapshot Acceleration** — read-path packed snapshots, async generation
+- **🧮 Generic Sampling** — `NewSampler[T]` computes derived data on demand with
+  a layered staleness policy; replaces v2's separate "meta" concept
 - **🔍 Event Middleware** — `client.Use(handler)` for logging / monitoring
 
 ## 🚀 Quick Start
@@ -29,7 +32,7 @@
 ### Installation
 
 ```bash
-go get github.com/hkloudou/lake/v3@v3.0.0-alpha.1
+go get github.com/hkloudou/lake/v3@latest
 ```
 
 ### Basic Usage
@@ -38,36 +41,51 @@ go get github.com/hkloudou/lake/v3@v3.0.0-alpha.1
 package main
 
 import (
-    "bytes"
     "context"
     "fmt"
     "log"
     "net/http"
+    "bytes"
 
     "github.com/hkloudou/lake/v3"
+    "github.com/hkloudou/lake/v3/storage"
+    lakeoss "github.com/hkloudou/lake/v3/storage/oss"
+    "github.com/redis/go-redis/v9"
 )
 
 func main() {
-    client := lake.NewLake("redis://localhost:6379")
+    // 1. Wire the pieces explicitly — no lake.setting, no global state.
+    rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+    oss, _ := lakeoss.New(lakeoss.Config{Endpoint: "oss-cn-hangzhou", AccessKey: ak, SecretKey: sk})
 
-    client.Use(func(catalog, event string, attrs map[string]any) {
-        log.Printf("[lake] %s %s %v", catalog, event, attrs)
-    })
+    resolve := func(provider, bucket string) (storage.Storage, error) {
+        switch provider {
+        case "oss":
+            return oss.Bucket(bucket), nil
+        }
+        return nil, fmt.Errorf("unknown provider %q", provider)
+    }
+
+    client := lake.New("my-lake", rdb, resolve,
+        lake.WithSnapTarget("oss", "my-bucket"), // where auto-snapshots go
+    )
 
     ctx := context.Background()
     body := []byte(`{"name":"Alice","age":30}`)
 
-    // 1. Reserve a UUID and signed OSS PUT URL — no Redis op here.
+    // 2. Reserve a UUID + signed PUT URL for the chosen (provider, bucket).
     h, err := client.WriteBegin(ctx, lake.WriteBeginRequest{
         Catalog:   "users",
         Path:      "/profile",
         MergeType: lake.MergeTypeReplace,
+        Provider:  "oss",
+        Bucket:    "my-bucket",
     })
     if err != nil {
         log.Fatal(err)
     }
 
-    // 2. Upload the body directly to OSS. Bytes do NOT pass through Lake.
+    // 3. Upload the body directly to OSS. Bytes never pass through Lake.
     req, _ := http.NewRequestWithContext(ctx, h.UploadMethod, h.UploadURL, bytes.NewReader(body))
     for k, v := range h.UploadHeaders {
         req.Header.Set(k, v)
@@ -76,7 +94,7 @@ func main() {
         log.Fatal(err)
     }
 
-    // 3. Notify Lake to commit the index entry referencing the upload.
+    // 4. Notify Lake — records the delta (carrying h.URI). No storage op here.
     if err := client.WriteNotify(ctx, h); err != nil {
         log.Fatal(err)
     }
@@ -89,56 +107,86 @@ func main() {
 
 ## 📚 API Reference
 
-### Package Import
+### Client creation
 
 ```go
-import "github.com/hkloudou/lake/v3"
+func New(prefix string, rdb *redis.Client, resolve storage.Resolver, opts ...func(*option)) *Client
 ```
 
-### Client Creation
+| Argument | Description |
+|----------|-------------|
+| `prefix` | Namespaces every Redis key and the seqid counter |
+| `rdb` | The authoritative **index** Redis (must persist) |
+| `resolve` | The single storage-injection point: `func(provider, bucket string) (storage.Storage, error)` |
 
-| Function | File | Description |
-|----------|------|-------------|
-| `NewLake(metaUrl, opts...) *Client` | [lake.go](lake.go) | Create client with Redis URL |
-| `WithStorage(storage.Storage) func(*option)` | [lake.go](lake.go) | Inject custom storage (memory / OSS / file) |
-| `WithSnapCacheMetaURL(url, ttl) func(*option)` | [lake.go](lake.go) | Use a separate Redis for snapshot cache |
-| `WithDeltaCacheMetaURL(url, ttl) func(*option)` | [lake.go](lake.go) | Use a separate Redis for delta cache |
-| `WithSnapCache(cache.Cache) func(*option)` | [lake.go](lake.go) | Provide a `cache.Cache` directly |
-| `WithDeltaCache(cache.Cache) func(*option)` | [lake.go](lake.go) | Same, for delta cache |
-| `WithSampleCacheURL(url) func(*option)` | [lake.go](lake.go) | Route the Sampler memo hash (`<prefix>:m:*`) to a separate Redis |
-| `WithSampleCacheRedis(*redis.Client) func(*option)` | [lake.go](lake.go) | Same, with a caller-managed `*redis.Client` |
-| `(*Client) Use(handler EventHandler)` | [middleware.go](middleware.go) | Register an event handler |
+| Option | Description |
+|--------|-------------|
+| `WithSnapTarget(provider, bucket)` | Where Lake writes auto-generated snapshots. Omit → no auto-snapshotting (reads replay all deltas) |
+| `WithSnapCacheMetaURL(url, ttl)` | Route the snapshot cache to a separate Redis |
+| `WithDeltaCacheMetaURL(url, ttl)` | Route the delta cache to a separate Redis |
+| `WithSampleCacheURL(url)` / `WithSampleCacheRedis(rdb)` | Route the Sampler memo hash (`<prefix>:m:*`) to a separate Redis |
+| `(*Client) Use(handler EventHandler)` | Register an event handler |
+
+`New` panics on an empty `prefix`, nil `rdb`, or nil `resolve` (programmer error).
+
+### Storage
+
+Lake core is storage-agnostic — it never imports a cloud SDK. You provide a
+**Resolver** that maps a `(provider, bucket)` pair to a bucket-scoped
+`storage.Storage`. Ready-made backends ship as optional subpackages you use
+*inside* your resolver:
+
+| Package | Constructor | Presign |
+|---------|-------------|---------|
+| `storage/oss` | `oss.New(oss.Config{...}) → (*Client).Bucket(name)` | ✅ |
+| `storage/file` | `file.New(basePath) → (*FS).Bucket(name)` | ❌ |
+| `storage/mem` | `mem.New() → (*Store).Bucket(name)` | ❌ (tests) |
+
+```go
+type Storage interface {
+    // path locates the object; catalog is context (lifecycle / metrics).
+    Get(ctx context.Context, catalog, path string) ([]byte, error)
+    Put(ctx context.Context, catalog, path string, data []byte) error
+}
+type Presigner interface { // optional; OSS-class only
+    PresignPut(ctx context.Context, catalog, path string, opts PresignOptions) (PresignedUpload, error)
+}
+type Resolver func(provider, bucket string) (Storage, error)
+```
+
+Lake memoises the resolved `Storage` per `(provider, bucket)`, so your resolver
+is called at most once per distinct pair. Put credential / endpoint / pooling /
+multi-account routing inside the closure.
 
 ### Write — three-step direct upload
 
-V3 splits Write into three steps so client bytes never traverse the Lake
-process:
+Client bytes never traverse the Lake process. The write target (provider +
+bucket) is chosen **per write** and recorded in the delta.
 
-| Function | File | Description |
-|----------|------|-------------|
-| `(*Client) WriteBegin(ctx, WriteBeginRequest, opts...) (*WriteHandle, error)` | [write.go](write.go) | Reserve a UUID and signed OSS PUT URL. **No Redis op** — pure function of (catalog, path, mergeType, OSS credentials). |
-| (HTTP PUT to `handle.UploadURL`) | — | The client uploads bytes directly to OSS using the signed URL and the headers in `handle.UploadHeaders`. |
-| `(*Client) WriteNotify(ctx, *WriteHandle) error` | [write.go](write.go) | Allocate the tsSeq and atomically register the delta in Redis. |
-
-**WriteBeginRequest**:
+| Function | Description |
+|----------|-------------|
+| `(*Client) WriteBegin(ctx, WriteBeginRequest, opts...) (*WriteHandle, error)` | Reserve a UUID, derive the object path, presign a PUT against `(Provider, Bucket)`. **No Redis op.** |
+| (HTTP PUT to `handle.UploadURL`) | The client uploads bytes directly using the signed URL + `handle.UploadHeaders`. |
+| `(*Client) WriteNotify(ctx, *WriteHandle) error` | Allocate the tsSeq and atomically record the delta (carrying `handle.URI`). **No storage op.** |
 
 ```go
 type WriteBeginRequest struct {
     Catalog   string    `json:"catalog"`
     Path      string    `json:"path"`      // "/" means root
     MergeType MergeType `json:"mergeType"` // 1=Replace, 2=RFC7396
+    Provider  string    `json:"provider"`  // storage provider, e.g. "oss"
+    Bucket    string    `json:"bucket"`    // target bucket
 }
-```
 
-**WriteHandle** (JSON-serialisable for non-Go SDKs):
-
-```go
 type WriteHandle struct {
     Catalog       string            `json:"catalog"`
     Path          string            `json:"path"`
     MergeType     MergeType         `json:"mergeType"`
     UUID          string            `json:"uuid"`
-    StorageKey    string            `json:"storageKey"`
+    Provider      string            `json:"provider"`
+    Bucket        string            `json:"bucket"`
+    Key           string            `json:"key"` // object path within the bucket
+    URI           string            `json:"uri"` // provider://bucket/key — recorded in the delta
     UploadURL     string            `json:"uploadURL"`
     UploadMethod  string            `json:"uploadMethod"`
     UploadHeaders map[string]string `json:"uploadHeaders"`
@@ -146,89 +194,56 @@ type WriteHandle struct {
 }
 ```
 
-**Begin options**:
+**Begin options**: `WithUploadTTL(d)`, `WithMaxBodyBytes(n)`, `WithUploadContentType(ct)`.
 
-```go
-lake.WithUploadTTL(15 * time.Minute)        // signed URL validity
-lake.WithMaxBodyBytes(100 * 1024 * 1024)    // hard cap baked into signature
-lake.WithUploadContentType("application/json")
-```
+> **Presign capability**: WriteBegin requires the resolved backend to implement
+> `storage.Presigner`. OSS supports it; file / memory return
+> `lake.ErrPresignNotSupported`.
+>
+> **Bodies are stored RAW** — for at-rest encryption use OSS SSE; compress
+> client-side if you want it.
 
-**Why three steps**
-
-- **Bandwidth** — body bytes go through the OSS provider's free inbound
-  pipe, never through your Lake servers.
-- **FaaS-friendly** — Begin needs only OSS credentials; Notify needs only
-  Redis. Each can be a Lambda / Workers function near its dependency.
-- **Multi-language** — Begin returns JSON. Any client (browser / Python /
-  Rust / curl) can talk to Lake's HTTP endpoints; the Go SDK is a
-  convenience layer, not a requirement.
-- **Self-describing OSS objects** — the signed URL forces the client to
-  attach `x-oss-meta-catalog`, `x-oss-meta-path`, `x-oss-meta-merge-type`
-  headers. An LIST + GetObjectMeta on the bucket is enough to rebuild
-  Lake's Redis index from scratch.
-
-**MergeType constants** ([export.go](export.go)):
+**MergeType constants**:
 
 ```go
 lake.MergeTypeReplace  // = 1: simple field replacement
 lake.MergeTypeRFC7396  // = 2: RFC 7396 JSON Merge Patch (null removes)
 ```
 
-> **Storage support**: WriteBegin requires a `Presigner`-capable storage
-> backend. OSS supports it; File / Memory return `lake.ErrPresignNotSupported`
-> (file/memory backends are now read-only at the V3 boundary).
->
-> **Bodies are stored RAW**: V3 storage no longer gzips/encrypts. For
-> at-rest encryption use OSS SSE; for compression encode client-side.
-
 ### Read
 
-| Function | File | Description |
-|----------|------|-------------|
-| `(*Client) List(ctx, catalog) *ListResult` | [list.go](list.go) | Fetch snapshot info + delta index (1 HGet + 1 ZRange) |
-| `(*Client) BatchList(ctx, catalogs) map[string]*ListResult` | [list.go](list.go) | Batched list across N catalogs in 2 round-trips total |
-| `ReadBytes(ctx, *ListResult) ([]byte, error)` | [helpers.go](helpers.go) | Merged document as raw bytes |
-| `ReadString(ctx, *ListResult) (string, error)` | [helpers.go](helpers.go) | Merged document as JSON string |
-| `ReadMap(ctx, *ListResult) (map[string]any, error)` | [helpers.go](helpers.go) | Merged document as map |
-| `Read[T any](ctx, *ListResult) (*T, error)` | [helpers.go](helpers.go) | Generic typed read |
-
-```go
-type ListResult struct {
-    Err error // non-nil on Redis / decode failures
-    // LatestSnap and Entries are exported read-only details.
-}
-
-func (m ListResult) Exist() bool          // catalog has snapshot or deltas
-func (m ListResult) LastUpdated() float64 // score of the most recent change
-```
-
-**Common pattern**:
+| Function | Description |
+|----------|-------------|
+| `(*Client) List(ctx, catalog) *ListResult` | Snapshot info + delta index (1 HGet + 1 ZRange) |
+| `(*Client) BatchList(ctx, catalogs) map[string]*ListResult` | Batched list across N catalogs in 2 round-trips |
+| `ReadBytes / ReadString / ReadMap(ctx, *ListResult)` | Merged document as bytes / string / map |
+| `Read[T any](ctx, *ListResult) (*T, error)` | Generic typed read |
 
 ```go
 list := client.List(ctx, "users")
 if list.Err != nil {
     return list.Err
 }
-
-// Pick the read shape you want:
 jsonStr, err := lake.ReadString(ctx, list)
-data, err    := lake.ReadMap(ctx, list)
 profile, err := lake.Read[UserProfile](ctx, list)
 ```
+
+Read resolves each delta/snap by its stored URI (`provider://bucket/path` →
+resolver → `Get`), merges in score order, and — if `WithSnapTarget` is set —
+asynchronously persists a fresh snapshot off the read critical path.
 
 ### Sample (computed, cached)
 
 `NewSampler[T]` is the single entry point for deriving secondary state from a
-catalog. Construct one `Sampler` per `(indicator, T, loader)` and reuse it: it
-memoises each catalog's computed value in Redis and recomputes only when the
-value is stale.
+catalog. Construct one per `(indicator, T, loader)` and reuse it; it memoises
+each catalog's computed value in the `<prefix>:m:<indicator>` Redis hash and
+recomputes only when stale.
 
-| API | File | Description |
-|-----|------|-------------|
-| `NewSampler[T](indicator, loader, …opts) *Sampler[T]` | [sample.go](sample.go) | Build a reusable sampler |
-| `(*Sampler[T]) Sample(ctx, *ListResult) (T, error)` | [sample.go](sample.go) | One catalog: hit → 1 HGET, miss → loader + HSET |
-| `(*Sampler[T]) Batch(ctx, map[string]*ListResult) map[string]*SampleResult[T]` | [sample.go](sample.go) | Many catalogs: 1 HMGET + concurrent loaders for misses |
+| API | Description |
+|-----|-------------|
+| `NewSampler[T](indicator, loader, …opts) *Sampler[T]` | Build a reusable sampler |
+| `(*Sampler[T]) Sample(ctx, *ListResult) (T, error)` | One catalog: hit → 1 HGET, miss → loader + HSET |
+| `(*Sampler[T]) Batch(ctx, map[string]*ListResult) map[string]*SampleResult[T]` | Many catalogs: 1 HMGET + concurrent loaders for misses |
 
 ```go
 sampler := lake.NewSampler[Report]("daily",
@@ -239,494 +254,212 @@ sampler := lake.NewSampler[Report]("daily",
         }
         return buildReport(data), nil
     },
-    lake.WithMaxAge(time.Hour),                              // recompute hourly even if data is unchanged
-    lake.WithLoaderErrorDefault(Report{Status: "degraded"}), // serve a default if the loader fails (never cached)
+    lake.WithMaxAge(time.Hour),                              // recompute hourly even if unchanged
+    lake.WithLoaderErrorDefault(Report{Status: "degraded"}), // served on loader error, never cached
 )
 
-list := client.List(ctx, "users")
-report, err := sampler.Sample(ctx, list)
+report, err := sampler.Sample(ctx, client.List(ctx, "users"))
 ```
 
-**Staleness is layered.** A cached sample is reused only while fresh:
-
-1. **Data-version floor (always on)** — if the catalog advanced past the
-   version the sample was computed at (`ListResult.LastUpdated()`), it is
-   recomputed. But the data version alone is not the whole story: the *same*
-   version can still need a refresh, because a derived value can depend on
-   more than the catalog's own bytes.
-2. **`WithMaxAge(d)`** — recompute when the entry is older than `d` by the
-   Redis server clock. For time-sensitive derivations (a "today" report is
-   correct only for today, not forever).
-3. **`WithShouldRefresh(fn)`** — a custom predicate, the analog of React's
-   `shouldComponentUpdate`. Signature:
-   ```go
-   func(meta SampleMeta, self *ListResult, peers map[string]*ListResult) bool
-   ```
-   Returns `true` to force a recompute even when the data version is
-   unchanged (cross-catalog dependencies, external inputs). `peers` is the
-   full set of `ListResult`s available in the current call's context —
-   `BatchList`'s lists map for `Sampler.Batch`, a singleton `{self.catalog:
-   self}` for `Sampler.Sample`. **Runs on every cache hit**, so it must be
-   pure and cheap (no I/O); compare versions already in hand.
-
-   Cross-catalog example — `A` depends on `B`, both sampled in one batch:
-   ```go
-   type Report struct {
-       Value     int
-       BSeenAt   float64 // version of B this report was computed against
-   }
-   sampler := lake.NewSampler[Report]("daily", loadReport,
-       lake.WithShouldRefresh(func(_ lake.SampleMeta, _ *lake.ListResult, peers map[string]*lake.ListResult) bool {
-           // Refresh A when B has moved past the version A recorded as its dependency.
-           // The cached Report carries BSeenAt; loader populates it at compute time.
-           // Read it back off T inside the predicate via your own decode path,
-           // or store it on SampleMeta via a richer wrapper.
-           b, ok := peers["B"]
-           return ok && b.LastUpdated() > /* the BSeenAt you stamped */ 0
-       }),
-   )
-   lists := client.BatchList(ctx, []string{"A", "B"})
-   results := sampler.Batch(ctx, lists)
-   ```
-
-These triggers can only *add* recomputes; none serves a value older than the
-data-version floor allows.
-
-**Errors never poison the cache.** A loader error — or its
-`WithLoaderErrorDefault` / `WithLoaderErrorFallback` substitute — is a
-per-call response and is never written back, so a transient blip (a database
-hiccup) cannot freeze a degraded value into the cache until the next write.
-Cache-tier failures degrade gracefully too: a failed read recomputes, a
-failed write still returns the freshly computed value.
-
-**Storage layout**: samples live in `{prefix}:m:{indicator}` Redis
-Hashes, each catalog a field holding a `[score, updatedAt, data]` JSON array
-(`score` = data version, `updatedAt` = compute time). All catalogs sharing one
-indicator are colocated, so indicator-wide enumeration / clearing is single-key.
-
-**Cache-tier separation (optional but recommended at scale).** The Sampler
-memo hash can live on a dedicated Redis instance via
-`lake.WithSampleCacheURL(...)` / `lake.WithSampleCacheRedis(rdb)`. Sample is
-a derived cache — outage, scan, restart, or flush of the cache tier merely
-recomputes; the authoritative Redis (snap, delta, seqid) never depends on
-cache health. This narrows the "must-not-lose" Redis surface to a small
-metadata working set and lets the cache tier scale on its own dimensions
-(memory, CPU). Defaults to the authoritative Redis when omitted.
-
-### Cleanup
-
-| Function | File | Description |
-|----------|------|-------------|
-| `(*Client) ClearHistory(ctx, catalog) error` | [clear.go](clear.go) | Drop all delta entries at or before the catalog's latest snap |
-
-V3 keeps only one snap per catalog (snaps are idempotent and self-correcting — an
-"out of date" snap is replaced on the next read). There is no historical-snap
-retention concept; `ClearHistoryWithRetention` from earlier drafts is removed.
+Staleness is layered: a **data-version floor** (always on) recomputes when the
+catalog advanced past the cached version; `WithMaxAge(d)` and a custom
+`WithShouldRefresh(fn)` predicate can only *add* recomputes. Loader errors (and
+their `WithLoaderErrorDefault` / `WithLoaderErrorFallback` substitutes) are
+per-call and never written back, so a transient blip can't freeze a degraded
+value into the cache. The memo hash may live on a dedicated cache-tier Redis
+(`WithSampleCacheURL`); it's a derived cache — flush/restart merely recomputes.
 
 ### Backup
 
-| Function | File | Description |
-|----------|------|-------------|
-| `(*Client) IterateSnaps(ctx, fn) error` | [snapshot.go](snapshot.go) | Stream each `(catalog, snap)` to `fn`; stops when `fn` returns false |
+| Function | Description |
+|----------|-------------|
+| `(*Client) IterateSnaps(ctx, fn) error` | Stream each `(catalog, snap)` via HSCAN; stop when `fn` returns false |
 
-`IterateSnaps` is the single enumeration primitive: it walks `<prefix>:s`
-via HSCAN under the hood, yielding one entry at a time and honouring early
-termination. Callers that want the whole set in a map just accumulate one
-inside `fn` — Lake intentionally does not bundle a map-collecting helper or
-an actual archive/copy step; that belongs in caller-side backup tooling (a
-future `cmd`), not the core library.
-
-This avoids a full OSS `LIST`, which is slow and paginated. No single Redis
-op blocks the server's main thread for more than ~500 fields, so even a
-million-catalog hash backs up without stalling concurrent reads and writes.
-Feed each `(catalog, StopTsSeq)` into `Storage.MakeSnapKey` to obtain the
-OSS object key, then copy that object to your archive bucket.
+`IterateSnaps` is the single enumeration primitive. Each `snap.URI` is a
+complete object locator, so backup tooling can copy snapshots straight to an
+archive. Accumulate a map inside `fn` if you want the whole set; Lake
+intentionally bundles no map helper and no archive step — that belongs in a
+caller-side `cmd`, not the core library.
 
 ```go
-// Streaming, budget-friendly backup loop.
 err := client.IterateSnaps(ctx, func(catalog string, snap lake.SnapInfo) bool {
-    ossKey := storage.MakeSnapKey(catalog, snap.StopTsSeq)
-    return copyToArchive(ctx, ossKey) == nil // stop on first failure
+    return copyToArchive(ctx, snap.URI) == nil // stop on first failure
 })
 ```
-
-### Examples
-
-The merge semantics are selected by `MergeType` on `WriteBegin`; the body you
-PUT to the signed URL is the patch document (see the upload + `WriteNotify`
-steps in Quick Start above).
-
-```go
-// RFC 7396 — partial merge patch; null deletes a field.
-// Upload body: {"age":31,"city":"NYC","oldField":null}
-h, _ := client.WriteBegin(ctx, lake.WriteBeginRequest{
-    Catalog:   "users",
-    Path:      "/profile",
-    MergeType: lake.MergeTypeRFC7396,
-})
-
-// Replace — set a field (or the whole doc at "/") to the uploaded value.
-// Upload body: {"name":"Alice","age":30}
-h, _ = client.WriteBegin(ctx, lake.WriteBeginRequest{
-    Catalog:   "users",
-    Path:      "/profile",
-    MergeType: lake.MergeTypeReplace,
-})
-```
-
-### File Structure
-
-```
-lake/
-├── lake.go              # Client, options, ensureInitialized
-├── middleware.go        # Use(), EventHandler
-├── write.go             # WriteBegin, WriteNotify, WriteHandle
-├── read.go              # Internal readData (parallel snap + deltas + merge)
-├── list.go              # List, BatchList, ListResult
-├── helpers.go           # ReadBytes, ReadString, ReadMap, Read[T]
-├── clear.go             # ClearHistory entry points
-├── clear_optimized.go   # Concurrent storage delete + batch ZREM
-├── sample.go            # Sampler[T] (NewSampler): cached derived sampling
-├── snapshot.go          # Async snapshot save under SingleFlight
-├── export.go            # MergeType re-exports
-└── internal/
-    ├── index/           # Redis ZSet operations, TimeSeqID, Lua scripts
-    ├── storage/         # Memory / File / OSS backends
-    ├── merge/           # Replace / RFC7396 mergers
-    ├── cache/           # Redis (gzip) + Memory caches with SingleFlight
-    ├── config/          # lake.setting loader
-    ├── encode/          # Catalog name encoding chokepoint
-    ├── utils/           # Path validation
-    └── xsync/           # SingleFlight primitive
-```
-
-## ⚙️ Configuration
-
-### `lake.setting` (Redis-backed)
-
-Lake loads its bucket / storage choice from the Redis key `lake.setting`:
-
-```json
-{
-  "Name": "my-lake",
-  "Storage": "oss",
-  "Bucket": "my-bucket",
-  "Endpoint": "oss-cn-hangzhou",
-  "AccessKey": "your-access-key",
-  "SecretKey": "your-secret-key",
-  "BasePath": ""
-}
-```
-
-Supported `Storage` values: `oss`, `file`, `memory` (or empty → memory).
-
-### Two-Redis layout (recommended)
-
-Lake makes a clean separation between **index Redis** (durable, must persist)
-and **cache Redis** (ephemeral, LRU-evicted).
-
-```go
-client := lake.NewLake(
-    "redis://main-redis:6379",
-    lake.WithSnapCacheMetaURL("redis://cache-redis:6379", 2*time.Hour),
-)
-```
-
-| Property | Cache Redis | Index Redis |
-|----------|-------------|-------------|
-| Persistence | ❌ Disabled | ✅ AOF + RDB |
-| Eviction | ✅ LRU | ❌ None |
-| Importance | Low (rebuildable) | Critical |
-| Max Data Loss | All (OK) | 1 second |
-
-**Index Redis (recommended config):**
-
-```text
-appendonly yes
-appendfsync everysec
-save 900 1
-save 300 10
-save 60 100
-rename-command FLUSHDB ""
-rename-command FLUSHALL ""
-```
-
-**Cache Redis (recommended config):**
-
-```text
-appendonly no
-save ""
-maxmemory 4096mb
-maxmemory-policy allkeys-lru
-```
-
-## 🔍 Event Middleware
-
-```go
-type EventHandler func(catalog string, event string, attrs map[string]any)
-
-client.Use(func(catalog, event string, attrs map[string]any) {
-    log.Printf("[lake] %s %s %v", catalog, event, attrs)
-})
-```
-
-| Event | Attrs | Notes |
-|-------|-------|-------|
-| `List` | — | Single-catalog list |
-| `BatchList` | — | One event per catalog inside the batch |
-| `WriteBegin` | `path`, `mergeType` | Emitted before path validation |
-| `WriteNotify` | `path`, `uuid` | Emitted on commit to the delta index |
-| `Sample` | `indicator` | Once per Sample call (cache hit or miss) |
-| `BatchSample` | `indicator` | One event per catalog inside the batch |
-| `SampleCacheError` | `op`, `err` | Cache read/write failed; degraded to recompute / best-effort write |
-| `ClearHistory` | — | Once per catalog clear |
-
-> For distributed tracing, instrument the underlying Redis / OSS clients
-> (e.g. `redisotel.InstrumentTracing`); Lake intentionally avoids dragging in
-> OpenTelemetry as a dependency.
 
 ## 📖 Core Concepts
 
-### Path Format
+### Path format (the JSON field path)
 
-- Must start with `/`
-- Must not end with `/`
-- Each segment must start with a letter / `_` / `$` (no leading digit)
+- Must start with `/`; must not end with `/`
+- Each segment starts with a letter / `_` / `$` (no leading digit)
 - `/` alone means the whole document
-- `|` is forbidden — it is the delimiter inside delta member encoding
 
-| Valid | Invalid |
-|-------|---------|
-| `/` | `user` |
-| `/user` | `/user/` |
-| `/user/profile` | `/123` |
-| `/$config` | `/user-name` |
+### Storage URI
+
+Each delta records where its body lives as `provider://bucket/path`, a complete
+and portable object locator (`ossutil cp oss://bucket/path .` just works). The
+object path is a Lake convention:
+
+```
+{md5(catalog)[0:4]}/{encoded(catalog)}/{uuid}.dat       # delta
+{md5(catalog)[0:4]}/{encoded(catalog)}/{stopTsSeq}.snap # snap
+```
+
+For path safety the catalog is encoded: pure-lowercase `users` → `(users`,
+pure-uppercase `USERS` → `)USERS`, mixed / non-ASCII → lowercased base32.
+Catalog validation forbids `:` `|` `(` `)` so the forms never collide.
 
 ### Three-step direct upload
 
 ```
-WriteBegin:
-  1. Generate UUID v4
-  2. PresignPut("{md5}/{encoded}/{uuid}.dat") with required user metadata
-     → return WriteHandle (NO Redis op)
-
-(client uploads bytes directly to OSS via handle.UploadURL)
-
-WriteNotify:
-  3. Lua: INCR seqid → tsSeq; ZADD delta|{type}|{path}|{tsSeq}|{uuid}
-     (single atomic op)
+WriteBegin:  UUID v4 → object path → PresignPut(provider, bucket, path)  (NO Redis op)
+(client uploads bytes directly to handle.UploadURL)
+WriteNotify: Lua → INCR seqid → tsSeq; ZADD [mergeType, path, tsSeq, uri]  (NO storage op)
 ```
 
-The protocol has NO pending phase. Because tsSeq is allocated only at
-step 3 (after the OSS upload has succeeded), a slow or aborted upload
-never appears in the index — there is nothing to wait for, nothing to
-roll back. Aborted writes leave at most one orphaned OSS object,
-reaped by future sweep tooling.
-
-### Catalog encoding
-
-For OSS / file paths Lake encodes catalog names for path safety:
-
-- pure lowercase (`users`) → `(users`
-- pure uppercase (`USERS`) → `)USERS`
-- mixed / non-ASCII → lowercased base32
-
-For Redis keys, v3 stores catalog names **verbatim** —
-[`encode.EncodeRedisCatalogName`](internal/encode/catalog.go) is currently the
-identity function and acts as the single chokepoint should encoding be added
-back later. Callers must therefore avoid `:` and `|` in catalog names today.
+Because tsSeq is allocated only at notify (after the upload), a slow or aborted
+upload never appears in the index — nothing to wait for, nothing to roll back.
+An aborted write leaves at most one orphaned object (reaped by future sweep
+tooling).
 
 ## 🏗️ Architecture
 
 ### Redis index
 
 ```
-{prefix}:d:{catalog}       ZSet     # delta — per-catalog change log
-  score  = timestamp + seqid / 1e6   (e.g. 1700000000.000123)
-  member = "delta|{mergeType}|{path}|{ts}_{seqid}|{uuid}"
+{prefix}:d:{catalog}    ZSet  # delta — per-catalog change log
+  score  = timestamp + seqid/1e6        (e.g. 1700000000.000123)
+  member = [mergeType, path, tsSeq, uri] (JSON array; written by the notify Lua via cjson)
 
-{prefix}:s                 Hash     # snap — deployment-wide, field = catalog
-  value = "{stopTsSeq}"                         # one entry per catalog,
-                                                # overwritten on each save;
-                                                # HSCAN (IterateSnaps) drives backup tooling
+{prefix}:s              Hash  # snap — deployment-wide, field = catalog
+  value  = [tsSeq, uri]                 (JSON array; HSCAN drives IterateSnaps)
 
-{prefix}:m:{indicator}     Hash     # sample (memo) — per-indicator, field = catalog
-  value = [score, updatedAt, data]              # JSON array, atomic per HSET
-                                                # score=data version, updatedAt=compute time
+{prefix}:m:{indicator}  Hash  # sample (memo) — per-indicator, field = catalog
+  value  = [score, updatedAt, data]     (score = data version, updatedAt = compute time)
 ```
-
-All three follow a uniform `<prefix>:<type>:<axis>` layout — `d` delta,
-`s` snap, `m` sample (memo). The snap key has no third token because it
-is a singleton: the per-catalog axis lives as the Hash *field* inside.
-
-### Object storage
-
-```
-{md5(catalog)[0:4]}/{encoded(catalog)}/{uuid}.dat       # delta (uuid allocated by WriteBegin)
-{md5(catalog)[0:4]}/{encoded(catalog)}/{stopTsSeq}.snap # snap (server-generated)
-```
-
-The local-file backend uses a deeper layout (`md5[0:2]/encoded/h1/h2/h3/...`)
-to keep per-directory file counts under filesystem-friendly bounds.
 
 ### Read flow
 
 ```
-List          ── 1× pipeline (snap ZRangeRev + delta ZRange)
-   │
-   ├── load snapshot data        (snap cache → object storage)
-   ├── load delta bodies × N     (delta cache → object storage, 10 workers)
+List          ── 1× pipeline (snap HGet + delta ZRange)
+   ├── load snapshot   (snap cache → resolve(snap.URI).Get)
+   ├── load deltas × N (delta cache → resolve(delta.URI).Get, 10 workers)
    ↓
 merge.Merge   (CPU-bound, in-process)
-   │
-   ├── return merged document to caller
-   └── async: Storage.Put new snapshot under SingleFlight
+   ├── return merged document
+   └── async (if WithSnapTarget): Put new snapshot to the snap target
 ```
 
-## 📊 Performance
+## ⚙️ Configuration
 
-Indicative numbers from typical OSS-backed workloads:
+Everything is explicit at `New`; there is no Redis-side `lake.setting` and no
+global state. Lake separates **index Redis** (durable, must persist) from
+**cache Redis** (ephemeral, LRU-evictable):
 
-| Metric | Value |
-|--------|-------|
-| Write throughput | up to 999,999 / sec per catalog (seqid-bound) |
-| Atomic overhead | < 2 % of total write latency |
-| Cache hit ratio | ~ 90 % |
-| Delta load fan-out | 10 workers in parallel |
-| Snapshot save | async, off the read critical path |
+```go
+client := lake.New("my-lake",
+    redis.NewClient(&redis.Options{Addr: "main-redis:6379"}), // index
+    resolve,
+    lake.WithSnapCacheMetaURL("redis://cache-redis:6379", 2*time.Hour),
+    lake.WithSnapTarget("oss", "my-bucket"),
+)
+```
 
-Read-path timing on warm caches is dominated by `merge.Merge`; cold reads are
-dominated by object-storage `Get`.
+| Property | Index Redis | Cache Redis |
+|----------|-------------|-------------|
+| Persistence | ✅ AOF + RDB | ❌ Disabled |
+| Eviction | ❌ None | ✅ `allkeys-lru` |
+| Max data loss | 1 second | All (OK — rebuildable) |
+
+## 🔍 Event Middleware
+
+```go
+client.Use(func(catalog, event string, attrs map[string]any) {
+    log.Printf("[lake] %s %s %v", catalog, event, attrs)
+})
+```
+
+| Event | Attrs |
+|-------|-------|
+| `List` / `BatchList` | — |
+| `WriteBegin` | `path`, `mergeType`, `provider`, `bucket` |
+| `WriteNotify` | `path`, `uri` |
+| `Sample` / `BatchSample` | `indicator` |
+| `SampleCacheError` | `op`, `err` |
+
+> For distributed tracing, instrument the Redis / storage clients in your
+> resolver; Lake intentionally avoids dragging in OpenTelemetry.
 
 ## 🧪 Testing
 
 ```bash
 go test ./...
-go test -v ./internal/merge
-go test -count=1 -race ./internal/index
+go test -count=1 -race ./...
 ```
 
-Some example tests rely on a reachable Redis at `127.0.0.1:6379` and a
-configured OSS bucket. They will fail in environments without those.
+Integration tests need a reachable Redis at `127.0.0.1:6379`; they skip
+gracefully when it is absent. The notify Lua's cjson-encoded member is only
+exercised end-to-end with Redis present (`TestWriteReadRoundTrip_Redis`).
 
 ## 💡 Design Philosophy
 
-### "OSS is the source of truth, Redis is the hot index"
+### "Object storage is the source of truth, Redis is the hot index"
 
-v3 leans into this contract: every Redis key, with the partial exception of
-the `lake:seqid` counter, is conceptually rebuildable from object storage.
-Sample results, snapshot caches, and delta caches are all explicitly
-described as *caches* — failure to write them never fails a user-visible
-operation.
-
-(Today the contract is not yet airtight — delta filenames don't carry the
-JSON path, so a full rebuild from OSS alone still loses some metadata. Closing
-that gap is a tracked v3 work item.)
-
-### Fail-fast on programmer errors
-
-A few code paths panic rather than return errors:
-
-- `WithSnapCacheMetaURL` / `WithDeltaCacheMetaURL` panic on an invalid URL
-- `indexIO.Make*Key` panics if `SetPrefix` was never called
-
-These represent invariant violations from the embedding program, not runtime
-errors from the data path.
-
-### Snapshot save failure is not user-visible
-
-A snapshot is an optimization. If the async save fails, the next read simply
-regenerates it. Reads never wait for a snapshot to be persisted.
-
-### `ClearHistory` is compaction, not orphan reaping
-
-`ClearHistory` drops delta entries (and their OSS objects) at or before the
-catalog's latest snap — i.e. the deltas already folded into a snapshot. It
-is compaction, run explicitly by the caller; there is no background reaper.
-
-Aborted writes are a *separate* concern. Because the delta member is written
-only at `WriteNotify` (after the upload), a client that uploads to the signed
-URL but never notifies leaves an OSS object with no Redis reference at all —
-not a "pending member". Such objects are invisible to `ClearHistory` (it
-walks the index, and they are not in it); reclaiming them needs a future
-sweep tool that diffs the bucket against the delta zset.
+Every Redis key (with the partial exception of the `seqid` counter) is
+conceptually rebuildable. Sample results, snapshot caches, and delta caches are
+all *caches* — failing to write them never fails a user-visible operation.
 
 ### A patch body is the client's responsibility
 
 Every committed delta is replayed by `merge` on **every read** (and on each
-snapshot save). `WriteNotify` does not fetch or validate the uploaded body —
-that is the point of direct upload. So a body that cannot be applied (invalid
-JSON, an RFC 7396 patch that does not parse) will fail merge, and because the
-same merge gates snapshotting, the failure is sticky: every read of that
-catalog errors until the bad delta is removed. There is intentionally no
-read-time skip/quarantine — Lake does not silently drop a write.
+snapshot save). `WriteNotify` does not fetch or validate the uploaded body — so
+a body that cannot be applied (invalid JSON, an RFC 7396 patch that doesn't
+parse) fails merge, and because the same merge gates snapshotting the failure is
+sticky: every read of that catalog errors until the bad delta is removed. There
+is intentionally no read-time skip/quarantine. The merge error names the
+offending delta (`path`, `tsSeq`, `uri`, `catalog`); recovery is manual (`ZREM`
+the member from `{prefix}:d:{catalog}`). Keeping bodies valid before upload is
+the contract.
 
-The merge error names the offending delta (`path`, `tsSeq`, `uuid`, plus
-`catalog` at the read site). Recovery today is manual: rebuild the OSS key
-with `MakeDeltaKey(catalog, uuid)`, then `ZREM` the member from
-`{prefix}:d:{catalog}`. Keeping bodies valid before upload is the contract;
-the surface for malformed bodies shrank in v3-alpha when RFC 6902 (the
-op-array merge type, most prone to apply-time failure) was removed.
+### Snapshot save failure is not user-visible
+
+A snapshot is an optimization. If the async save fails, the next read
+regenerates it. Reads never wait for a snapshot to be persisted. With no
+`WithSnapTarget`, snapshotting is simply off — reads replay all deltas.
+
+### No background compaction (yet)
+
+There is no `ClearHistory` and no reaper in v3-alpha: delta zsets and their
+objects accumulate. Reads stay correct and fast (they start from the latest
+snapshot and skip everything below it), but storage grows. Compaction will
+return as explicit caller-side tooling.
 
 ## 🔄 Migrating from v2 to v3
 
-v3 is **not** wire-compatible with v2 callers. Concretely:
+v3 is **not** wire-compatible with v2. The headline changes:
 
-- **Module path**: `github.com/hkloudou/lake/v2` → `github.com/hkloudou/lake/v3`
-- **`WriteRequest.Meta` removed.** v2's catalog-level meta is gone — derived
-  state now goes through `NewSampler[T]` instead. Callers that stored
-  meta-as-JSON alongside writes should compute it lazily inside a sampler's loader.
-- **File API removed.** `WriteFile`, `FileExists`, `FilesAndMeta`,
-  `WriteFileRequest`, and `Storage.MakeFileKey` are gone. Lake v3 handles
-  JSON documents only.
-- **RFC 6902 (JSON Patch) removed** (v3-alpha). Only `MergeTypeReplace` (1)
-  and `MergeTypeRFC7396` (2) remain; `MergeTypeRFC6902` and its merger are
-  gone — the op-array syntax was complex and the most apply-failure-prone
-  merge type. Any existing `mergeType=3` delta is no longer decodable; flush
-  such deltas. Most RFC 6902 intents express as RFC 7396 or Replace.
-- **`MotionSample` (v1 sample) removed.** Use `NewSampler[T]` instead — its
-  `WithShouldRefresh` predicate and `Batch` over many catalogs subsume v1's
-  `shouldUpdated` callback and `motionCatalogs` cross-catalog sampling.
-- **Sample storage layout inverted.** v2 used
-  `{prefix}:{catalog}:sample` Hashes with the indicator as the field. v3 uses
-  `{prefix}:m:{indicator}` Hashes with the catalog as the field. v2 cache
-  entries cannot be read by v3 and will be silently recomputed.
-- **Snap storage replaced.** v2 stored snap metadata in per-catalog ZSets
-  (`{prefix}:{catalog}:snap`) and tracked historical snapshots via a retention
-  parameter. v3 stores a single latest snap per catalog as a field of one
-  global Hash (`{prefix}:s`), enabling whole-deployment backup by an HSCAN
-  over one key. The previous OSS snap object on each save becomes orphan
-  storage (acceptable trade-off; reaped by future SweepOrphans tooling).
-  `ClearHistoryWithRetention(ctx, catalog, keepSnaps)` is removed —
-  use `ClearHistory(ctx, catalog)` instead.
-- **Delta key shape** changed to a `<type>:<axis>` layout, matching snap
-  and sample: `{prefix}:{catalog}:delta` → `{prefix}:d:{catalog}`. Existing
-  v3-alpha delta zsets are not visible after upgrade; flush and let writers
-  repopulate (delta bodies in OSS are untouched).
-- **`Client.IterateSnaps(ctx, fn)`** is new: streams every catalog's snap
-  metadata via HSCAN, intended for backup workflows. (An earlier
-  `AllSnaps` map-collecting convenience was dropped — accumulate a map
-  inside `fn` if you want one.)
-- **`merge.Merge` signature** changed: dropped the unused `catalog` parameter
-  and the always-empty second return value. (Internal API.)
-- **`Writer.Commit` signature** dropped the meta argument. (Internal API.)
+- **Module path**: `…/lake/v2` → `…/lake/v3`.
+- **Construction**: `NewLake(metaUrl, opts)` + Redis `lake.setting` → explicit
+  `New(prefix, rdb, resolve, opts)`. `lake.setting`, `WithStorage`, and the
+  `internal/config` layer are gone; storage is injected via a `Resolver`.
+- **Storage is per-write + self-describing**: `WriteBeginRequest` gains
+  `Provider` + `Bucket`; the delta records `provider://bucket/path`. The delta
+  member is now a JSON array `[mergeType, path, tsSeq, uri]` and the snap value
+  `[tsSeq, uri]` — old members/snaps don't decode; flush and repopulate.
+- **RFC 6902 removed**: only `MergeTypeReplace` (1) and `MergeTypeRFC7396` (2)
+  remain.
+- **`ClearHistory` removed** (compaction deferred). **`AllSnaps` removed** — use
+  `IterateSnaps`. **File API**, **`WriteRequest.Meta`**, and **`MotionSample`**
+  removed (use `NewSampler[T]`).
+- **Snapshots auto-generate** to `WithSnapTarget`; omit it to disable.
 
-If you depend on any of the removed surfaces and cannot rewrite, **stay on
-the v2 line**: it remains maintained on the [`v2` branch](https://github.com/hkloudou/lake/tree/v2)
-and still resolves at `go get github.com/hkloudou/lake/v2@latest`.
-
-## 📚 Examples
-
-- **Quick Start** above — `WriteBegin` → upload → `WriteNotify` → `List` → `Read`
-- [sample_test.go](./sample_test.go), [sample_batch_test.go](./sample_batch_test.go) — `Sampler[T]` staleness policy and batch behavior
-- [middleware_event_test.go](./middleware_event_test.go) — event handler / middleware usage
+If you depend on a removed surface and cannot rewrite, **stay on the v2 line**
+(`go get github.com/hkloudou/lake/v2@latest`).
 
 ## 🤝 Contributing
 
-- All tests pass (`go test ./...`)
-- Code is formatted (`go fmt ./...`)
-- `go vet ./...` is clean
-- Commits are descriptive
+- All tests pass (`go test ./...`), code is `gofmt`-clean, `go vet ./...` is clean.
 
 ## 📄 License
 
@@ -736,5 +469,4 @@ MIT — see [LICENSE](LICENSE).
 
 - **GitHub**: https://github.com/hkloudou/lake
 - **Issues**: https://github.com/hkloudou/lake/issues
-- **Releases**: https://github.com/hkloudou/lake/releases
 - **v2 branch (maintenance)**: https://github.com/hkloudou/lake/tree/v2

@@ -5,20 +5,15 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
-
-	"github.com/hkloudou/lake/v3/internal/storage"
 )
 
-// initedClient builds a Client whose ensureInitialized succeeds without
-// reaching Redis (memory storage injected). Tests that don't need a
-// real Redis use this to focus on Sampler.Batch's branching logic.
+// initedClient builds a ready Client pointed at unreachable Redis with an
+// in-memory storage resolver. Tests that don't need a real Redis use this to
+// focus on Sampler.Batch's branching logic (which short-circuits before any
+// Redis op for the cases under test).
 func initedClient(t *testing.T) *Client {
 	t.Helper()
-	c := NewLake("127.0.0.1:1", WithStorage(storage.NewMemoryStorage("test")))
-	if err := c.ensureInitialized(context.Background()); err != nil {
-		t.Fatalf("ensureInitialized: %v", err)
-	}
-	return c
+	return newTestClient("127.0.0.1:1")
 }
 
 // TestBatchSample_EmptyInput: zero catalogs in → empty map out, no panics.
