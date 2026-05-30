@@ -35,12 +35,16 @@ func (g *flightGroup[T]) Do(key string, fn func() (T, error)) (T, error) {
 	g.calls[key] = c
 	g.mu.Unlock()
 
+	// Cleanup must run even if fn panics: otherwise the key stays in the map
+	// and every future waiter blocks on wg forever. The panic still propagates
+	// to this (leader) caller; in-flight waiters observe the zero value.
+	defer func() {
+		g.mu.Lock()
+		delete(g.calls, key)
+		g.mu.Unlock()
+		c.wg.Done()
+	}()
+
 	c.val, c.err = fn()
-
-	g.mu.Lock()
-	delete(g.calls, key)
-	g.mu.Unlock()
-	c.wg.Done()
-
 	return c.val, c.err
 }
