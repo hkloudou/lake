@@ -30,6 +30,46 @@
   a layered staleness policy; replaces v2's separate "meta" concept
 - **🔍 Event Middleware** — `client.Use(handler)` for logging / monitoring
 
+## 🧠 How it works
+
+A Lake **catalog** is one JSON document — but Lake never stores it whole. It keeps
+an ordered log of **deltas** (one per write) plus an occasional **snapshot** (a
+packed checkpoint); a read merges `snapshot + later deltas` into the current
+document.
+
+Two stores, with distinct jobs:
+
+- **Redis — the index.** Small pointers only: the per-catalog delta log (a ZSet)
+  and the latest-snapshot pointer (one Hash). Never document bodies. It owns the
+  *order* of writes — which object storage alone can't reconstruct — so it is
+  **authoritative and must persist**.
+- **Object storage — the bodies.** Every delta and snapshot body lives here (OSS
+  / S3 / file / memory). Lake core imports no cloud SDK: you pass a **Resolver**,
+  `func(provider, bucket) (Storage, error)`, and Lake only ever calls `Get` /
+  `Put` on what it returns.
+
+Each delta stores its body's location as a portable URI `provider://bucket/path`,
+so a read is just resolve-URI → `Get` (no key-derivation), and one catalog's
+bodies may even span buckets or clouds.
+
+**A write is three steps, and document bytes never pass through Lake:**
+
+```
+WriteBegin  → reserve a UUID + a presigned PUT URL   (no Redis write)
+your client → PUT the body straight to object storage
+WriteNotify → append the delta to the Redis log      (no storage write)
+```
+
+The index entry is created only at `WriteNotify`, *after* the upload succeeded —
+so a slow or aborted upload never appears in the index, and there is no pending
+state to roll back.
+
+**A read** fetches the snapshot pointer + delta log (2 Redis ops), loads the
+bodies through the resolver, and merges them. With a snapshot target configured a
+fresh snapshot is written back asynchronously, off the read's critical path; add
+the optional `storage/cached` decorator and bodies come from cache, not a cold
+fetch.
+
 ## 🚀 Quick Start
 
 ### Installation
@@ -366,19 +406,20 @@ read-path caching is opt-in and composed into your resolver with `storage/cached
 backed by an ephemeral, LRU-evictable **cache Redis**:
 
 ```go
-// `backends` is your provider→Storage resolver (the `resolve` from Quick Start).
-// cached.Resolver wraps each backend with a cache chosen per (provider, bucket);
-// a snapshot Put warms the cache (write-through), so the next read skips a cold
-// object-store GET. Routing by bucket lets snaps and deltas use different tiers —
-// which only differ when you give them different buckets.
+// Build the cache tiers ONCE and share the instances across buckets — don't
+// construct a cache inside the policy, or you get one cache (and one cleanup
+// goroutine) per bucket. `backends` is your provider→Storage resolver from
+// Quick Start. A snapshot Put warms the cache (write-through), so the next read
+// skips a cold object-store GET.
 cacheRDB := redis.NewClient(&redis.Options{Addr: "cache-redis:6379"}) // ephemeral, LRU
+snapCache := cached.NewRedisCache(cacheRDB, 2*time.Hour) // snapshots: shared, long TTL
+deltaCache := cached.NewMemoryCache(time.Minute)         // deltas: process-local, short TTL
+
 resolve := cached.Resolver(backends, func(provider, bucket string) cached.Cache {
-    switch bucket {
-    case "my-snaps": // the WithSnapTarget bucket: shared across processes, long TTL
-        return cached.NewRedisCache(cacheRDB, 2*time.Hour)
-    default: // delta buckets: process-local, short TTL (immutable, soon folded into a snap)
-        return cached.NewMemoryCache(time.Minute)
+    if bucket == "my-snaps" { // the WithSnapTarget bucket
+        return snapCache
     }
+    return deltaCache // delta buckets: immutable bodies, soon folded into a snap
 })
 
 client := lake.New("my-lake",
@@ -434,12 +475,15 @@ exercised end-to-end with Redis present (`TestWriteReadRoundTrip_Redis`).
 
 ## 💡 Design Philosophy
 
-### "Object storage is the source of truth, Redis is the hot index"
+### Object storage holds the bodies; Redis owns the order
 
-Every Redis key (with the partial exception of the `seqid` counter) is
-conceptually rebuildable. Sample results — and any read-path caches you compose
-via `storage/cached` — are all *caches*: failing to write them never fails a
-user-visible operation.
+The bodies in object storage are the durable truth; Redis is the hot index that
+makes them fast to read. But the index is **not** a mere cache — it owns the
+*order* of writes (a body is uploaded before its tsSeq is allocated, so object
+storage alone cannot reconstruct the sequence), so the index Redis must persist.
+What *is* pure cache — the `seqid` counter aside — is the sample memo and any
+`storage/cached` read-path cache: recomputed on miss, so failing to write them
+never fails a user-visible operation.
 
 ### A patch body is the client's responsibility
 
