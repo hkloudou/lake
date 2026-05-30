@@ -3,9 +3,7 @@ package lake
 import (
 	"fmt"
 	"sync"
-	"time"
 
-	"github.com/hkloudou/lake/v3/internal/cache"
 	"github.com/hkloudou/lake/v3/internal/index"
 	"github.com/hkloudou/lake/v3/internal/xsync"
 	"github.com/hkloudou/lake/v3/storage"
@@ -21,15 +19,14 @@ import (
 // returns.
 //
 // A Client is intended to live for the process lifetime. Background goroutines
-// (Redis time updater, cache cleanup) tick forever and are reclaimed by the OS
-// at exit; in-flight async snapshot saves are fire-and-forget.
+// (the Redis time updater) tick forever and are reclaimed by the OS at exit;
+// in-flight async snapshot saves are fire-and-forget. Read-path caching, if
+// any, lives in the Storage the Resolver returns (see storage/cached).
 type Client struct {
-	rdb        *redis.Client // authoritative: snap hash, delta zset, seqid
-	sampleRdb  *redis.Client // sample (memo) hash; defaults to rdb
-	writer     *index.Writer
-	reader     *index.Reader
-	snapCache  cache.Cache
-	deltaCache cache.Cache
+	rdb       *redis.Client // authoritative: snap hash, delta zset, seqid
+	sampleRdb *redis.Client // sample (memo) hash; defaults to rdb
+	writer    *index.Writer
+	reader    *index.Reader
 
 	resolve      storage.Resolver
 	snapProvider string // WithSnapTarget; "" disables auto-snapshotting
@@ -45,8 +42,6 @@ type Client struct {
 }
 
 type option struct {
-	snapCache    cache.Cache
-	deltaCache   cache.Cache
 	sampleRdb    *redis.Client
 	snapProvider string
 	snapBucket   string
@@ -74,12 +69,6 @@ func New(prefix string, rdb *redis.Client, resolve storage.Resolver, opts ...fun
 	for _, fn := range opts {
 		fn(o)
 	}
-	if o.snapCache == nil {
-		o.snapCache = cache.NewRedisCache(rdb, 2*time.Hour)
-	}
-	if o.deltaCache == nil {
-		o.deltaCache = cache.NewMemoryCache(1 * time.Minute)
-	}
 	if o.sampleRdb == nil {
 		o.sampleRdb = rdb
 	}
@@ -88,8 +77,6 @@ func New(prefix string, rdb *redis.Client, resolve storage.Resolver, opts ...fun
 		sampleRdb:    o.sampleRdb,
 		writer:       index.NewWriter(rdb),
 		reader:       index.NewReader(rdb),
-		snapCache:    o.snapCache,
-		deltaCache:   o.deltaCache,
 		resolve:      resolve,
 		snapProvider: o.snapProvider,
 		snapBucket:   o.snapBucket,
@@ -100,27 +87,6 @@ func New(prefix string, rdb *redis.Client, resolve storage.Resolver, opts ...fun
 	c.writer.SetPrefix(prefix)
 	c.reader.SetPrefix(prefix)
 	return c
-}
-
-func WithSnapCache(c cache.Cache) func(*option)  { return func(o *option) { o.snapCache = c } }
-func WithDeltaCache(c cache.Cache) func(*option) { return func(o *option) { o.deltaCache = c } }
-
-// WithSnapCacheMetaURL builds a Redis-backed snapshot cache from a URL.
-func WithSnapCacheMetaURL(metaUrl string, ttl time.Duration) func(*option) {
-	c, err := cache.NewRedisCacheWithURL(metaUrl, ttl)
-	if err != nil {
-		panic(err)
-	}
-	return WithSnapCache(c)
-}
-
-// WithDeltaCacheMetaURL builds a Redis-backed delta cache from a URL.
-func WithDeltaCacheMetaURL(metaUrl string, ttl time.Duration) func(*option) {
-	c, err := cache.NewRedisCacheWithURL(metaUrl, ttl)
-	if err != nil {
-		panic(err)
-	}
-	return WithDeltaCache(c)
 }
 
 // WithSnapTarget sets where Lake writes the snapshots it auto-generates on the

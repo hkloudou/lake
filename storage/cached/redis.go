@@ -1,4 +1,4 @@
-package cache
+package cached
 
 import (
 	"context"
@@ -35,8 +35,12 @@ func NewRedisCacheWithURL(metaUrl string, ttl time.Duration) (*RedisCache, error
 	return NewRedisCache(redis.NewClient(opt), ttl), nil
 }
 
+func (c *RedisCache) cacheKey(namespace, key string) string {
+	return "lake_cache:" + encode.EncodeRedisCatalogName(namespace+":"+key)
+}
+
 func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader func() ([]byte, error)) ([]byte, error) {
-	cacheKey := "lake_cache:" + encode.EncodeRedisCatalogName(namespace+":"+key)
+	cacheKey := c.cacheKey(namespace, key)
 	return c.flight.Do(cacheKey, func() ([]byte, error) {
 		raw, err := c.client.GetEx(ctx, cacheKey, c.ttl).Bytes()
 		switch err {
@@ -57,11 +61,25 @@ func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader fun
 		if err != nil {
 			return nil, err
 		}
-		if enc, gerr := gzipCompress(data); gerr == nil {
-			if err := c.client.Set(ctx, cacheKey, enc, c.ttl).Err(); err != nil {
-				log.Printf("[lake cache] set %s: %v", cacheKey, err)
-			}
-		}
+		c.write(ctx, cacheKey, data)
 		return data, nil
 	})
+}
+
+// Set writes data through to the cache (write-through warming).
+func (c *RedisCache) Set(ctx context.Context, namespace, key string, data []byte) error {
+	c.write(ctx, c.cacheKey(namespace, key), data)
+	return nil
+}
+
+// write gzips and stores best-effort: a cache-write failure is logged, never
+// surfaced — the cache holds only rebuildable data.
+func (c *RedisCache) write(ctx context.Context, cacheKey string, data []byte) {
+	enc, gerr := gzipCompress(data)
+	if gerr != nil {
+		return
+	}
+	if err := c.client.Set(ctx, cacheKey, enc, c.ttl).Err(); err != nil {
+		log.Printf("[lake cache] set %s: %v", cacheKey, err)
+	}
 }

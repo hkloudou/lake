@@ -28,10 +28,7 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 			baseData = []byte("{}")
 			return
 		}
-		uri := list.LatestSnap.URI
-		baseData, baseDataErr = c.snapCache.Take(ctx, c.reader.Prefix(), uri, func() ([]byte, error) {
-			return c.fetchURI(ctx, list.catalog, uri)
-		})
+		baseData, baseDataErr = c.fetchURI(ctx, list.catalog, list.LatestSnap.URI)
 	})
 	wg.Go(func() {
 		deltaErr = c.fillDeltasBody(ctx, list.catalog, list.Entries)
@@ -75,9 +72,9 @@ func (c *Client) fetchURI(ctx context.Context, catalog, uri string) ([]byte, err
 	return st.Get(ctx, catalog, path)
 }
 
-// fillDeltasBody loads each delta's Body via deltaCache + the resolved storage,
-// using a worker pool capped at 10. Idempotent: skips deltas already loaded.
-// Cancels remaining workers on the first failure.
+// fillDeltasBody loads each delta's Body via the resolved storage, using a
+// worker pool capped at 10. Idempotent: skips deltas already loaded. Cancels
+// remaining workers on the first failure.
 func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []index.DeltaInfo) error {
 	pending := 0
 	for i := range deltas {
@@ -110,9 +107,7 @@ func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []in
 				if len(d.Body) > 0 {
 					continue
 				}
-				data, err := c.deltaCache.Take(workerCtx, c.reader.Prefix(), d.URI, func() ([]byte, error) {
-					return c.fetchURI(workerCtx, catalog, d.URI)
-				})
+				data, err := c.fetchURI(workerCtx, catalog, d.URI)
 				if err != nil {
 					select {
 					case done <- fmt.Errorf("load delta %s: %w", d.TsSeq, err):

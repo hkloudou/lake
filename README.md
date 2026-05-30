@@ -21,7 +21,9 @@
 - **🧩 Storage-agnostic** — Lake core imports no cloud SDK. You inject one
   `func(provider, bucket) (Storage, error)` resolver; each delta records its own
   `provider://bucket/path` locator, so a catalog's bodies can span buckets/clouds
-- **💾 Smart Caching** — Redis snapshot cache (gzip) + in-memory delta cache
+- **💾 Composable Caching** — opt-in `storage/cached` decorator wraps any backend
+  in your resolver (read-through Get + write-through Put); a snapshot save warms
+  the cache, so the next read skips a cold object-store fetch
 - **🎯 Snapshot Acceleration** — read-path packed snapshots, async generation
 - **🧮 Generic Sampling** — `NewSampler[T]` computes derived data on demand with
   a layered staleness policy; replaces v2's separate "meta" concept
@@ -122,8 +124,6 @@ func New(prefix string, rdb *redis.Client, resolve storage.Resolver, opts ...fun
 | Option | Description |
 |--------|-------------|
 | `WithSnapTarget(provider, bucket)` | Where Lake writes auto-generated snapshots. Omit → no auto-snapshotting (reads replay all deltas) |
-| `WithSnapCacheMetaURL(url, ttl)` | Route the snapshot cache to a separate Redis |
-| `WithDeltaCacheMetaURL(url, ttl)` | Route the delta cache to a separate Redis |
 | `WithSampleCacheURL(url)` / `WithSampleCacheRedis(rdb)` | Route the Sampler memo hash (`<prefix>:m:*`) to a separate Redis |
 | `(*Client) Use(handler EventHandler)` | Register an event handler |
 
@@ -343,8 +343,8 @@ tooling).
 
 ```
 List          ── 1× pipeline (snap HGet + delta ZRange)
-   ├── load snapshot   (snap cache → resolve(snap.URI).Get)
-   ├── load deltas × N (delta cache → resolve(delta.URI).Get, 10 workers)
+   ├── load snapshot   (resolve(snap.URI).Get — cached if the backend is wrapped)
+   ├── load deltas × N (resolve(delta.URI).Get, 10 workers)
    ↓
 merge.Merge   (CPU-bound, in-process)
    ├── return merged document
@@ -354,14 +354,26 @@ merge.Merge   (CPU-bound, in-process)
 ## ⚙️ Configuration
 
 Everything is explicit at `New`; there is no Redis-side `lake.setting` and no
-global state. Lake separates **index Redis** (durable, must persist) from
-**cache Redis** (ephemeral, LRU-evictable):
+global state. Lake core owns only the **index Redis** (durable, must persist);
+read-path caching is opt-in and composed into your resolver with `storage/cached`,
+backed by an ephemeral, LRU-evictable **cache Redis**:
 
 ```go
+// Wrap each resolved backend with a cache chosen per (provider, bucket).
+// A snapshot Put warms the cache, so the next read skips a cold object-store GET.
+cacheRDB := redis.NewClient(&redis.Options{Addr: "cache-redis:6379"}) // ephemeral
+resolve := cached.Resolver(myResolver, func(provider, bucket string) cached.Cache {
+    switch bucket {
+    case "my-bucket": // snapshots: shared across processes, long TTL
+        return cached.NewRedisCache(cacheRDB, 2*time.Hour)
+    default: // deltas: process-local, short TTL (immutable, soon folded into a snap)
+        return cached.NewMemoryCache(time.Minute)
+    }
+})
+
 client := lake.New("my-lake",
-    redis.NewClient(&redis.Options{Addr: "main-redis:6379"}), // index
+    redis.NewClient(&redis.Options{Addr: "main-redis:6379"}), // index (durable)
     resolve,
-    lake.WithSnapCacheMetaURL("redis://cache-redis:6379", 2*time.Hour),
     lake.WithSnapTarget("oss", "my-bucket"),
 )
 ```

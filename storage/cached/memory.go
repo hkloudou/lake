@@ -1,4 +1,4 @@
-package cache
+package cached
 
 import (
 	"context"
@@ -45,11 +45,21 @@ func (c *MemoryCache) Take(ctx context.Context, namespace, key string, loader fu
 		if err != nil {
 			return nil, err
 		}
-		c.mu.Lock()
-		c.data[cacheKey] = cacheEntry{value: data, expireTime: time.Now().Add(c.ttl)}
-		c.mu.Unlock()
+		c.store(cacheKey, data)
 		return data, nil
 	})
+}
+
+// Set writes data through to the cache (write-through warming).
+func (c *MemoryCache) Set(_ context.Context, namespace, key string, data []byte) error {
+	c.store(namespace+":"+key, data)
+	return nil
+}
+
+func (c *MemoryCache) store(cacheKey string, data []byte) {
+	c.mu.Lock()
+	c.data[cacheKey] = cacheEntry{value: data, expireTime: time.Now().Add(c.ttl)}
+	c.mu.Unlock()
 }
 
 // cleanupLoop sweeps expired entries every minute, forever.
