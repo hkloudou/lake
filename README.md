@@ -2,7 +2,7 @@
 
 [![Go Version](https://img.shields.io/badge/go-%3E%3D1.25-blue)](https://golang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/hkloudou/lake)](https://github.com/hkloudou/lake/releases)
+[![Latest tag](https://img.shields.io/github/v/tag/hkloudou/lake?sort=semver)](https://github.com/hkloudou/lake/tags)
 
 > Distributed JSON document store with atomic writes, RFC-standard merging,
 > snapshot acceleration, and computed sampling.
@@ -20,11 +20,11 @@
 - **📜 RFC Standard** — Full RFC 7396 (JSON Merge Patch), plus simple field Replace
 - **⚡ High Throughput** — Up to 999,999 writes/sec per catalog (Lua-bound seqid)
 - **🧩 Storage-agnostic** — Lake core imports no cloud SDK. You inject one
-  `func(provider, bucket) (Storage, error)` resolver; each delta records its own
-  `provider://bucket/path` locator, so a catalog's bodies can span buckets/clouds
-- **💾 Composable Caching** — opt-in `storage/cached` decorator wraps any backend
-  in your resolver (read-through Get + write-through Put); a snapshot save warms
-  the cache, so the next read skips a cold object-store fetch
+  `func(kind, provider, bucket) (Storage, error)` resolver; each delta records its
+  own `provider://bucket/path` locator, so a catalog's bodies can span buckets/clouds
+- **💾 Composable Caching** — opt-in `storage/cached` decorator (read-through Get,
+  write-through Put) routes by object **Kind**: cache snapshots, skip short-lived
+  deltas — so the next read skips a cold object-store fetch
 - **🎯 Snapshot Acceleration** — read-path packed snapshots, async generation
 - **🧮 Generic Sampling** — `NewSampler[T]` computes derived data on demand with
   a layered staleness policy; replaces v2's separate "meta" concept
@@ -45,8 +45,8 @@ Two stores, with distinct jobs:
   **authoritative and must persist**.
 - **Object storage — the bodies.** Every delta and snapshot body lives here (OSS
   / S3 / file / memory). Lake core imports no cloud SDK: you pass a **Resolver**,
-  `func(provider, bucket) (Storage, error)`, and Lake only ever calls `Get` /
-  `Put` on what it returns.
+  `func(kind, provider, bucket) (Storage, error)`, and Lake only ever calls `Get`
+  / `Put` on what it returns.
 
 Each delta stores its body's location as a portable URI `provider://bucket/path`,
 so a read is just resolve-URI → `Get` (no key-derivation), and one catalog's
@@ -442,8 +442,8 @@ tooling).
 
 ```
 List          ── 1× pipeline (snap HGet + delta ZRange)
-   ├── load snapshot   (resolve(snap.URI).Get — cached if the backend is wrapped)
-   ├── load deltas × N (resolve(delta.URI).Get, 10 workers)
+   ├── load snapshot   (resolve(Snap, …).Get — cached when the policy caches Snap)
+   ├── load deltas × N (resolve(Delta, …).Get, 10 workers)
    ↓
 merge.Merge   (CPU-bound, in-process)
    ├── return merged document
@@ -524,8 +524,11 @@ go test -count=1 -race ./...
 ```
 
 Integration tests need a reachable Redis at `127.0.0.1:6379`; they skip
-gracefully when it is absent. The notify Lua's cjson-encoded member is only
-exercised end-to-end with Redis present (`TestWriteReadRoundTrip_Redis`).
+gracefully when it is absent, and they are **non-destructive** — each uses a
+unique key prefix and deletes only its own keys on cleanup (never `FLUSHDB`), so
+it is safe to point them at a Redis that holds other data. The notify Lua's
+cjson-encoded member is only exercised end-to-end with Redis present
+(`TestWriteReadRoundTrip_Redis`).
 
 ## 💡 Design Philosophy
 
