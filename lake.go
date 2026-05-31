@@ -120,7 +120,9 @@ func (c *Client) storageFor(kind storage.Kind, provider, bucket string) (storage
 	if provider == "" || bucket == "" {
 		return nil, fmt.Errorf("lake: empty provider/bucket (%q/%q)", provider, bucket)
 	}
-	key := kind.String() + "|" + provider + "|" + bucket
+	// Numeric kind, not kind.String(): the memo key is identity, so it must not
+	// depend on a display string a future Kind could alias.
+	key := fmt.Sprintf("%d|%s|%s", kind, provider, bucket)
 	c.storMu.RLock()
 	s := c.stores[key]
 	c.storMu.RUnlock()

@@ -1,6 +1,6 @@
 // Package storage defines Lake's object-storage contract. Lake itself is
 // storage-agnostic — it never imports a cloud SDK. The embedding program
-// supplies a Resolver that maps a (provider, bucket) pair to a bucket-scoped
+// supplies a Resolver that maps a (kind, provider, bucket) to a bucket-scoped
 // Storage; ready-made backends live in optional subpackages (storage/oss,
 // storage/file, storage/mem).
 package storage
@@ -8,6 +8,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"strconv"
 	"time"
 )
 
@@ -44,11 +45,17 @@ const (
 	Snap              // a packed checkpoint: read on every read of the catalog
 )
 
+// String must stay exhaustive: a future Kind must not be mislabeled as an
+// existing one in logs, error messages, or metrics.
 func (k Kind) String() string {
-	if k == Snap {
+	switch k {
+	case Delta:
+		return "delta"
+	case Snap:
 		return "snap"
+	default:
+		return "kind(" + strconv.Itoa(int(k)) + ")"
 	}
-	return "delta"
 }
 
 // Resolver maps a (kind, provider, bucket) to a bucket-scoped Storage. It is the
