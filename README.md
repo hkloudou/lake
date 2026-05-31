@@ -113,17 +113,21 @@ func main() {
     }
 
     // Recommended default: cache reads through a SEPARATE, ephemeral Redis
-    // (allkeys-lru, no persistence — see Configuration). The snapshot bucket is
-    // read on every catalog read, so cache it; a snapshot save warms the cache
-    // write-through, so the next read skips a cold object-store GET.
+    // (allkeys-lru, no persistence — see Configuration). Cache the SNAPSHOT bucket
+    // only: it's read on every catalog read and a snapshot save warms it
+    // write-through. Deltas are short-lived (read only until the next snapshot
+    // absorbs them) and client-uploaded, so their bucket stays uncached.
     cacheRDB := redis.NewClient(&redis.Options{Addr: "cache-redis:6379"})
     snapCache := cached.NewRedisCache(cacheRDB, 2*time.Hour)
     resolve := cached.Resolver(backends, func(provider, bucket string) cached.Cache {
-        return snapCache
+        if bucket == "my-snaps" {
+            return snapCache
+        }
+        return nil // delta buckets: read straight from object storage
     })
 
     client := lake.New("my-lake", rdb, resolve,
-        lake.WithSnapTarget("oss", "my-bucket"), // auto-snapshots → the cached bucket
+        lake.WithSnapTarget("oss", "my-snaps"), // snapshots → the cached bucket
     )
 
     ctx := context.Background()
@@ -170,8 +174,12 @@ tier, not a cold object-store fetch.
 - **Cache the snapshot bucket by default.** The snapshot is read on *every* catalog
   read, and write-through means a freshly-saved snapshot is already warm — so this
   is the one cache that always pays off.
-- **Deltas cache safely too.** Delta bodies are immutable, so a per-delta bucket can
-  use a cheap in-process `cached.NewMemoryCache(time.Minute)` instead of Redis.
+- **Deltas usually aren't worth caching.** A delta body is read only until the next
+  snapshot absorbs it, then never again — a short life that rarely repays a Redis
+  round-trip, so leave delta buckets uncached (policy returns `nil`). Deltas are also
+  client-uploaded via presign, so they're only ever read-through cached, never
+  write-through warmed. For genuinely hot re-reads a cheap in-process
+  `cached.NewMemoryCache(time.Minute)` is enough (immutable bodies make it safe).
 
 The cache tier is a **separate, ephemeral Redis** (`maxmemory-policy allkeys-lru`,
 no persistence) — never the index Redis, because a Redis instance's eviction policy
