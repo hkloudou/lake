@@ -54,3 +54,27 @@ func TestFile_RejectsTraversal(t *testing.T) {
 		t.Fatalf("canary was modified through traversal: %q", data)
 	}
 }
+
+func TestFile_RejectsEscapingBucket(t *testing.T) {
+	base := t.TempDir()
+	canary := filepath.Join(base, "secret.txt")
+	if err := os.WriteFile(canary, []byte("top secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fs, err := New(filepath.Join(base, "store"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := fs.Bucket("..")
+	ctx := context.Background()
+
+	if _, err := b.Get(ctx, "users", "secret.txt"); err == nil {
+		t.Fatal("Get with escaping bucket should be rejected")
+	}
+	if err := b.Put(ctx, "users", "secret.txt", []byte("pwned")); err == nil {
+		t.Fatal("Put with escaping bucket should be rejected")
+	}
+	if data, _ := os.ReadFile(canary); string(data) != "top secret" {
+		t.Fatalf("canary was modified through escaping bucket: %q", data)
+	}
+}

@@ -29,15 +29,35 @@ func New(basePath string) (*FS, error) {
 }
 
 // Bucket returns a bucket-scoped Storage (bucket = sub-directory).
-func (f *FS) Bucket(name string) storage.Storage { return &view{root: filepath.Join(f.base, name)} }
+func (f *FS) Bucket(name string) storage.Storage {
+	root, err := f.bucketRoot(name)
+	return &view{root: root, err: err}
+}
 
-type view struct{ root string }
+func (f *FS) bucketRoot(name string) (string, error) {
+	if name == "" || name == "." || name == ".." || filepath.IsAbs(name) || strings.ContainsAny(name, `/\`) {
+		return "", fmt.Errorf("file: invalid bucket %q", name)
+	}
+	root := filepath.Join(f.base, name)
+	if root != f.base && !strings.HasPrefix(root, f.base+string(filepath.Separator)) {
+		return "", fmt.Errorf("file: bucket %q escapes base", name)
+	}
+	return root, nil
+}
+
+type view struct {
+	root string
+	err  error
+}
 
 // full resolves path under the bucket root and rejects anything that escapes it
 // (e.g. "..", or an absolute path that cleans out of root). Defence in depth:
 // Lake's own object paths never contain "..", but a storage backend must not
 // trust the path it is handed.
 func (v *view) full(path string) (string, error) {
+	if v.err != nil {
+		return "", v.err
+	}
 	full := filepath.Join(v.root, filepath.FromSlash(path))
 	if full != v.root && !strings.HasPrefix(full, v.root+string(filepath.Separator)) {
 		return "", fmt.Errorf("file: path %q escapes bucket root", path)

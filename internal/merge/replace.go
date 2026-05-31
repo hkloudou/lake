@@ -1,6 +1,7 @@
 package merge
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/tidwall/sjson"
@@ -22,6 +23,9 @@ func NewReplaceMerger() *ReplaceMerger {
 func (m *ReplaceMerger) Merge(original, data []byte, field string) ([]byte, error) {
 	// If field is empty, replace entire document
 	if field == "" {
+		if !json.Valid(data) {
+			return nil, fmt.Errorf("invalid JSON for root replace")
+		}
 		return data, nil
 	}
 

@@ -95,23 +95,27 @@ func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []in
 		workers = pending
 	}
 
-	jobs := make(chan *index.DeltaInfo, len(deltas))
-	done := make(chan error, 1)
+	jobs := make(chan *index.DeltaInfo, pending)
+	for i := range deltas {
+		if len(deltas[i].Body) == 0 {
+			jobs <- &deltas[i]
+		}
+	}
+	close(jobs)
+
+	errCh := make(chan error, 1)
 
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wg.Go(func() {
 			for d := range jobs {
-				if workerCtx.Err() != nil {
+				if err := workerCtx.Err(); err != nil {
 					return
-				}
-				if len(d.Body) > 0 {
-					continue
 				}
 				data, err := c.fetchURI(workerCtx, storage.Delta, catalog, d.URI)
 				if err != nil {
 					select {
-					case done <- fmt.Errorf("load delta %s: %w", d.TsSeq, err):
+					case errCh <- fmt.Errorf("load delta %s: %w", d.TsSeq, err):
 					default:
 					}
 					cancel()
@@ -122,23 +126,15 @@ func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []in
 		})
 	}
 
-	go func() {
-		for i := range deltas {
-			select {
-			case <-workerCtx.Done():
-				return
-			case jobs <- &deltas[i]:
-			}
+	wg.Wait()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			return err
 		}
-		close(jobs)
-	}()
-
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-
-	if err := <-done; err != nil {
+	default:
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	return nil
