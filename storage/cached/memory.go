@@ -39,7 +39,7 @@ func (c *MemoryCache) Take(ctx context.Context, namespace, key string, loader fu
 		e, ok := c.data[cacheKey]
 		c.mu.RUnlock()
 		if ok && time.Now().Before(e.expireTime) {
-			return e.value, nil
+			return append([]byte(nil), e.value...), nil
 		}
 		data, err := loader()
 		if err != nil {
@@ -57,8 +57,9 @@ func (c *MemoryCache) Set(_ context.Context, namespace, key string, data []byte)
 }
 
 func (c *MemoryCache) store(cacheKey string, data []byte) {
+	cp := append([]byte(nil), data...)
 	c.mu.Lock()
-	c.data[cacheKey] = cacheEntry{value: data, expireTime: time.Now().Add(c.ttl)}
+	c.data[cacheKey] = cacheEntry{value: cp, expireTime: time.Now().Add(c.ttl)}
 	c.mu.Unlock()
 }
 

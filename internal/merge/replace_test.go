@@ -94,3 +94,10 @@ func TestReplaceMerger(t *testing.T) {
 		})
 	}
 }
+
+func TestReplaceMerger_RejectsInvalidRootJSON(t *testing.T) {
+	merger := NewReplaceMerger()
+	if _, err := merger.Merge([]byte(`{"old":"data"}`), []byte(`not json`), ""); err == nil {
+		t.Fatal("root replace must reject invalid JSON")
+	}
+}

@@ -157,3 +157,41 @@ func TestResolver_NilPolicyReturnsInner(t *testing.T) {
 		t.Fatalf("nil policy should keep inner storage unchanged, got %T", got)
 	}
 }
+
+func TestMemoryCache_CopiesValues(t *testing.T) {
+	cache := NewMemoryCache(time.Minute)
+	ctx := context.Background()
+	loaded := []byte("abc")
+
+	got, err := cache.Take(ctx, "ns", "k", func() ([]byte, error) {
+		return loaded, nil
+	})
+	if err != nil {
+		t.Fatalf("Take miss: %v", err)
+	}
+	got[0] = 'x'
+	loaded[1] = 'y'
+
+	got, err = cache.Take(ctx, "ns", "k", func() ([]byte, error) {
+		t.Fatal("cache hit should not invoke loader")
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatalf("Take hit: %v", err)
+	}
+	if string(got) != "abc" {
+		t.Fatalf("cached value was mutated through caller-owned slice: got %q", got)
+	}
+	got[2] = 'z'
+
+	got, err = cache.Take(ctx, "ns", "k", func() ([]byte, error) {
+		t.Fatal("cache hit should not invoke loader")
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatalf("Take second hit: %v", err)
+	}
+	if string(got) != "abc" {
+		t.Fatalf("cache hit returned internal mutable slice: got %q", got)
+	}
+}
