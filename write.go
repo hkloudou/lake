@@ -18,11 +18,8 @@ import (
 // backend cannot mint presigned URLs (e.g. file / memory).
 var ErrPresignNotSupported = storage.ErrPresignNotSupported
 
-// Default presign tunings; override via WriteBeginOption.
-const (
-	defaultUploadTTL    = 15 * time.Minute
-	defaultMaxBodyBytes = 100 * 1024 * 1024 // 100 MB
-)
+// defaultUploadTTL is the signed-URL validity; override via WithUploadTTL.
+const defaultUploadTTL = 15 * time.Minute
 
 // WriteBeginRequest describes a write that is about to happen. The caller picks
 // where the body lands per-write via Provider + Bucket; that location is
@@ -59,19 +56,13 @@ type WriteHandle struct {
 type WriteBeginOption func(*writeBeginOpts)
 
 type writeBeginOpts struct {
-	ttl              time.Duration
-	maxContentLength int64
-	contentType      string
+	ttl         time.Duration
+	contentType string
 }
 
 // WithUploadTTL overrides the signed URL validity (default 15 min).
 func WithUploadTTL(d time.Duration) WriteBeginOption {
 	return func(o *writeBeginOpts) { o.ttl = d }
-}
-
-// WithMaxBodyBytes overrides the signed URL's max content length (default 100 MB).
-func WithMaxBodyBytes(n int64) WriteBeginOption {
-	return func(o *writeBeginOpts) { o.maxContentLength = n }
 }
 
 // WithUploadContentType pins Content-Type into the signed URL.
@@ -110,7 +101,7 @@ func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...
 		return nil, ErrPresignNotSupported
 	}
 
-	o := &writeBeginOpts{ttl: defaultUploadTTL, maxContentLength: defaultMaxBodyBytes}
+	o := &writeBeginOpts{ttl: defaultUploadTTL}
 	for _, opt := range opts {
 		opt(o)
 	}
@@ -123,9 +114,8 @@ func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...
 	uri := objkey.BuildURI(req.Provider, req.Bucket, key)
 
 	upload, err := presigner.PresignPut(ctx, req.Catalog, key, storage.PresignOptions{
-		TTL:              o.ttl,
-		MaxContentLength: o.maxContentLength,
-		ContentType:      o.contentType,
+		TTL:         o.ttl,
+		ContentType: o.contentType,
 		UserMetadata: map[string]string{
 			"catalog":    req.Catalog,
 			"path":       req.Path,

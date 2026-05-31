@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/hkloudou/lake/v3/storage"
 )
@@ -32,10 +33,24 @@ func (f *FS) Bucket(name string) storage.Storage { return &view{root: filepath.J
 
 type view struct{ root string }
 
-func (v *view) full(path string) string { return filepath.Join(v.root, filepath.FromSlash(path)) }
+// full resolves path under the bucket root and rejects anything that escapes it
+// (e.g. "..", or an absolute path that cleans out of root). Defence in depth:
+// Lake's own object paths never contain "..", but a storage backend must not
+// trust the path it is handed.
+func (v *view) full(path string) (string, error) {
+	full := filepath.Join(v.root, filepath.FromSlash(path))
+	if full != v.root && !strings.HasPrefix(full, v.root+string(filepath.Separator)) {
+		return "", fmt.Errorf("file: path %q escapes bucket root", path)
+	}
+	return full, nil
+}
 
 func (v *view) Get(_ context.Context, _ /*catalog*/, path string) ([]byte, error) {
-	data, err := os.ReadFile(v.full(path))
+	full, err := v.full(path)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(full)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("file: not found: %s", path)
@@ -46,7 +61,10 @@ func (v *view) Get(_ context.Context, _ /*catalog*/, path string) ([]byte, error
 }
 
 func (v *view) Put(_ context.Context, _ /*catalog*/, path string, data []byte) error {
-	full := v.full(path)
+	full, err := v.full(path)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		return fmt.Errorf("file: mkdir: %w", err)
 	}

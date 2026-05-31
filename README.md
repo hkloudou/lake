@@ -293,7 +293,7 @@ type WriteHandle struct {
 }
 ```
 
-**Begin options**: `WithUploadTTL(d)`, `WithMaxBodyBytes(n)`, `WithUploadContentType(ct)`.
+**Begin options**: `WithUploadTTL(d)`, `WithUploadContentType(ct)`.
 
 > **Presign capability**: WriteBegin requires the resolved backend to implement
 > `storage.Presigner`. OSS supports it; file / memory return
@@ -301,6 +301,10 @@ type WriteHandle struct {
 >
 > **Bodies are stored RAW** — for at-rest encryption use OSS SSE; compress
 > client-side if you want it.
+>
+> **Upload size is not bounded by Lake.** An OSS presigned PUT cannot carry a
+> max-length constraint, so enforce any size limit at the deployment layer
+> (bucket policy / quota) or in your client before the PUT.
 
 **MergeType constants**:
 

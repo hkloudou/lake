@@ -69,10 +69,9 @@ type Resolver func(kind Kind, provider, bucket string) (Storage, error)
 
 // PresignOptions tunes the signed PUT.
 type PresignOptions struct {
-	TTL              time.Duration     // signature validity
-	MaxContentLength int64             // 0 = unlimited
-	UserMetadata     map[string]string // mapped to x-oss-meta-* / x-amz-meta-*
-	ContentType      string            // optional; if set, signed and required
+	TTL          time.Duration     // signature validity
+	UserMetadata map[string]string // mapped to x-oss-meta-* / x-amz-meta-*
+	ContentType  string            // optional; if set, signed and required
 }
 
 // PresignedUpload is the JSON-serialisable result handed back to a client.
