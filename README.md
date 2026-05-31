@@ -66,9 +66,9 @@ state to roll back.
 
 **A read** fetches the snapshot pointer + delta log (2 Redis ops), loads the
 bodies through the resolver, and merges them. With a snapshot target configured a
-fresh snapshot is written back asynchronously, off the read's critical path; add
-the optional `storage/cached` decorator and bodies come from cache, not a cold
-fetch.
+fresh snapshot is written back asynchronously, off the read's critical path; wrap
+the resolver in the recommended `storage/cached` decorator and bodies come from
+cache, not a cold fetch.
 
 ## 🚀 Quick Start
 
@@ -84,14 +84,16 @@ go get github.com/hkloudou/lake/v3@latest
 package main
 
 import (
+    "bytes"
     "context"
     "fmt"
     "log"
     "net/http"
-    "bytes"
+    "time"
 
     "github.com/hkloudou/lake/v3"
     "github.com/hkloudou/lake/v3/storage"
+    "github.com/hkloudou/lake/v3/storage/cached"
     lakeoss "github.com/hkloudou/lake/v3/storage/oss"
     "github.com/redis/go-redis/v9"
 )
@@ -101,11 +103,8 @@ func main() {
     rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
     oss, _ := lakeoss.New(lakeoss.Config{Endpoint: "oss-cn-hangzhou", AccessKey: ak, SecretKey: sk})
 
-    // The resolver is your only storage-injection point. Here it's bare OSS —
-    // bodies are fetched straight from the bucket on every read. To add a read
-    // cache tier (recommended for production), wrap it with cached.Resolver; see
-    // "Configuration" below.
-    resolve := func(provider, bucket string) (storage.Storage, error) {
+    // Bare backends: your single storage-injection point, (provider,bucket) → store.
+    backends := func(provider, bucket string) (storage.Storage, error) {
         switch provider {
         case "oss":
             return oss.Bucket(bucket), nil
@@ -113,8 +112,18 @@ func main() {
         return nil, fmt.Errorf("unknown provider %q", provider)
     }
 
+    // Recommended default: cache reads through a SEPARATE, ephemeral Redis
+    // (allkeys-lru, no persistence — see Configuration). The snapshot bucket is
+    // read on every catalog read, so cache it; a snapshot save warms the cache
+    // write-through, so the next read skips a cold object-store GET.
+    cacheRDB := redis.NewClient(&redis.Options{Addr: "cache-redis:6379"})
+    snapCache := cached.NewRedisCache(cacheRDB, 2*time.Hour)
+    resolve := cached.Resolver(backends, func(provider, bucket string) cached.Cache {
+        return snapCache
+    })
+
     client := lake.New("my-lake", rdb, resolve,
-        lake.WithSnapTarget("oss", "my-bucket"), // where auto-snapshots go
+        lake.WithSnapTarget("oss", "my-bucket"), // auto-snapshots → the cached bucket
     )
 
     ctx := context.Background()
@@ -151,6 +160,24 @@ func main() {
     fmt.Printf("Data: %s\n", jsonStr)
 }
 ```
+
+### Read caching (recommended)
+
+The resolver above is wrapped in `cached.Resolver`, so every body `Get` is
+read-through and every snapshot `Put` is write-through — reads come from the cache
+tier, not a cold object-store fetch.
+
+- **Cache the snapshot bucket by default.** The snapshot is read on *every* catalog
+  read, and write-through means a freshly-saved snapshot is already warm — so this
+  is the one cache that always pays off.
+- **Deltas cache safely too.** Delta bodies are immutable, so a per-delta bucket can
+  use a cheap in-process `cached.NewMemoryCache(time.Minute)` instead of Redis.
+
+The cache tier is a **separate, ephemeral Redis** (`maxmemory-policy allkeys-lru`,
+no persistence) — never the index Redis, because a Redis instance's eviction policy
+is server-wide and the authoritative index must not be evicted. The full tiered
+wiring (snap vs delta vs the sample memo) and the Redis policy table are in
+**Configuration** below.
 
 ## 📚 API Reference
 
