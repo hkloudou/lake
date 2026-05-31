@@ -187,6 +187,13 @@ tier, not a cold object-store fetch.
   write-through warmed. For genuinely hot re-reads a cheap in-process
   `cached.NewMemoryCache(time.Minute)` is enough (immutable bodies make it safe).
 
+**Snaps and deltas in one bucket?** The bucket-level policy can't separate them
+(it sees `(provider, bucket)`, never the object path), so it would cache both or
+neither. Wrap that bucket with `cached.WrapIf(ns, base, snapCache, cached.BySuffix(".snap"))`
+— it caches snapshot objects (`.snap`) and passes delta bodies (`.dat`) straight
+through. Separate buckets stay tidier (independent lifecycle and TTL), but this
+makes a shared bucket correct.
+
 The cache tier is a **separate, ephemeral Redis** (`maxmemory-policy allkeys-lru`,
 no persistence) — never the index Redis, because a Redis instance's eviction policy
 is server-wide and the authoritative index must not be evicted. The full tiered
