@@ -1,7 +1,9 @@
 package lake
 
 import (
+	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/tidwall/gjson"
@@ -114,5 +116,22 @@ func TestParseJSON_NoSilentNilNil(t *testing.T) {
 	out, err := parseJSON[gjson.Result]([]byte(`{}`))
 	if err == nil && out == nil {
 		t.Fatal("(nil, nil) is not an acceptable parseJSON return")
+	}
+}
+
+func TestReadHelpers_RejectNilList(t *testing.T) {
+	ctx := context.Background()
+
+	if _, err := ReadBytes(ctx, nil); err == nil || !strings.Contains(err.Error(), "requires a ListResult") {
+		t.Fatalf("ReadBytes(nil) err = %v, want list requirement error", err)
+	}
+	if _, err := ReadString(ctx, nil); err == nil || !strings.Contains(err.Error(), "requires a ListResult") {
+		t.Fatalf("ReadString(nil) err = %v, want list requirement error", err)
+	}
+	if _, err := ReadMap(ctx, nil); err == nil || !strings.Contains(err.Error(), "requires a ListResult") {
+		t.Fatalf("ReadMap(nil) err = %v, want list requirement error", err)
+	}
+	if _, err := Read[gjson.Result](ctx, nil); err == nil || !strings.Contains(err.Error(), "requires a ListResult") {
+		t.Fatalf("Read[T](nil) err = %v, want list requirement error", err)
 	}
 }

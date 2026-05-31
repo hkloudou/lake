@@ -71,6 +71,9 @@ func Wrap(namespace string, base storage.Storage, cache Cache) storage.Storage {
 //	    return nil // deltas: read once before a snapshot absorbs them — uncached
 //	})
 func Resolver(inner storage.Resolver, policy func(kind storage.Kind, provider, bucket string) Cache) storage.Resolver {
+	if policy == nil {
+		return inner
+	}
 	return func(kind storage.Kind, provider, bucket string) (storage.Storage, error) {
 		base, err := inner(kind, provider, bucket)
 		if err != nil {

@@ -105,6 +105,9 @@ func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...
 	for _, opt := range opts {
 		opt(o)
 	}
+	if o.ttl <= 0 {
+		o.ttl = defaultUploadTTL
+	}
 
 	uuid, err := newUUID()
 	if err != nil {
@@ -161,8 +164,14 @@ func (c *Client) WriteNotify(ctx context.Context, h *WriteHandle) error {
 	if err := utils.ValidateFieldPath(h.Path); err != nil {
 		return err
 	}
+	if h.MergeType < MergeTypeReplace || h.MergeType > MergeTypeRFC7396 {
+		return fmt.Errorf("invalid mergeType: %d", h.MergeType)
+	}
 	if h.URI == "" {
 		return errors.New("empty URI in handle")
+	}
+	if _, _, _, err := objkey.ParseURI(h.URI); err != nil {
+		return err
 	}
 	_, _, err := c.writer.Notify(ctx, h.Catalog, h.Path, h.MergeType, h.URI)
 	return err

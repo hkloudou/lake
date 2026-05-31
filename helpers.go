@@ -3,6 +3,7 @@ package lake
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/tidwall/gjson"
@@ -10,11 +11,17 @@ import (
 
 // ReadBytes returns the merged document as raw bytes.
 func ReadBytes(ctx context.Context, list *ListResult) ([]byte, error) {
+	if list == nil || list.client == nil {
+		return nil, errors.New("lake: Read requires a ListResult from List/BatchList")
+	}
 	return list.client.readData(ctx, list)
 }
 
 // ReadString returns the merged document as a JSON string.
 func ReadString(ctx context.Context, list *ListResult) (string, error) {
+	if list == nil || list.client == nil {
+		return "", errors.New("lake: Read requires a ListResult from List/BatchList")
+	}
 	data, err := list.client.readData(ctx, list)
 	if err != nil {
 		return "", err
@@ -24,6 +31,9 @@ func ReadString(ctx context.Context, list *ListResult) (string, error) {
 
 // ReadMap returns the merged document parsed as map[string]any.
 func ReadMap(ctx context.Context, list *ListResult) (map[string]any, error) {
+	if list == nil || list.client == nil {
+		return nil, errors.New("lake: Read requires a ListResult from List/BatchList")
+	}
 	data, err := list.client.readData(ctx, list)
 	if err != nil {
 		return nil, err
@@ -40,6 +50,9 @@ func ReadMap(ctx context.Context, list *ListResult) (map[string]any, error) {
 // Special-cased: T == []byte / string / gjson.Result skip JSON unmarshal
 // and wrap the raw bytes directly.
 func Read[T any](ctx context.Context, list *ListResult) (*T, error) {
+	if list == nil || list.client == nil {
+		return nil, errors.New("lake: Read requires a ListResult from List/BatchList")
+	}
 	data, err := list.client.readData(ctx, list)
 	if err != nil {
 		return nil, err
