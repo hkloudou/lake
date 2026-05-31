@@ -144,3 +144,16 @@ func TestResolver_PolicyRoutesCache(t *testing.T) {
 		t.Fatalf("cached bucket should be wrapped, got bare base %T", wrapped)
 	}
 }
+
+func TestResolver_NilPolicyReturnsInner(t *testing.T) {
+	inner := func(_ storage.Kind, _, _ string) (storage.Storage, error) { return newCountingStore(), nil }
+	resolve := Resolver(inner, nil)
+
+	got, err := resolve(storage.Snap, "oss", "bucket")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if _, ok := got.(*countingStore); !ok {
+		t.Fatalf("nil policy should keep inner storage unchanged, got %T", got)
+	}
+}
