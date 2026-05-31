@@ -13,7 +13,7 @@ import (
 // drive storage directly.
 func memResolver() storage.Resolver {
 	st := mem.New()
-	return func(provider, bucket string) (storage.Storage, error) {
+	return func(_ storage.Kind, provider, bucket string) (storage.Storage, error) {
 		return st.Bucket(bucket), nil
 	}
 }

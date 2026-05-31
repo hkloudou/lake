@@ -113,13 +113,14 @@ func WithSampleCacheURL(url string) func(*option) {
 	return WithSampleCacheRedis(redis.NewClient(opt))
 }
 
-// storageFor resolves and memoises a bucket-scoped Storage for (provider,
-// bucket). The Resolver is invoked at most once per distinct pair.
-func (c *Client) storageFor(provider, bucket string) (storage.Storage, error) {
+// storageFor resolves and memoises a bucket-scoped Storage for (kind, provider,
+// bucket). The Resolver is invoked at most once per distinct triple, so the same
+// bucket can yield different storages per kind (e.g. cached snap, bare delta).
+func (c *Client) storageFor(kind storage.Kind, provider, bucket string) (storage.Storage, error) {
 	if provider == "" || bucket == "" {
 		return nil, fmt.Errorf("lake: empty provider/bucket (%q/%q)", provider, bucket)
 	}
-	key := provider + "|" + bucket
+	key := kind.String() + "|" + provider + "|" + bucket
 	c.storMu.RLock()
 	s := c.stores[key]
 	c.storMu.RUnlock()
@@ -131,12 +132,12 @@ func (c *Client) storageFor(provider, bucket string) (storage.Storage, error) {
 	if s = c.stores[key]; s != nil {
 		return s, nil
 	}
-	s, err := c.resolve(provider, bucket)
+	s, err := c.resolve(kind, provider, bucket)
 	if err != nil {
-		return nil, fmt.Errorf("lake: resolve %s://%s: %w", provider, bucket, err)
+		return nil, fmt.Errorf("lake: resolve %s %s://%s: %w", kind, provider, bucket, err)
 	}
 	if s == nil {
-		return nil, fmt.Errorf("lake: resolver returned nil storage for %s://%s", provider, bucket)
+		return nil, fmt.Errorf("lake: resolver returned nil storage for %s %s://%s", kind, provider, bucket)
 	}
 	c.stores[key] = s
 	return s, nil

@@ -120,15 +120,15 @@ func TestWrap_PresignPassthrough(t *testing.T) {
 // TestResolver_PolicyRoutesCache verifies the combinator wraps only when policy
 // returns a non-nil cache, leaving other backends untouched.
 func TestResolver_PolicyRoutesCache(t *testing.T) {
-	inner := func(_, _ string) (storage.Storage, error) { return newCountingStore(), nil }
-	resolve := Resolver(inner, func(_, bucket string) Cache {
+	inner := func(_ storage.Kind, _, _ string) (storage.Storage, error) { return newCountingStore(), nil }
+	resolve := Resolver(inner, func(_ storage.Kind, _, bucket string) Cache {
 		if bucket == "cached" {
 			return NewMemoryCache(time.Minute)
 		}
 		return nil
 	})
 
-	raw, err := resolve("oss", "raw")
+	raw, err := resolve(storage.Delta, "oss", "raw")
 	if err != nil {
 		t.Fatalf("resolve raw: %v", err)
 	}
@@ -136,50 +136,11 @@ func TestResolver_PolicyRoutesCache(t *testing.T) {
 		t.Fatalf("uncached bucket should return the base unwrapped, got %T", raw)
 	}
 
-	wrapped, err := resolve("oss", "cached")
+	wrapped, err := resolve(storage.Snap, "oss", "cached")
 	if err != nil {
 		t.Fatalf("resolve cached: %v", err)
 	}
 	if _, ok := wrapped.(*countingStore); ok {
 		t.Fatalf("cached bucket should be wrapped, got bare base %T", wrapped)
-	}
-}
-
-// TestWrapIf_CachesByPath covers the shared-bucket case: with BySuffix(".snap")
-// only snapshots are cached — snap reads are served from the write-through warm,
-// while delta (.dat) reads always reach the backend.
-func TestWrapIf_CachesByPath(t *testing.T) {
-	base := newCountingStore()
-	ctx := context.Background()
-	w := WrapIf("oss|shared", base, NewMemoryCache(time.Minute), BySuffix(".snap"))
-
-	// Snapshot (.snap): write-through warms the cache → repeated Gets skip the backend.
-	if err := w.Put(ctx, "users", "ab/cd/100.snap", []byte(`{"s":1}`)); err != nil {
-		t.Fatalf("Put snap: %v", err)
-	}
-	for i := 0; i < 3; i++ {
-		if _, err := w.Get(ctx, "users", "ab/cd/100.snap"); err != nil {
-			t.Fatalf("Get snap #%d: %v", i, err)
-		}
-	}
-	if n := base.gets.Load(); n != 0 {
-		t.Fatalf("snap backend gets = %d, want 0 (served from write-through warm)", n)
-	}
-
-	// Delta (.dat): predicate excludes it — Put does not warm, and every Get reaches the backend.
-	if err := w.Put(ctx, "users", "ab/cd/d.dat", []byte(`{"d":2}`)); err != nil {
-		t.Fatalf("Put delta: %v", err)
-	}
-	for i := 0; i < 3; i++ {
-		got, err := w.Get(ctx, "users", "ab/cd/d.dat")
-		if err != nil {
-			t.Fatalf("Get delta #%d: %v", i, err)
-		}
-		if string(got) != `{"d":2}` {
-			t.Fatalf("Get delta #%d = %s, want {\"d\":2}", i, got)
-		}
-	}
-	if n := base.gets.Load(); n != 3 {
-		t.Fatalf("delta backend gets = %d, want 3 (never cached)", n)
 	}
 }

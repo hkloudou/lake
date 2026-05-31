@@ -33,13 +33,32 @@ type Presigner interface {
 	PresignPut(ctx context.Context, catalog, path string, opts PresignOptions) (PresignedUpload, error)
 }
 
-// Resolver maps a (provider, bucket) pair to a bucket-scoped Storage. It is the
-// single storage-injection point of a Lake client (passed to lake.New). The
-// implementation owns all credential / endpoint / pooling / multi-account
-// routing; Lake only ever calls the returned Storage. Lake memoises the result
-// per (provider, bucket), so a Resolver is called at most once per distinct
-// pair for the life of the client.
-type Resolver func(provider, bucket string) (Storage, error)
+// Kind tells a Resolver which class of object Lake is about to access, so it can
+// route by class — cache snapshots, pick a storage tier, tag metrics — without
+// inspecting the path or relying on bucket naming. Object storage only ever
+// holds these two.
+type Kind uint8
+
+const (
+	Delta Kind = iota // a write's body: client-uploaded, read only until a snapshot absorbs it
+	Snap              // a packed checkpoint: read on every read of the catalog
+)
+
+func (k Kind) String() string {
+	if k == Snap {
+		return "snap"
+	}
+	return "delta"
+}
+
+// Resolver maps a (kind, provider, bucket) to a bucket-scoped Storage. It is the
+// single storage-injection point of a Lake client (passed to lake.New): kind
+// lets it route snapshots and deltas differently (e.g. cache only snapshots)
+// even when they share a bucket. The implementation owns all credential /
+// endpoint / pooling / multi-account routing; Lake only ever calls the returned
+// Storage. Lake memoises the result per (kind, provider, bucket), so a Resolver
+// is called at most once per distinct triple for the life of the client.
+type Resolver func(kind Kind, provider, bucket string) (Storage, error)
 
 // PresignOptions tunes the signed PUT.
 type PresignOptions struct {

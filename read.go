@@ -8,6 +8,7 @@ import (
 	"github.com/hkloudou/lake/v3/internal/index"
 	"github.com/hkloudou/lake/v3/internal/merge"
 	"github.com/hkloudou/lake/v3/internal/objkey"
+	"github.com/hkloudou/lake/v3/storage"
 )
 
 // readData loads the snapshot bytes and delta bodies in parallel, merges them
@@ -28,7 +29,7 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 			baseData = []byte("{}")
 			return
 		}
-		baseData, baseDataErr = c.fetchURI(ctx, list.catalog, list.LatestSnap.URI)
+		baseData, baseDataErr = c.fetchURI(ctx, storage.Snap, list.catalog, list.LatestSnap.URI)
 	})
 	wg.Go(func() {
 		deltaErr = c.fillDeltasBody(ctx, list.catalog, list.Entries)
@@ -58,14 +59,14 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 	return resultData, nil
 }
 
-// fetchURI resolves a storage URI (provider://bucket/path) to a backend and
-// fetches the object. catalog is passed to the backend as context.
-func (c *Client) fetchURI(ctx context.Context, catalog, uri string) ([]byte, error) {
+// fetchURI resolves a storage URI (provider://bucket/path) to a backend for the
+// given kind and fetches the object. catalog is passed to the backend as context.
+func (c *Client) fetchURI(ctx context.Context, kind storage.Kind, catalog, uri string) ([]byte, error) {
 	provider, bucket, path, err := objkey.ParseURI(uri)
 	if err != nil {
 		return nil, err
 	}
-	st, err := c.storageFor(provider, bucket)
+	st, err := c.storageFor(kind, provider, bucket)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +108,7 @@ func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []in
 				if len(d.Body) > 0 {
 					continue
 				}
-				data, err := c.fetchURI(workerCtx, catalog, d.URI)
+				data, err := c.fetchURI(workerCtx, storage.Delta, catalog, d.URI)
 				if err != nil {
 					select {
 					case done <- fmt.Errorf("load delta %s: %w", d.TsSeq, err):

@@ -6,6 +6,7 @@ import (
 
 	"github.com/hkloudou/lake/v3/internal/index"
 	"github.com/hkloudou/lake/v3/internal/objkey"
+	"github.com/hkloudou/lake/v3/storage"
 )
 
 // IterateSnaps streams every catalog's snap to fn via HSCAN — the single
@@ -28,7 +29,7 @@ func (c *Client) saveSnapshot(ctx context.Context, catalog string, stop index.Ti
 	}
 	return c.snapFlight.Do(fmt.Sprintf("%s_%s", catalog, stop), func() (string, error) {
 		path := objkey.SnapPath(catalog, stop.String())
-		st, err := c.storageFor(c.snapProvider, c.snapBucket)
+		st, err := c.storageFor(storage.Snap, c.snapProvider, c.snapBucket)
 		if err != nil {
 			return "", fmt.Errorf("resolve snap target: %w", err)
 		}

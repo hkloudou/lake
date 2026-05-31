@@ -103,8 +103,9 @@ func main() {
     rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
     oss, _ := lakeoss.New(lakeoss.Config{Endpoint: "oss-cn-hangzhou", AccessKey: ak, SecretKey: sk})
 
-    // Bare backends: your single storage-injection point, (provider,bucket) → store.
-    backends := func(provider, bucket string) (storage.Storage, error) {
+    // Bare backends: (kind, provider, bucket) → store. kind lets you route by
+    // object class; this backend is identical for both, so it ignores kind.
+    backends := func(_ storage.Kind, provider, bucket string) (storage.Storage, error) {
         switch provider {
         case "oss":
             return oss.Bucket(bucket), nil
@@ -113,21 +114,21 @@ func main() {
     }
 
     // Recommended default: cache reads through a SEPARATE, ephemeral Redis
-    // (allkeys-lru, no persistence — see Configuration). Cache the SNAPSHOT bucket
-    // only: it's read on every catalog read and a snapshot save warms it
-    // write-through. Deltas are short-lived (read only until the next snapshot
-    // absorbs them) and client-uploaded, so their bucket stays uncached.
+    // (allkeys-lru, no persistence — see Configuration). Cache snapshots (read on
+    // every catalog read; a save warms them write-through) and skip deltas (read
+    // once, then absorbed). Routing is by Kind, so snaps and deltas may even share
+    // one bucket.
     cacheRDB := redis.NewClient(&redis.Options{Addr: "cache-redis:6379"})
     snapCache := cached.NewRedisCache(cacheRDB, 2*time.Hour)
-    resolve := cached.Resolver(backends, func(provider, bucket string) cached.Cache {
-        if bucket == "my-snaps" {
+    resolve := cached.Resolver(backends, func(kind storage.Kind, provider, bucket string) cached.Cache {
+        if kind == storage.Snap {
             return snapCache
         }
-        return nil // delta buckets: read straight from object storage
+        return nil // deltas: read straight from object storage
     })
 
     client := lake.New("my-lake", rdb, resolve,
-        lake.WithSnapTarget("oss", "my-snaps"), // snapshots → the cached bucket
+        lake.WithSnapTarget("oss", "my-bucket"), // snapshots (cached by Kind)
     )
 
     ctx := context.Background()
@@ -173,26 +174,22 @@ read-frequency, not object count. The snapshot is read on every catalog read (ca
 it once, win every read), while a delta is read only until the next snapshot absorbs
 it — so caching it rarely repays the footprint.
 
-The resolver above is wrapped in `cached.Resolver`, so every body `Get` is
-read-through and every snapshot `Put` is write-through — reads come from the cache
-tier, not a cold object-store fetch.
+The resolver is wrapped in `cached.Resolver`, and Lake passes the object **Kind**,
+so the policy decides per class: snapshot `Get`s are read-through and snapshot
+`Put`s write-through; deltas pass straight to object storage.
 
-- **Cache the snapshot bucket by default.** The snapshot is read on *every* catalog
-  read, and write-through means a freshly-saved snapshot is already warm — so this
-  is the one cache that always pays off.
-- **Deltas usually aren't worth caching.** A delta body is read only until the next
-  snapshot absorbs it, then never again — a short life that rarely repays a Redis
-  round-trip, so leave delta buckets uncached (policy returns `nil`). Deltas are also
-  client-uploaded via presign, so they're only ever read-through cached, never
-  write-through warmed. For genuinely hot re-reads a cheap in-process
-  `cached.NewMemoryCache(time.Minute)` is enough (immutable bodies make it safe).
+- **Cache snapshots (`kind == storage.Snap`).** A snapshot is read on *every*
+  catalog read, and write-through means a freshly-saved one is already warm — the
+  one cache that always pays off.
+- **Skip deltas (return `nil`).** A delta is read only until the next snapshot
+  absorbs it, then never again — rarely worth a Redis round-trip. (They're also
+  client-uploaded via presign, so they could only ever be read-through cached,
+  never write-through warmed.) For genuinely hot re-reads, hand `storage.Delta` a
+  cheap in-process `cached.NewMemoryCache(time.Minute)` instead.
 
-**Snaps and deltas in one bucket?** The bucket-level policy can't separate them
-(it sees `(provider, bucket)`, never the object path), so it would cache both or
-neither. Wrap that bucket with `cached.WrapIf(ns, base, snapCache, cached.BySuffix(".snap"))`
-— it caches snapshot objects (`.snap`) and passes delta bodies (`.dat`) straight
-through. Separate buckets stay tidier (independent lifecycle and TTL), but this
-makes a shared bucket correct.
+Because routing is by Kind, **snapshots and deltas may share one bucket** — no path
+inspection, no bucket split. Separate buckets stay tidier for independent
+lifecycle/TTL, but they're no longer required to cache correctly.
 
 The cache tier is a **separate, ephemeral Redis** (`maxmemory-policy allkeys-lru`,
 no persistence) — never the index Redis, because a Redis instance's eviction policy
@@ -212,7 +209,7 @@ func New(prefix string, rdb *redis.Client, resolve storage.Resolver, opts ...fun
 |----------|-------------|
 | `prefix` | Namespaces every Redis key and the seqid counter |
 | `rdb` | The authoritative **index** Redis (must persist) |
-| `resolve` | The single storage-injection point: `func(provider, bucket string) (storage.Storage, error)` |
+| `resolve` | The single storage-injection point: `func(kind storage.Kind, provider, bucket string) (storage.Storage, error)` |
 
 | Option | Description |
 |--------|-------------|
@@ -225,9 +222,10 @@ func New(prefix string, rdb *redis.Client, resolve storage.Resolver, opts ...fun
 ### Storage
 
 Lake core is storage-agnostic — it never imports a cloud SDK. You provide a
-**Resolver** that maps a `(provider, bucket)` pair to a bucket-scoped
-`storage.Storage`. Ready-made backends ship as optional subpackages you use
-*inside* your resolver:
+**Resolver** that maps a `(kind, provider, bucket)` to a bucket-scoped
+`storage.Storage` — `kind` (Delta or Snap) lets you route the two object classes
+differently. Ready-made backends ship as optional subpackages you use *inside*
+your resolver:
 
 | Package | Constructor | Presign |
 |---------|-------------|---------|
@@ -244,17 +242,19 @@ type Storage interface {
 type Presigner interface { // optional; OSS-class only
     PresignPut(ctx context.Context, catalog, path string, opts PresignOptions) (PresignedUpload, error)
 }
-type Resolver func(provider, bucket string) (Storage, error)
+type Kind uint8 // Delta | Snap — which object class is being resolved
+type Resolver func(kind Kind, provider, bucket string) (Storage, error)
 ```
 
-Lake memoises the resolved `Storage` per `(provider, bucket)`, so your resolver
-is called at most once per distinct pair. Put credential / endpoint / pooling /
-multi-account routing inside the closure.
+Lake memoises the resolved `Storage` per `(kind, provider, bucket)`, so your
+resolver is called at most once per distinct triple. Put credential / endpoint /
+pooling / multi-account routing inside the closure.
 
 `storage/cached` is a decorator, not a backend: `cached.Wrap(namespace, backend, cache)`
 adds read-through (Get) and write-through (Put) caching to any `Storage`, and
-`cached.Resolver(inner, policy)` applies a per-`(provider, bucket)` cache across a
-whole resolver. A snapshot save warms the cache so the next read skips a cold
+`cached.Resolver(inner, policy)` applies a cache chosen by `policy(kind, provider, bucket)`
+across a whole resolver — so a one-line `if kind == storage.Snap` caches snapshots
+and skips deltas. A snapshot save warms the cache so the next read skips a cold
 object-store fetch — see **Configuration** below.
 
 ### Write — three-step direct upload
@@ -458,36 +458,38 @@ read-path caching is opt-in and composed into your resolver with `storage/cached
 backed by an ephemeral, LRU-evictable **cache Redis**:
 
 ```go
-// Build the cache tiers ONCE and share the instances across buckets — don't
-// construct a cache inside the policy, or you get one cache (and one cleanup
-// goroutine) per bucket. `backends` is the bare resolver from Quick Start; the
-// wrapped `resolve` is what you pass to lake.New. A snapshot Put warms the cache
-// (write-through), so the next read skips a cold object-store GET.
+// Build the cache tiers ONCE and share the instances — don't construct a cache
+// inside the policy, or you get one (with its own cleanup goroutine) per call.
+// `backends` is the bare resolver from Quick Start; `resolve` is what you pass to
+// lake.New. A snapshot Put warms the cache (write-through), so the next read
+// skips a cold object-store GET. Routing is by Kind, not bucket.
 cacheRDB := redis.NewClient(&redis.Options{Addr: "cache-redis:6379"}) // ephemeral, LRU
 snapCache := cached.NewRedisCache(cacheRDB, 2*time.Hour) // snapshots: shared, long TTL
-deltaCache := cached.NewMemoryCache(time.Minute)         // deltas: process-local, short TTL
+deltaCache := cached.NewMemoryCache(time.Minute)         // deltas (optional): process-local
 
-resolve := cached.Resolver(backends, func(provider, bucket string) cached.Cache {
-    if bucket == "my-snaps" { // the WithSnapTarget bucket
-        return snapCache
+resolve := cached.Resolver(backends, func(kind storage.Kind, provider, bucket string) cached.Cache {
+    switch kind {
+    case storage.Snap:
+        return snapCache  // read on every read — always worth caching
+    default:
+        return deltaCache // optional; return nil for the simplest default (deltas are short-lived)
     }
-    return deltaCache // delta buckets: immutable bodies, soon folded into a snap
 })
 
 client := lake.New("my-lake",
     redis.NewClient(&redis.Options{Addr: "main-redis:6379"}), // index (durable)
     resolve,
-    lake.WithSnapTarget("oss", "my-snaps"),
+    lake.WithSnapTarget("oss", "my-bucket"),
     lake.WithSampleCacheRedis(cacheRDB), // sample memo shares the same cache tier
 )
 ```
 
-Everything in the cache Redis — snap/delta bytes *and* the sample memo
+Everything in the cache Redis — snapshot bytes *and* the sample memo
 (`WithSampleCacheRedis`) — is rebuildable, so `maxmemory-policy allkeys-lru` plus
-per-key TTL evicts it safely; only the index Redis must persist. (Snap/delta
-bytes are one TTL'd string per object, evicted per-key; the sample memo is one
-Hash per indicator, so LRU drops a whole indicator at once — both just recompute
-on the next read.)
+per-key TTL evicts it safely; only the index Redis must persist. (Snapshot bytes
+are one TTL'd string per object, evicted per-key; the sample memo is one Hash per
+indicator, so LRU drops a whole indicator at once — both just recompute on the
+next read.)
 
 | Property | Index Redis | Cache Redis |
 |----------|-------------|-------------|

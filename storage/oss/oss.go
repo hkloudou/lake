@@ -2,7 +2,7 @@
 // credential set) vends many buckets and implements storage.Presigner.
 //
 //	client := oss.New(oss.Config{Endpoint: "oss-cn-hangzhou", AccessKey: ak, SecretKey: sk})
-//	resolve := func(provider, bucket string) (storage.Storage, error) {
+//	resolve := func(_ storage.Kind, provider, bucket string) (storage.Storage, error) {
 //	    if provider != "oss" { return nil, fmt.Errorf("unknown provider %q", provider) }
 //	    return client.Bucket(bucket), nil
 //	}

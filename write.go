@@ -101,7 +101,7 @@ func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...
 		return nil, errors.New("WriteBegin requires Provider and Bucket")
 	}
 
-	st, err := c.storageFor(req.Provider, req.Bucket)
+	st, err := c.storageFor(storage.Delta, req.Provider, req.Bucket)
 	if err != nil {
 		return nil, err
 	}

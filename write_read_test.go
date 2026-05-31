@@ -27,7 +27,7 @@ func TestWriteReadRoundTrip_Redis(t *testing.T) {
 	cleanupKeys(t, rdb, prefix+":*")
 
 	store := mem.New()
-	resolve := func(provider, bucket string) (storage.Storage, error) {
+	resolve := func(_ storage.Kind, provider, bucket string) (storage.Storage, error) {
 		return presignBucket{store.Bucket(bucket)}, nil
 	}
 	c := New(prefix, rdb, resolve, WithSnapTarget("mem", "snaps"))
