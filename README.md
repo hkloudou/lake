@@ -167,6 +167,12 @@ func main() {
 
 ### Read caching (recommended)
 
+**Object storage holds every body — deltas *and* snapshots; the cache layer covers
+only the snapshot.** That asymmetry is the whole performance balance: caching follows
+read-frequency, not object count. The snapshot is read on every catalog read (cache
+it once, win every read), while a delta is read only until the next snapshot absorbs
+it — so caching it rarely repays the footprint.
+
 The resolver above is wrapped in `cached.Resolver`, so every body `Get` is
 read-through and every snapshot `Put` is write-through — reads come from the cache
 tier, not a cold object-store fetch.
