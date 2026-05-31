@@ -35,6 +35,8 @@ end
 
 local tsSeq  = ts .. "_" .. seqid
 local member = cjson.encode({tonumber(mergeType), fieldPath, tsSeq, uri})
+-- score MUST stay bit-identical to TimeSeqID.Score() in timeseqid.go: the read
+-- path recomputes it and DecodeDeltaMember rejects a mismatch.
 local score  = tonumber(ts) + (tonumber(seqid) / 1000000.0)
 
 redis.call("ZADD", zaddKey, score, member)

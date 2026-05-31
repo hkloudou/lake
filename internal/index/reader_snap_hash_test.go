@@ -11,11 +11,11 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// snapHashTestRedis returns a real Redis client (db 13 — the snap hash is index
-// data, not cache) and a unique key prefix, or skips when Redis is unreachable.
-// It never flushes the DB: cleanup deletes only this test's "<prefix>:*" keys,
-// so any other data in db 13 is untouched.
-func snapHashTestRedis(t *testing.T) (*redis.Client, string) {
+// indexTestRedis returns a real Redis client (db 13 — index data, not cache)
+// and a unique key prefix, or skips when Redis is unreachable. Shared by every
+// index Redis test (snap hash, notify). It never flushes the DB: cleanup
+// deletes only this test's "<prefix>:*" keys, so any other data is untouched.
+func indexTestRedis(t *testing.T) (*redis.Client, string) {
 	t.Helper()
 	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379", DB: 13, DialTimeout: 200 * time.Millisecond})
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
@@ -49,7 +49,7 @@ func snapHashTestRedis(t *testing.T) (*redis.Client, string) {
 // Redis Hash and verifies the layout is "<prefix>:s" with catalog as
 // field, value = "{stopTsSeq}".
 func TestSnapHashRoundTrip(t *testing.T) {
-	rdb, prefix := snapHashTestRedis(t)
+	rdb, prefix := indexTestRedis(t)
 	w := NewWriter(rdb)
 	r := NewReader(rdb)
 	w.SetPrefix(prefix)
@@ -93,7 +93,7 @@ func TestSnapHashRoundTrip(t *testing.T) {
 // TestSnapHashOverwrite confirms the V3 contract: each AddSnap on a
 // catalog overwrites its previous entry.
 func TestSnapHashOverwrite(t *testing.T) {
-	rdb, prefix := snapHashTestRedis(t)
+	rdb, prefix := indexTestRedis(t)
 	w := NewWriter(rdb)
 	r := NewReader(rdb)
 	w.SetPrefix(prefix)
@@ -131,7 +131,7 @@ func TestSnapHashOverwrite(t *testing.T) {
 // (via HSCAN under the hood) yields every catalog's snap so backup tooling
 // can enumerate the full set of OSS snap keys without an OSS LIST.
 func TestIterateSnapsBatchBackup(t *testing.T) {
-	rdb, prefix := snapHashTestRedis(t)
+	rdb, prefix := indexTestRedis(t)
 	w := NewWriter(rdb)
 	r := NewReader(rdb)
 	w.SetPrefix(prefix)
@@ -174,7 +174,7 @@ func TestIterateSnapsBatchBackup(t *testing.T) {
 
 // TestGetLatestSnapMissingReturnsNilNil covers the "no snap yet" path.
 func TestGetLatestSnapMissingReturnsNilNil(t *testing.T) {
-	rdb, prefix := snapHashTestRedis(t)
+	rdb, prefix := indexTestRedis(t)
 	r := NewReader(rdb)
 	r.SetPrefix(prefix)
 
@@ -192,7 +192,7 @@ func TestGetLatestSnapMissingReturnsNilNil(t *testing.T) {
 // false (caller stops iteration mid-stream) without consuming the whole
 // hash — the property backup tools rely on for budgeted scans.
 func TestIterateSnapsEarlyStop(t *testing.T) {
-	rdb, prefix := snapHashTestRedis(t)
+	rdb, prefix := indexTestRedis(t)
 	w := NewWriter(rdb)
 	r := NewReader(rdb)
 	w.SetPrefix(prefix)
