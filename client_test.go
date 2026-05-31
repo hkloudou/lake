@@ -1,6 +1,7 @@
 package lake
 
 import (
+	"testing"
 	"time"
 
 	"github.com/hkloudou/lake/v3/storage"
@@ -28,4 +29,17 @@ func newTestClientRDB(rdb *redis.Client) *Client {
 // unreachable, to exercise error paths) with a 200ms dial timeout.
 func newTestClient(addr string) *Client {
 	return newTestClientRDB(redis.NewClient(&redis.Options{Addr: addr, DialTimeout: 200 * time.Millisecond}))
+}
+
+// unreachableRedis is a closed-port addr: any Redis op against it fails fast
+// (200ms dial timeout), so tests can exercise validation / event-emission /
+// early-return paths that run before — or regardless of — the Redis call.
+const unreachableRedis = "127.0.0.1:1"
+
+// newDeadClient builds a Client whose index Redis is unreachable. It is the
+// single constructor for the many tests that only need an initialized Client
+// to reach a non-Redis code path (validation, emitted events, flight wiring).
+func newDeadClient(t *testing.T) *Client {
+	t.Helper()
+	return newTestClient(unreachableRedis)
 }

@@ -40,7 +40,7 @@ func newClientWithSpy(t *testing.T) (*Client, *spyHandler) {
 	t.Helper()
 	// Unreachable Redis → operations fail past the event emit → exercises the
 	// "emit before early return" contract for every API.
-	c := newTestClient("127.0.0.1:1")
+	c := newDeadClient(t)
 	spy := &spyHandler{}
 	c.Use(spy.handler())
 	return c, spy

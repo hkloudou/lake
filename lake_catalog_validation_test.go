@@ -6,17 +6,10 @@ import (
 	"testing"
 )
 
-// V3: each public API that takes a catalog must reject invalid names
-// *before* touching Redis or OSS. We point at unreachable Redis: a
-// valid catalog surfaces a connection error, an invalid catalog must
-// surface a validation error first.
-
-const unreachableRedis = "127.0.0.1:1"
-
-func newDeadClient(t *testing.T) *Client {
-	t.Helper()
-	return newTestClient(unreachableRedis)
-}
+// V3: each public API that takes a catalog must reject invalid names *before*
+// touching Redis or OSS. Tests use newDeadClient (unreachable Redis): a valid
+// catalog surfaces a connection error, an invalid catalog must surface a
+// validation error first.
 
 func isValidationErr(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "invalid catalog")

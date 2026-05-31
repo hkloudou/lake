@@ -67,3 +67,51 @@ func TestValidateCatalog_Rejected(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateFieldPath(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		wantErr bool
+	}{
+		// Valid paths
+		{"root path", "/", false},
+		{"single segment", "/user", false},
+		{"multiple segments", "/user/profile", false},
+		{"segment with dot", "/user.info", false},
+		{"segment with multiple dots", "/user.profile.name", false},
+		{"multiple segments with dots", "/user.info/profile.data", false},
+		{"underscore prefix", "/_private", false},
+		{"dollar prefix", "/$config", false},
+		{"with numbers", "/user123", false},
+		{"with underscore", "/user_name", false},
+		{"with dollar sign", "/user$val", false},
+		{"deep nesting", "/a/b/c/d/e", false},
+		{"complex valid path", "/_config/$value/data.info/item123", false},
+
+		// Invalid paths
+		{"empty string", "", true},
+		{"no leading slash", "user", true},
+		{"trailing slash", "/user/", true},
+		{"starts with number", "/123", true},
+		{"contains hyphen", "/user-name", true},
+		{"contains space", "/user name", true},
+		{"segment starts with number", "/user/123", true},
+		{"double slash", "//", true},
+		{"double slash in middle", "/user//profile", true},
+		{"contains @ symbol", "/user@host", true},
+		{"contains # symbol", "/user#tag", true},
+		{"starts with dot", "/.config", true},
+		{"segment starts with dot", "/user/.config", true},
+		{"contains chinese characters", "/用户", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateFieldPath(tt.path)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateFieldPath(%q) error = %v, wantErr %v", tt.path, err, tt.wantErr)
+			}
+		})
+	}
+}
