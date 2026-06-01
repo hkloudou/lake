@@ -16,6 +16,12 @@ type TimeSeqID struct {
 
 // Score returns the float used as Redis ZADD score.
 // Example: ts=1700000000, seqid=123 → 1700000000.000123.
+//
+// This is the single Go mirror of the score the notify Lua computes
+// server-side (writer_atomic.go: ts + seqid/1e6). The zset is ordered by the
+// Lua-computed score and the read path recomputes it here, so the two MUST
+// stay bit-identical — DecodeDeltaMember rejects any mismatch, and
+// TestNotifyMemberConsistency_Redis pins the agreement against a live Redis.
 func (t TimeSeqID) Score() float64 {
 	return float64(t.Timestamp) + float64(t.SeqID)/1000000.0
 }

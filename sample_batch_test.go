@@ -7,15 +7,6 @@ import (
 	"testing"
 )
 
-// initedClient builds a ready Client pointed at unreachable Redis with an
-// in-memory storage resolver. Tests that don't need a real Redis use this to
-// focus on Sampler.Batch's branching logic (which short-circuits before any
-// Redis op for the cases under test).
-func initedClient(t *testing.T) *Client {
-	t.Helper()
-	return newTestClient("127.0.0.1:1")
-}
-
 // TestBatchSample_EmptyInput: zero catalogs in → empty map out, no panics.
 func TestBatchSample_EmptyInput(t *testing.T) {
 	s := NewSampler[int]("x", func(*ListResult) (int, error) { return 0, nil })
@@ -29,7 +20,7 @@ func TestBatchSample_EmptyInput(t *testing.T) {
 // on their own catalog only, never invoke the loader, and not be overridden
 // by post-init paths.
 func TestBatchSample_PreservesPerCatalogErrors(t *testing.T) {
-	c := initedClient(t)
+	c := newDeadClient(t)
 
 	listErr := errors.New("list-failed")
 	lists := map[string]*ListResult{
@@ -53,7 +44,7 @@ func TestBatchSample_PreservesPerCatalogErrors(t *testing.T) {
 // TestBatchSample_NilListEntry: a nil ListResult value yields a per-catalog
 // error rather than a panic.
 func TestBatchSample_NilListEntry(t *testing.T) {
-	c := initedClient(t)
+	c := newDeadClient(t)
 	lists := map[string]*ListResult{
 		"valid": {client: c, catalog: "valid", Err: errors.New("dummy")},
 		"nil":   nil,

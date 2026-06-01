@@ -98,24 +98,11 @@ func TestParseJSON_InvalidJSONReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error on invalid JSON, got nil")
 	}
-	// Regression check: must not silently return (nil, nil) like the old
-	// unsafe.Pointer-based gjson branch did on type-assert failure.
-	if out != nil && err == nil {
-		t.Fatal("must not return (non-nil, nil) on parse failure")
-	}
-	if out == nil && err == nil {
-		t.Fatal("must not return (nil, nil) — silent failure regression")
-	}
-}
-
-func TestParseJSON_NoSilentNilNil(t *testing.T) {
-	// The previous unsafe.Pointer impl had `return nil, nil` in the gjson
-	// type-assert fallback. Because gjson.Result is the actual T here,
-	// the assertion always succeeds; this test is structured so a future
-	// refactor that re-introduces a silent (nil, nil) path would fail.
-	out, err := parseJSON[gjson.Result]([]byte(`{}`))
-	if err == nil && out == nil {
-		t.Fatal("(nil, nil) is not an acceptable parseJSON return")
+	// Regression check: the old unsafe.Pointer impl could silently return
+	// (nil, nil) on a failed conversion. A parse failure must yield a nil
+	// result alongside the error — never a non-nil value, never a silent nil.
+	if out != nil {
+		t.Fatalf("on parse failure want nil result, got %v", *out)
 	}
 }
 

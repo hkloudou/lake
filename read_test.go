@@ -10,7 +10,7 @@ import (
 )
 
 func TestFillDeltasBody_CanceledContextDoesNotHang(t *testing.T) {
-	c := newTestClient("127.0.0.1:1")
+	c := newDeadClient(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
