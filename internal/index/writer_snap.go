@@ -17,13 +17,39 @@ func NewWriter(rdb *redis.Client) *Writer {
 	return &Writer{rdb: rdb}
 }
 
-// AddSnap upserts the catalog's snap entry in "<prefix>:s" as [tsSeq, uri].
-// HSet overwrites any prior entry; the previous snap object is left orphan in
-// storage (V3 contract).
+// addSnapScript upserts the catalog's snap entry only when the new stop is
+// strictly newer than the stored one. Snapshot saves are async and may race
+// across processes: without the guard, a slow save computed at an older stop
+// could land after a newer one and regress the snap pointer (correct but
+// wasteful — every read replays more deltas until it heals). A stored value
+// that fails to decode is treated as absent and overwritten (self-heal).
+// Returns 1 when the entry was written, 0 when the stored snap was kept.
+const addSnapScript = `
+local cur = redis.call("HGET", KEYS[1], ARGV[1])
+if cur then
+  local ok, arr = pcall(cjson.decode, cur)
+  if ok and type(arr) == "table" and type(arr[1]) == "string" then
+    local ts, seq = string.match(arr[1], "^(%d+)_(%d+)$")
+    if ts and tonumber(ts) + tonumber(seq) / 1000000.0 >= tonumber(ARGV[3]) then
+      return 0
+    end
+  end
+end
+redis.call("HSET", KEYS[1], ARGV[1], ARGV[2])
+return 1
+`
+
+// AddSnap upserts the catalog's snap entry in "<prefix>:s" as [tsSeq, uri],
+// but only monotonically: an entry at or past stopTsSeq is kept and the call
+// is a silent no-op (the freshly written snap object is left orphan in
+// storage, like any superseded snap — V3 contract).
 func (w *Writer) AddSnap(ctx context.Context, catalog string, stopTsSeq TimeSeqID, uri string) error {
 	val, err := EncodeSnapValue(stopTsSeq, uri)
 	if err != nil {
 		return err
 	}
-	return w.rdb.HSet(ctx, w.MakeSnapsHashKey(), catalog, val).Err()
+	return w.rdb.Eval(ctx, addSnapScript,
+		[]string{w.MakeSnapsHashKey()},
+		catalog, val, stopTsSeq.Score(),
+	).Err()
 }

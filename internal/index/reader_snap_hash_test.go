@@ -90,8 +90,8 @@ func TestSnapHashRoundTrip(t *testing.T) {
 	}
 }
 
-// TestSnapHashOverwrite confirms the V3 contract: each AddSnap on a
-// catalog overwrites its previous entry.
+// TestSnapHashOverwrite confirms the V3 contract: an AddSnap with a newer
+// stop overwrites the catalog's previous entry (still one field per catalog).
 func TestSnapHashOverwrite(t *testing.T) {
 	rdb, prefix := indexTestRedis(t)
 	w := NewWriter(rdb)
@@ -124,6 +124,62 @@ func TestSnapHashOverwrite(t *testing.T) {
 	}
 	if cnt != 1 {
 		t.Fatalf("HLen: got %d, want 1 (one catalog, one field)", cnt)
+	}
+}
+
+// TestSnapHashMonotonic pins AddSnap's anti-regression guard: snapshot saves
+// are async and may race across processes, so a save computed at an OLDER
+// stop that lands late must NOT regress the snap pointer. Equal stops keep
+// the stored entry too (first writer wins). Run against real Redis because
+// the guard lives in Lua.
+func TestSnapHashMonotonic(t *testing.T) {
+	rdb, prefix := indexTestRedis(t)
+	w := NewWriter(rdb)
+	r := NewReader(rdb)
+	w.SetPrefix(prefix)
+	r.SetPrefix(prefix)
+
+	ctx := context.Background()
+	older := TimeSeqID{Timestamp: 1700000100, SeqID: 500}
+	newer := TimeSeqID{Timestamp: 1700000200, SeqID: 1}
+
+	if err := w.AddSnap(ctx, "users", newer, "oss://b/"+newer.String()+".snap"); err != nil {
+		t.Fatalf("AddSnap newer: %v", err)
+	}
+	// A late save at an older stop is silently dropped.
+	if err := w.AddSnap(ctx, "users", older, "oss://b/"+older.String()+".snap"); err != nil {
+		t.Fatalf("AddSnap older: %v", err)
+	}
+	// Same stop, different uri: stored entry wins.
+	if err := w.AddSnap(ctx, "users", newer, "oss://elsewhere/"+newer.String()+".snap"); err != nil {
+		t.Fatalf("AddSnap equal: %v", err)
+	}
+
+	got, err := r.GetLatestSnap(ctx, "users")
+	if err != nil {
+		t.Fatalf("GetLatestSnap: %v", err)
+	}
+	if got.StopTsSeq != newer {
+		t.Fatalf("snap pointer regressed: got stop=%v, want %v", got.StopTsSeq, newer)
+	}
+	if got.URI != "oss://b/"+newer.String()+".snap" {
+		t.Fatalf("equal-stop AddSnap replaced the entry: uri=%q", got.URI)
+	}
+
+	// An undecodable stored value must not wedge the catalog: AddSnap
+	// treats it as absent and overwrites (self-heal).
+	if err := rdb.HSet(ctx, r.MakeSnapsHashKey(), "users", "not-json").Err(); err != nil {
+		t.Fatalf("HSet corrupt: %v", err)
+	}
+	if err := w.AddSnap(ctx, "users", older, "oss://b/"+older.String()+".snap"); err != nil {
+		t.Fatalf("AddSnap over corrupt: %v", err)
+	}
+	got, err = r.GetLatestSnap(ctx, "users")
+	if err != nil {
+		t.Fatalf("GetLatestSnap after heal: %v", err)
+	}
+	if got.StopTsSeq != older {
+		t.Fatalf("corrupt entry not healed: got stop=%v, want %v", got.StopTsSeq, older)
 	}
 }
 

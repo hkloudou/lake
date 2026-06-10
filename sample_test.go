@@ -38,6 +38,27 @@ func TestSampleCacheCodec(t *testing.T) {
 	}
 }
 
+// TestNewSamplerValidatesIndicator: the indicator is embedded verbatim in
+// the Redis memo key "<prefix>:m:<indicator>", so NewSampler enforces the
+// catalog charset on it (fail-fast panic, per package policy).
+func TestNewSamplerValidatesIndicator(t *testing.T) {
+	loader := func(*ListResult) (int, error) { return 0, nil }
+
+	for _, ok := range []string{"x", "user-stats", "a/b", "A.B_c"} {
+		NewSampler[int](ok, loader) // must not panic
+	}
+	for _, bad := range []string{"a:b", "a|b", "(paren", "has space", "中文"} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("indicator %q: expected panic, got none", bad)
+				}
+			}()
+			NewSampler[int](bad, loader)
+		}()
+	}
+}
+
 // TestSamplerIsStale locks in the layered staleness contract: the data-
 // version floor is mandatory, while maxAge and shouldRefresh can only ADD
 // refresh triggers — never suppress one the data version requires.
@@ -65,6 +86,16 @@ func TestSamplerIsStale(t *testing.T) {
 	}
 	if !aged.isStale(SampleMeta{Score: 100, UpdatedAt: 1000}, listAt(100), noPeers, 1015) {
 		t.Error("past maxAge should be stale")
+	}
+
+	// Sub-second maxAge must not truncate to "always stale": with the clock at
+	// the same second as the compute, the entry is younger than maxAge → fresh.
+	subSec := NewSampler[int]("x", base.loader, WithMaxAge[int](500*time.Millisecond))
+	if subSec.isStale(SampleMeta{Score: 100, UpdatedAt: 1000}, listAt(100), noPeers, 1000) {
+		t.Error("sub-second maxAge with zero elapsed must be fresh")
+	}
+	if !subSec.isStale(SampleMeta{Score: 100, UpdatedAt: 1000}, listAt(100), noPeers, 1001) {
+		t.Error("sub-second maxAge past one elapsed second must be stale")
 	}
 
 	// shouldRefresh is additive: true forces a refresh even when fresh...

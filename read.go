@@ -50,10 +50,14 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 
 	// Async snapshot save: fire-and-forget on a background context so an aborted
 	// Read does not cancel a snapshot that benefits everyone else. Skipped
-	// entirely when no snap target is configured.
+	// entirely when no snap target is configured. The goroutine gets a private
+	// copy: resultData is returned to the caller, who is free to mutate it
+	// while the save is still reading — and a mutated snapshot would poison
+	// every later read of the catalog.
 	if c.snapProvider != "" {
 		if next := list.NextSnap(); next != nil {
-			go c.saveSnapshot(context.Background(), list.catalog, next.StopTsSeq, resultData)
+			snapData := append([]byte(nil), resultData...)
+			go c.saveSnapshot(context.Background(), list.catalog, next.StopTsSeq, snapData)
 		}
 	}
 	return resultData, nil
