@@ -90,8 +90,8 @@ func TestSnapHashRoundTrip(t *testing.T) {
 	}
 }
 
-// TestSnapHashOverwrite confirms the V3 contract: each AddSnap on a
-// catalog overwrites its previous entry.
+// TestSnapHashOverwrite confirms the V3 contract: an AddSnap with a newer
+// stop overwrites the catalog's previous entry (still one field per catalog).
 func TestSnapHashOverwrite(t *testing.T) {
 	rdb, prefix := indexTestRedis(t)
 	w := NewWriter(rdb)
@@ -124,6 +124,77 @@ func TestSnapHashOverwrite(t *testing.T) {
 	}
 	if cnt != 1 {
 		t.Fatalf("HLen: got %d, want 1 (one catalog, one field)", cnt)
+	}
+}
+
+// TestSnapHashMonotonic pins AddSnap's anti-regression guard: snapshot saves
+// are async and may race across processes, so a save computed at an OLDER
+// stop that lands late must NOT regress the snap pointer. Equal stops keep
+// the stored entry too (first writer wins). Run against real Redis because
+// the guard lives in Lua.
+func TestSnapHashMonotonic(t *testing.T) {
+	rdb, prefix := indexTestRedis(t)
+	w := NewWriter(rdb)
+	r := NewReader(rdb)
+	w.SetPrefix(prefix)
+	r.SetPrefix(prefix)
+
+	ctx := context.Background()
+	older := TimeSeqID{Timestamp: 1700000100, SeqID: 500}
+	newer := TimeSeqID{Timestamp: 1700000200, SeqID: 1}
+
+	if err := w.AddSnap(ctx, "users", newer, "oss://b/"+newer.String()+".snap"); err != nil {
+		t.Fatalf("AddSnap newer: %v", err)
+	}
+	// A late save at an older stop is silently dropped.
+	if err := w.AddSnap(ctx, "users", older, "oss://b/"+older.String()+".snap"); err != nil {
+		t.Fatalf("AddSnap older: %v", err)
+	}
+	// Same stop, different uri: stored entry wins.
+	if err := w.AddSnap(ctx, "users", newer, "oss://elsewhere/"+newer.String()+".snap"); err != nil {
+		t.Fatalf("AddSnap equal: %v", err)
+	}
+
+	got, err := r.GetLatestSnap(ctx, "users")
+	if err != nil {
+		t.Fatalf("GetLatestSnap: %v", err)
+	}
+	if got.StopTsSeq != newer {
+		t.Fatalf("snap pointer regressed: got stop=%v, want %v", got.StopTsSeq, newer)
+	}
+	if got.URI != "oss://b/"+newer.String()+".snap" {
+		t.Fatalf("equal-stop AddSnap replaced the entry: uri=%q", got.URI)
+	}
+
+	// A stored value the Go reader rejects must not wedge the catalog: AddSnap
+	// treats it as absent and overwrites (self-heal) — even at an older stop,
+	// and even when the corrupt value carries a huge tsSeq score. The keep
+	// branch in Lua must therefore mirror DecodeSnapValue exactly; these are
+	// the shapes that score high in a laxer decoder but fail the Go one.
+	for _, corrupt := range []string{
+		"not-json",
+		`["9999999999_1"]`,                 // missing uri
+		`["9999999999_1",""]`,              // empty uri
+		`["9999999999_1",42]`,              // non-string uri
+		`["99999999999999_1","oss://x"]`,   // ts past the year-3000 cap
+		`["09999999999_1","oss://x"]`,      // leading-zero ts
+		`["9999999999_0","oss://x"]`,       // seq 0 outside 1..999999
+		`["9999999999_011","oss://x"]`,     // leading-zero seq
+		`["9999999999_1000000","oss://x"]`, // seq past 999999
+	} {
+		if err := rdb.HSet(ctx, r.MakeSnapsHashKey(), "users", corrupt).Err(); err != nil {
+			t.Fatalf("HSet corrupt %q: %v", corrupt, err)
+		}
+		if err := w.AddSnap(ctx, "users", older, "oss://b/"+older.String()+".snap"); err != nil {
+			t.Fatalf("AddSnap over corrupt %q: %v", corrupt, err)
+		}
+		got, err = r.GetLatestSnap(ctx, "users")
+		if err != nil {
+			t.Fatalf("GetLatestSnap after healing %q: %v", corrupt, err)
+		}
+		if got.StopTsSeq != older {
+			t.Fatalf("corrupt entry %q not healed: got stop=%v, want %v", corrupt, got.StopTsSeq, older)
+		}
 	}
 }
 

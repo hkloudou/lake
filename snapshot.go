@@ -21,8 +21,10 @@ func (c *Client) IterateSnaps(ctx context.Context, fn func(catalog string, snap 
 }
 
 // saveSnapshot writes snap bytes to the configured snap target and upserts the
-// Redis hash entry (as [tsSeq, uri]). No-op when no snap target is configured.
-// SingleFlight on (catalog, stop) dedupes concurrent saves.
+// Redis hash entry (as [tsSeq, uri]) — monotonically: AddSnap drops the upsert
+// if a newer snap already landed, so racing saves can never regress the
+// pointer. No-op when no snap target is configured. SingleFlight on
+// (catalog, stop) dedupes concurrent saves within this process.
 func (c *Client) saveSnapshot(ctx context.Context, catalog string, stop index.TimeSeqID, data []byte) (string, error) {
 	if c.snapProvider == "" || c.snapBucket == "" {
 		return "", nil

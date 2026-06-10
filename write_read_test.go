@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hkloudou/lake/v3/internal/objkey"
 	"github.com/hkloudou/lake/v3/storage"
 	"github.com/hkloudou/lake/v3/storage/mem"
 	"github.com/tidwall/gjson"
@@ -80,5 +81,68 @@ func TestWriteReadRoundTrip_Redis(t *testing.T) {
 	// before cleanup (a fire-and-forget goroutine otherwise writes after Cleanup).
 	if !waitFor(func() bool { s, _ := c.reader.GetLatestSnap(ctx, "users"); return s != nil }) {
 		t.Fatal("snapshot was not indexed within timeout")
+	}
+}
+
+// TestReadBytesMutationDoesNotCorruptSnapshot pins the isolation between the
+// bytes ReadBytes hands the caller and the bytes the async snapshot save
+// persists: the caller owns its slice and may mutate it immediately, and the
+// snapshot must still capture the original merged document. (A shared slice
+// here once meant a caller mutation could persist a corrupt snapshot, which
+// then poisoned every later read of the catalog.)
+func TestReadBytesMutationDoesNotCorruptSnapshot(t *testing.T) {
+	rdb := redisTestDB(t, 13)
+	prefix := testPrefix(t)
+	cleanupKeys(t, rdb, prefix+":*")
+
+	store := mem.New()
+	resolve := func(_ storage.Kind, provider, bucket string) (storage.Storage, error) {
+		return presignBucket{store.Bucket(bucket)}, nil
+	}
+	c := New(prefix, rdb, resolve, WithSnapTarget("mem", "snaps"))
+
+	ctx := context.Background()
+	h, err := c.WriteBegin(ctx, WriteBeginRequest{
+		Catalog: "users", Path: "/", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data",
+	})
+	if err != nil {
+		t.Fatalf("WriteBegin: %v", err)
+	}
+	const doc = `{"name":"Alice"}`
+	if err := store.Bucket(h.Bucket).Put(ctx, h.Catalog, h.Key, []byte(doc)); err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	if err := c.WriteNotify(ctx, h); err != nil {
+		t.Fatalf("WriteNotify: %v", err)
+	}
+
+	list := c.List(ctx, "users")
+	if list.Err != nil {
+		t.Fatalf("List: %v", list.Err)
+	}
+	got, err := ReadBytes(ctx, list)
+	if err != nil {
+		t.Fatalf("ReadBytes: %v", err)
+	}
+	// Caller mutates its result right away, while the snapshot save may still
+	// be running in the background.
+	for i := range got {
+		got[i] = 'X'
+	}
+
+	var snap *SnapInfo
+	if !waitFor(func() bool { snap, _ = c.reader.GetLatestSnap(ctx, "users"); return snap != nil }) {
+		t.Fatal("snapshot was not indexed within timeout")
+	}
+	_, _, path, err := objkey.ParseURI(snap.URI)
+	if err != nil {
+		t.Fatalf("parse snap URI %q: %v", snap.URI, err)
+	}
+	data, err := store.Bucket("snaps").Get(ctx, "users", path)
+	if err != nil {
+		t.Fatalf("fetch snap object: %v", err)
+	}
+	if string(data) != doc {
+		t.Fatalf("snapshot content corrupted by caller mutation: got %q, want %q", data, doc)
 	}
 }

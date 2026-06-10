@@ -148,6 +148,11 @@ func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...
 // delta (carrying handle.URI) in Redis. It does NOT touch storage — the body
 // is already at handle.URI from the direct upload.
 //
+// Handles round-trip through clients Lake does not trust, so Notify rebinds
+// the handle to its own catalog: the URI's object path must be exactly the
+// delta path WriteBegin derived for (Catalog, UUID). A tampered handle can
+// therefore never point a catalog's index at another catalog's objects.
+//
 // Notify is NOT idempotent — duplicate calls produce duplicate deltas (each
 // with its own tsSeq, all referencing the same URI). For Replace / RFC7396,
 // applying the same body twice is benign; nevertheless, callers should retry
@@ -167,13 +172,20 @@ func (c *Client) WriteNotify(ctx context.Context, h *WriteHandle) error {
 	if h.MergeType < MergeTypeReplace || h.MergeType > MergeTypeRFC7396 {
 		return fmt.Errorf("invalid mergeType: %d", h.MergeType)
 	}
+	if !isUUIDHex(h.UUID) {
+		return fmt.Errorf("invalid uuid in handle: %q", h.UUID)
+	}
 	if h.URI == "" {
 		return errors.New("empty URI in handle")
 	}
-	if _, _, _, err := objkey.ParseURI(h.URI); err != nil {
+	_, _, path, err := objkey.ParseURI(h.URI)
+	if err != nil {
 		return err
 	}
-	_, _, err := c.writer.Notify(ctx, h.Catalog, h.Path, h.MergeType, h.URI)
+	if want := objkey.DeltaPath(h.Catalog, h.UUID); path != want {
+		return fmt.Errorf("handle URI path %q does not match catalog/uuid (want %q)", path, want)
+	}
+	_, _, err = c.writer.Notify(ctx, h.Catalog, h.Path, h.MergeType, h.URI)
 	return err
 }
 
@@ -186,4 +198,20 @@ func newUUID() (string, error) {
 	b[6] = (b[6] & 0x0f) | 0x40 // version 4
 	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
 	return hex.EncodeToString(b[:]), nil
+}
+
+// isUUIDHex reports whether s is exactly the form newUUID emits: 32 lowercase
+// hex chars. WriteNotify uses it to keep a client-supplied UUID from smuggling
+// path segments into the recomputed delta path.
+func isUUIDHex(s string) bool {
+	if len(s) != 32 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hkloudou/lake/v3/internal/utils"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -67,11 +68,16 @@ type SamplerOption[T any] func(*Sampler[T])
 
 // NewSampler builds a reusable Sampler for one indicator. loader computes
 // the sample from a catalog's ListResult on a cache miss. It panics if
-// indicator is empty or loader is nil (programmer error — fail-fast, per
-// package policy).
+// indicator is empty or invalid, or loader is nil (programmer error —
+// fail-fast, per package policy). The indicator is embedded verbatim in the
+// Redis memo key "<prefix>:m:<indicator>", so it follows the same charset
+// rules as catalog names (no ":" "|" "(" ")", ASCII only).
 func NewSampler[T any](indicator string, loader func(*ListResult) (T, error), opts ...SamplerOption[T]) *Sampler[T] {
 	if indicator == "" {
 		panic("lake: NewSampler indicator must be non-empty")
+	}
+	if err := utils.ValidateCatalog(indicator); err != nil {
+		panic(fmt.Sprintf("lake: NewSampler invalid indicator: %v", err))
 	}
 	if loader == nil {
 		panic("lake: NewSampler loader must be non-nil")
@@ -267,7 +273,10 @@ func (s *Sampler[T]) isStale(meta SampleMeta, list *ListResult, peers map[string
 	if !(meta.Score >= lastUpdated && meta.Score > 0) {
 		return true // data advanced past the cached version (or none) → refresh
 	}
-	if s.maxAge > 0 && now > 0 && meta.UpdatedAt > 0 && now-meta.UpdatedAt >= int64(s.maxAge.Seconds()) {
+	// Compare in time.Duration so a sub-second maxAge keeps its value instead
+	// of truncating to 0 (which would mark every hit stale). The clock itself
+	// still ticks in whole seconds (~5s resolution).
+	if s.maxAge > 0 && now > 0 && meta.UpdatedAt > 0 && time.Duration(now-meta.UpdatedAt)*time.Second >= s.maxAge {
 		return true
 	}
 	if s.shouldRefresh != nil && s.shouldRefresh(meta, list, peers) {
