@@ -166,20 +166,35 @@ func TestSnapHashMonotonic(t *testing.T) {
 		t.Fatalf("equal-stop AddSnap replaced the entry: uri=%q", got.URI)
 	}
 
-	// An undecodable stored value must not wedge the catalog: AddSnap
-	// treats it as absent and overwrites (self-heal).
-	if err := rdb.HSet(ctx, r.MakeSnapsHashKey(), "users", "not-json").Err(); err != nil {
-		t.Fatalf("HSet corrupt: %v", err)
-	}
-	if err := w.AddSnap(ctx, "users", older, "oss://b/"+older.String()+".snap"); err != nil {
-		t.Fatalf("AddSnap over corrupt: %v", err)
-	}
-	got, err = r.GetLatestSnap(ctx, "users")
-	if err != nil {
-		t.Fatalf("GetLatestSnap after heal: %v", err)
-	}
-	if got.StopTsSeq != older {
-		t.Fatalf("corrupt entry not healed: got stop=%v, want %v", got.StopTsSeq, older)
+	// A stored value the Go reader rejects must not wedge the catalog: AddSnap
+	// treats it as absent and overwrites (self-heal) — even at an older stop,
+	// and even when the corrupt value carries a huge tsSeq score. The keep
+	// branch in Lua must therefore mirror DecodeSnapValue exactly; these are
+	// the shapes that score high in a laxer decoder but fail the Go one.
+	for _, corrupt := range []string{
+		"not-json",
+		`["9999999999_1"]`,                 // missing uri
+		`["9999999999_1",""]`,              // empty uri
+		`["9999999999_1",42]`,              // non-string uri
+		`["99999999999999_1","oss://x"]`,   // ts past the year-3000 cap
+		`["09999999999_1","oss://x"]`,      // leading-zero ts
+		`["9999999999_0","oss://x"]`,       // seq 0 outside 1..999999
+		`["9999999999_011","oss://x"]`,     // leading-zero seq
+		`["9999999999_1000000","oss://x"]`, // seq past 999999
+	} {
+		if err := rdb.HSet(ctx, r.MakeSnapsHashKey(), "users", corrupt).Err(); err != nil {
+			t.Fatalf("HSet corrupt %q: %v", corrupt, err)
+		}
+		if err := w.AddSnap(ctx, "users", older, "oss://b/"+older.String()+".snap"); err != nil {
+			t.Fatalf("AddSnap over corrupt %q: %v", corrupt, err)
+		}
+		got, err = r.GetLatestSnap(ctx, "users")
+		if err != nil {
+			t.Fatalf("GetLatestSnap after healing %q: %v", corrupt, err)
+		}
+		if got.StopTsSeq != older {
+			t.Fatalf("corrupt entry %q not healed: got stop=%v, want %v", corrupt, got.StopTsSeq, older)
+		}
 	}
 }
 
