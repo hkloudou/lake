@@ -13,11 +13,11 @@ func listAt(score float64) *ListResult {
 	return &ListResult{Entries: []index.DeltaInfo{{Score: score}}}
 }
 
-// TestSampleCacheCodec round-trips the [score, updatedAt, data] format and
-// confirms the legacy 2-element [score, data] format fails to decode (so a
-// reader treats it as a miss and recomputes).
+// TestSampleCacheCodec round-trips the [score, updatedAt, removeGen, data]
+// format and confirms the legacy shorter formats fail to decode (so a
+// reader treats them as a miss and recomputes).
 func TestSampleCacheCodec(t *testing.T) {
-	raw, err := marshalSampleCache(SampleMeta{Score: 12.5, UpdatedAt: 1700}, map[string]int{"a": 1})
+	raw, err := marshalSampleCache(SampleMeta{Score: 12.5, UpdatedAt: 1700, RemoveGen: "3"}, map[string]int{"a": 1})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -25,16 +25,25 @@ func TestSampleCacheCodec(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if meta.Score != 12.5 || meta.UpdatedAt != 1700 {
+	if meta.Score != 12.5 || meta.UpdatedAt != 1700 || meta.RemoveGen != "3" {
 		t.Fatalf("meta round-trip: got %+v", meta)
 	}
 	if data["a"] != 1 {
 		t.Fatalf("data round-trip: got %+v", data)
 	}
 
-	// Legacy 2-element format must NOT decode as a valid 3-element entry.
-	if _, _, err := unmarshalSampleCache[map[string]int]([]byte(`[12.5,{"a":1}]`)); err == nil {
-		t.Fatal("legacy 2-element cache value must fail to decode (forces recompute)")
+	// An empty generation is stored normalized, so a decoded entry always
+	// compares equal against a no-removals ListResult.
+	raw, _ = marshalSampleCache(SampleMeta{Score: 1, UpdatedAt: 1}, 0)
+	if meta, _, err := unmarshalSampleCache[int](raw); err != nil || meta.RemoveGen != "0" {
+		t.Fatalf("normalized gen: meta=%+v err=%v, want RemoveGen \"0\"", meta, err)
+	}
+
+	// Legacy 2- and 3-element formats must NOT decode as valid entries.
+	for _, legacy := range []string{`[12.5,{"a":1}]`, `[12.5,1700,{"a":1}]`} {
+		if _, _, err := unmarshalSampleCache[map[string]int]([]byte(legacy)); err == nil {
+			t.Fatalf("legacy cache value %s must fail to decode (forces recompute)", legacy)
+		}
 	}
 }
 
@@ -77,6 +86,20 @@ func TestSamplerIsStale(t *testing.T) {
 	// Sentinel score 0 is never a valid hit (matches the score>0 rule).
 	if !base.isStale(SampleMeta{Score: 0}, listAt(0), noPeers, 0) {
 		t.Error("zero score must be stale")
+	}
+	// Removal-generation mismatch is mandatory staleness in BOTH directions:
+	// the entry was not computed from the caller's view of the log.
+	if !base.isStale(SampleMeta{Score: 100, RemoveGen: "1"}, listAt(100), noPeers, 0) {
+		t.Error("entry from an older list generation must be stale")
+	}
+	genList := listAt(100)
+	genList.removeGen = "2"
+	if !base.isStale(SampleMeta{Score: 100, RemoveGen: "1"}, genList, noPeers, 0) {
+		t.Error("generation mismatch must be stale")
+	}
+	genList.removeGen = "1"
+	if base.isStale(SampleMeta{Score: 100, RemoveGen: "1"}, genList, noPeers, 0) {
+		t.Error("matching generations must be fresh")
 	}
 
 	// maxAge: fresh within the window, stale past it.

@@ -21,16 +21,31 @@ func (c *Client) IterateSnaps(ctx context.Context, fn func(catalog string, snap 
 }
 
 // saveSnapshot writes snap bytes to the configured snap target and upserts the
-// Redis hash entry (as [tsSeq, uri]) — monotonically: AddSnap drops the upsert
-// if a newer snap already landed, so racing saves can never regress the
-// pointer. No-op when no snap target is configured. SingleFlight on
-// (catalog, stop) dedupes concurrent saves within this process.
-func (c *Client) saveSnapshot(ctx context.Context, catalog string, stop index.TimeSeqID, data []byte) (string, error) {
+// Redis hash entry (as [tsSeq, uri]) — monotonically, and only if removeGen
+// still matches the catalog's removal generation: AddSnap drops the upsert if
+// a newer snap already landed OR a RemoveDelta interleaved since the read
+// that produced data (which would otherwise resurrect the removed write).
+// No-op when no snap target is configured. SingleFlight on (catalog, stop,
+// gen) dedupes concurrent saves within this process.
+func (c *Client) saveSnapshot(ctx context.Context, catalog string, stop index.TimeSeqID, removeGen string, data []byte) (string, error) {
 	if c.snapProvider == "" || c.snapBucket == "" {
 		return "", nil
 	}
-	return c.snapFlight.Do(fmt.Sprintf("%s_%s", catalog, stop), func() (string, error) {
-		path := objkey.SnapPath(catalog, stop.String())
+	return c.snapFlight.Do(fmt.Sprintf("%s_%s_%s", catalog, stop, removeGen), func() (string, error) {
+		// The object path must be unique per (stop, removal generation), not
+		// just per stop: removing a non-latest delta leaves the stop
+		// unchanged, and if both generations shared one path, the stale
+		// generation's Put could finish LAST and overwrite the bytes the
+		// already-published pointer references — resurrecting the removed
+		// write behind AddSnap's back. Same stop + same generation implies
+		// identical content, so sharing within a generation stays benign.
+		// Readers fetch the URI recorded in the pointer verbatim, so the
+		// name shape is free to vary; gen 0 keeps the legacy name.
+		name := stop.String()
+		if removeGen != "" && removeGen != "0" {
+			name += "-g" + removeGen
+		}
+		path := objkey.SnapPath(catalog, name)
 		st, err := c.storageFor(storage.Snap, c.snapProvider, c.snapBucket)
 		if err != nil {
 			return "", fmt.Errorf("resolve snap target: %w", err)
@@ -39,7 +54,7 @@ func (c *Client) saveSnapshot(ctx context.Context, catalog string, stop index.Ti
 			return "", fmt.Errorf("save snapshot: %w", err)
 		}
 		uri := objkey.BuildURI(c.snapProvider, c.snapBucket, path)
-		if err := c.writer.AddSnap(ctx, catalog, stop, uri); err != nil {
+		if err := c.writer.AddSnap(ctx, catalog, stop, uri, removeGen); err != nil {
 			return "", fmt.Errorf("index snapshot: %w", err)
 		}
 		return uri, nil

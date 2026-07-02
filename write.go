@@ -2,8 +2,11 @@ package lake
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -50,6 +53,10 @@ type WriteHandle struct {
 	UploadMethod  string            `json:"uploadMethod"`
 	UploadHeaders map[string]string `json:"uploadHeaders"`
 	ExpiresAt     int64             `json:"expiresAt"` // unix seconds
+	// Signature authenticates the handle's identity fields when the Client
+	// was built WithHandleSecret; empty otherwise. Clients must echo it back
+	// unchanged.
+	Signature string `json:"signature,omitempty"`
 }
 
 // WriteBeginOption tunes the presign call.
@@ -128,7 +135,7 @@ func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...
 	if err != nil {
 		return nil, fmt.Errorf("presign put: %w", err)
 	}
-	return &WriteHandle{
+	h := &WriteHandle{
 		Catalog:       req.Catalog,
 		Path:          req.Path,
 		MergeType:     req.MergeType,
@@ -141,7 +148,24 @@ func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...
 		UploadMethod:  upload.Method,
 		UploadHeaders: upload.Headers,
 		ExpiresAt:     time.Now().Add(o.ttl).Unix(),
-	}, nil
+	}
+	if len(c.handleSecret) > 0 {
+		h.Signature = c.signHandle(h)
+	}
+	return h, nil
+}
+
+// signHandle computes the HMAC-SHA256 over the handle's identity fields —
+// exactly the ones WriteNotify acts on plus ExpiresAt. The payload is a JSON
+// string array, so no field value can forge a boundary into a neighbour.
+func (c *Client) signHandle(h *WriteHandle) string {
+	payload, _ := json.Marshal([6]string{
+		h.Catalog, h.Path, strconv.Itoa(int(h.MergeType)),
+		h.UUID, h.URI, strconv.FormatInt(h.ExpiresAt, 10),
+	})
+	mac := hmac.New(sha256.New, c.handleSecret)
+	mac.Write(payload)
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 // WriteNotify finalises a write: allocates a tsSeq and atomically records the
@@ -152,6 +176,9 @@ func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...
 // the handle to its own catalog: the URI's object path must be exactly the
 // delta path WriteBegin derived for (Catalog, UUID). A tampered handle can
 // therefore never point a catalog's index at another catalog's objects.
+// With WithHandleSecret configured, Notify additionally requires a valid
+// HMAC signature over the identity fields, pinning Path / MergeType /
+// ExpiresAt to what WriteBegin issued.
 //
 // Notify is NOT idempotent — duplicate calls produce duplicate deltas (each
 // with its own tsSeq, all referencing the same URI). For Replace / RFC7396,
@@ -184,6 +211,21 @@ func (c *Client) WriteNotify(ctx context.Context, h *WriteHandle) error {
 	}
 	if want := objkey.DeltaPath(h.Catalog, h.UUID); path != want {
 		return fmt.Errorf("handle URI path %q does not match catalog/uuid (want %q)", path, want)
+	}
+	if len(c.handleSecret) > 0 {
+		if h.Signature == "" {
+			return errors.New("handle signature required")
+		}
+		if !hmac.Equal([]byte(c.signHandle(h)), []byte(h.Signature)) {
+			return errors.New("invalid handle signature")
+		}
+		// The signature authenticates ExpiresAt, so enforce it too: a leaked
+		// signed handle must not be replayable indefinitely. (Without a
+		// secret the field is client-editable, so checking it there would
+		// only be theater.)
+		if now := time.Now().Unix(); now > h.ExpiresAt {
+			return fmt.Errorf("handle expired at %d (now %d)", h.ExpiresAt, now)
+		}
 	}
 	_, _, err = c.writer.Notify(ctx, h.Catalog, h.Path, h.MergeType, h.URI)
 	return err

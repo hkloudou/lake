@@ -14,6 +14,7 @@ import (
 type ListResult struct {
 	client     *Client
 	catalog    string
+	removeGen  string // removal generation at list time; guards snapshot saves
 	LatestSnap *index.SnapInfo
 	Entries    []index.DeltaInfo
 	Err        error
@@ -33,6 +34,19 @@ func (m ListResult) LastUpdated() float64 {
 // Exist reports whether the catalog has any persisted state.
 func (m ListResult) Exist() bool {
 	return m.LatestSnap != nil || len(m.Entries) > 0
+}
+
+// RemoveGen is the catalog's removal generation observed atomically with
+// this list ("0" until the first RemoveDelta). Cross-catalog Samplers use it
+// the same way they use LastUpdated: record the peer generations the sample
+// depended on inside T, and have a WithShouldRefresh predicate compare them
+// against peers[...].RemoveGen() — a removal on a peer can lower or preserve
+// that peer's LastUpdated, so the version alone cannot reveal it.
+func (m ListResult) RemoveGen() string {
+	if m.removeGen == "" {
+		return "0"
+	}
+	return m.removeGen
 }
 
 func (m ListResult) HasNextSnap() bool { return len(m.Entries) > 0 }
@@ -87,6 +101,7 @@ func (c *Client) List(ctx context.Context, catalog string) *ListResult {
 	return &ListResult{
 		client:     c,
 		catalog:    catalog,
+		removeGen:  rr.RemoveGen,
 		LatestSnap: snap,
 		Entries:    rr.Deltas,
 		Err:        rr.Err,
@@ -119,6 +134,7 @@ func (c *Client) BatchList(ctx context.Context, catalogs []string) map[string]*L
 			lr.LatestSnap = br.Snap
 			if br.ReadResult != nil {
 				lr.Entries = br.ReadResult.Deltas
+				lr.removeGen = br.ReadResult.RemoveGen
 			}
 		}
 		out[cat] = lr

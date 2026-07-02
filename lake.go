@@ -38,6 +38,8 @@ type Client struct {
 	snapFlight   xsync.SingleFlight[string] // dedupe concurrent snapshot saves on (catalog, stop)
 	sampleFlight xsync.SingleFlight[string] // dedupe concurrent Sampler[T] loaders on (catalog, indicator, score)
 
+	handleSecret []byte // WithHandleSecret; empty disables handle signing
+
 	eventHandlers []EventHandler
 }
 
@@ -45,6 +47,7 @@ type option struct {
 	sampleRdb    *redis.Client
 	snapProvider string
 	snapBucket   string
+	handleSecret []byte
 }
 
 // New creates a Lake client.
@@ -80,6 +83,7 @@ func New(prefix string, rdb *redis.Client, resolve storage.Resolver, opts ...fun
 		resolve:      resolve,
 		snapProvider: o.snapProvider,
 		snapBucket:   o.snapBucket,
+		handleSecret: o.handleSecret,
 		stores:       make(map[string]storage.Storage),
 		snapFlight:   xsync.NewSingleFlight[string](),
 		sampleFlight: xsync.NewSingleFlight[string](),
@@ -101,6 +105,24 @@ func WithSnapTarget(provider, bucket string) func(*option) {
 // separate Redis instance. Defaults to the authoritative rdb.
 func WithSampleCacheRedis(rdb *redis.Client) func(*option) {
 	return func(o *option) { o.sampleRdb = rdb }
+}
+
+// WithHandleSecret turns on WriteHandle signing. WriteBegin stamps every
+// handle with an HMAC-SHA256 over its identity fields, and WriteNotify
+// rejects any handle whose signature is missing or does not match — so a
+// handle that round-tripped through an untrusted client provably carries
+// exactly the Catalog/Path/MergeType/UUID/URI/ExpiresAt that WriteBegin
+// issued — and, because ExpiresAt is then trustworthy, WriteNotify also
+// rejects handles past it (no indefinite replay of a leaked handle).
+// (Without a secret, notify still enforces the structural URI↔catalog/uuid
+// binding; the secret additionally pins Path, MergeType and ExpiresAt.)
+// Every process sharing the prefix must be given the same secret.
+// Panics on an empty secret (programmer error at construction time).
+func WithHandleSecret(secret []byte) func(*option) {
+	if len(secret) == 0 {
+		panic("lake: WithHandleSecret requires a non-empty secret")
+	}
+	return func(o *option) { o.handleSecret = append([]byte(nil), secret...) }
 }
 
 // WithSampleCacheURL is the URL form of WithSampleCacheRedis. Panics on an

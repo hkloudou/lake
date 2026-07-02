@@ -43,3 +43,16 @@ func (w *indexIO) MakeSampleIndicatorKey(indicator string) string {
 	w.requirePrefix()
 	return fmt.Sprintf("%s:m:%s", w.prefix, encode.EncodeRedisCatalogName(indicator))
 }
+
+// MakeSampleRemoveGenKey: deployment-wide catalog-level sample removal
+// generation Hash "<prefix>:mrg", with catalog as field. Unlike the
+// per-indicator epoch (which lives inside each memo hash and so cannot
+// guard an indicator that has never cached anything), this key is created
+// by the first HINCRBY — it exists independently of any memo hash, so a
+// RemoveDelta can void in-flight sample writes for indicators Lake has
+// never seen. Cannot collide with "<prefix>:m:<indicator>" (that form
+// always has a second ":").
+func (w *indexIO) MakeSampleRemoveGenKey() string {
+	w.requirePrefix()
+	return fmt.Sprintf("%s:mrg", w.prefix)
+}

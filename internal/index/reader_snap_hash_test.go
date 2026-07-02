@@ -59,7 +59,7 @@ func TestSnapHashRoundTrip(t *testing.T) {
 	stop := TimeSeqID{Timestamp: 1700000100, SeqID: 500}
 	uri := "oss://my-bucket/4f3a/(users/1700000100_500.snap"
 
-	if err := w.AddSnap(ctx, "users", stop, uri); err != nil {
+	if err := w.AddSnap(ctx, "users", stop, uri, ""); err != nil {
 		t.Fatalf("AddSnap: %v", err)
 	}
 
@@ -103,10 +103,10 @@ func TestSnapHashOverwrite(t *testing.T) {
 	stop1 := TimeSeqID{Timestamp: 1700000100, SeqID: 500}
 	stop2 := TimeSeqID{Timestamp: 1700000200, SeqID: 999}
 
-	if err := w.AddSnap(ctx, "users", stop1, "oss://b/"+stop1.String()+".snap"); err != nil {
+	if err := w.AddSnap(ctx, "users", stop1, "oss://b/"+stop1.String()+".snap", ""); err != nil {
 		t.Fatalf("first AddSnap: %v", err)
 	}
-	if err := w.AddSnap(ctx, "users", stop2, "oss://b/"+stop2.String()+".snap"); err != nil {
+	if err := w.AddSnap(ctx, "users", stop2, "oss://b/"+stop2.String()+".snap", ""); err != nil {
 		t.Fatalf("second AddSnap: %v", err)
 	}
 
@@ -143,15 +143,15 @@ func TestSnapHashMonotonic(t *testing.T) {
 	older := TimeSeqID{Timestamp: 1700000100, SeqID: 500}
 	newer := TimeSeqID{Timestamp: 1700000200, SeqID: 1}
 
-	if err := w.AddSnap(ctx, "users", newer, "oss://b/"+newer.String()+".snap"); err != nil {
+	if err := w.AddSnap(ctx, "users", newer, "oss://b/"+newer.String()+".snap", ""); err != nil {
 		t.Fatalf("AddSnap newer: %v", err)
 	}
 	// A late save at an older stop is silently dropped.
-	if err := w.AddSnap(ctx, "users", older, "oss://b/"+older.String()+".snap"); err != nil {
+	if err := w.AddSnap(ctx, "users", older, "oss://b/"+older.String()+".snap", ""); err != nil {
 		t.Fatalf("AddSnap older: %v", err)
 	}
 	// Same stop, different uri: stored entry wins.
-	if err := w.AddSnap(ctx, "users", newer, "oss://elsewhere/"+newer.String()+".snap"); err != nil {
+	if err := w.AddSnap(ctx, "users", newer, "oss://elsewhere/"+newer.String()+".snap", ""); err != nil {
 		t.Fatalf("AddSnap equal: %v", err)
 	}
 
@@ -185,7 +185,7 @@ func TestSnapHashMonotonic(t *testing.T) {
 		if err := rdb.HSet(ctx, r.MakeSnapsHashKey(), "users", corrupt).Err(); err != nil {
 			t.Fatalf("HSet corrupt %q: %v", corrupt, err)
 		}
-		if err := w.AddSnap(ctx, "users", older, "oss://b/"+older.String()+".snap"); err != nil {
+		if err := w.AddSnap(ctx, "users", older, "oss://b/"+older.String()+".snap", ""); err != nil {
 			t.Fatalf("AddSnap over corrupt %q: %v", corrupt, err)
 		}
 		got, err = r.GetLatestSnap(ctx, "users")
@@ -216,7 +216,7 @@ func TestIterateSnapsBatchBackup(t *testing.T) {
 	}
 
 	for catalog, stop := range stops {
-		if err := w.AddSnap(ctx, catalog, stop, "oss://b/"+stop.String()+".snap"); err != nil {
+		if err := w.AddSnap(ctx, catalog, stop, "oss://b/"+stop.String()+".snap", ""); err != nil {
 			t.Fatalf("AddSnap %s: %v", catalog, err)
 		}
 	}
@@ -273,7 +273,7 @@ func TestIterateSnapsEarlyStop(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		cat := fmt.Sprintf("c%02d", i)
 		ts := TimeSeqID{Timestamp: 1700000000 + int64(i), SeqID: 1}
-		if err := w.AddSnap(ctx, cat, ts, "oss://b/"+ts.String()+".snap"); err != nil {
+		if err := w.AddSnap(ctx, cat, ts, "oss://b/"+ts.String()+".snap", ""); err != nil {
 			t.Fatalf("AddSnap %s: %v", cat, err)
 		}
 	}
