@@ -101,3 +101,18 @@ func TestReplaceMerger_RejectsInvalidRootJSON(t *testing.T) {
 		t.Fatal("root replace must reject invalid JSON")
 	}
 }
+
+// TestReplaceMerger_RejectsInvalidFieldJSON pins the guard on the FIELD
+// replace path: bodies are client uploads Lake never inspected, and
+// sjson.SetRawBytes splices raw bytes verbatim — without the validation an
+// invalid body silently corrupts the merged document (err == nil, doc no
+// longer JSON) instead of failing with the offending delta identified.
+func TestReplaceMerger_RejectsInvalidFieldJSON(t *testing.T) {
+	merger := NewReplaceMerger()
+	for _, bad := range []string{`{invalid`, `not json`, ``, `{"a":1}garbage`} {
+		res, err := merger.Merge([]byte(`{"x":1}`), []byte(bad), "f")
+		if err == nil {
+			t.Fatalf("field replace accepted invalid body %q → %q", bad, res)
+		}
+	}
+}

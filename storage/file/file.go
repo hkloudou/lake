@@ -85,15 +85,33 @@ func (v *view) Put(_ context.Context, _ /*catalog*/, path string, data []byte) e
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+	dir := filepath.Dir(full)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("file: mkdir: %w", err)
 	}
-	tmp := full + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	// Unique temp name per writer: concurrent Puts of the same path (e.g. two
+	// processes racing to save the same snapshot) must not interleave writes
+	// into one shared "<path>.tmp" — each stages its own file, and the final
+	// rename stays atomic.
+	tmp, err := os.CreateTemp(dir, filepath.Base(full)+".tmp*")
+	if err != nil {
+		return fmt.Errorf("file: create tmp: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
 		return fmt.Errorf("file: write tmp: %w", err)
 	}
-	if err := os.Rename(tmp, full); err != nil {
-		os.Remove(tmp)
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return fmt.Errorf("file: close tmp: %w", err)
+	}
+	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+		os.Remove(tmp.Name())
+		return fmt.Errorf("file: chmod tmp: %w", err)
+	}
+	if err := os.Rename(tmp.Name(), full); err != nil {
+		os.Remove(tmp.Name())
 		return fmt.Errorf("file: rename: %w", err)
 	}
 	return nil
