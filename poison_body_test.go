@@ -61,4 +61,21 @@ func TestPoisonBodyFailsLoudly_Redis(t *testing.T) {
 	if snap, _ := c.reader.GetLatestSnap(ctx, "users"); snap != nil {
 		t.Fatalf("a failed read must not persist a snapshot, got %+v", snap)
 	}
+
+	// Recovery: RemoveDelta with the tsSeq the merge error names clears the
+	// poison entry, and the catalog reads again.
+	removed, err := c.RemoveDelta(ctx, "users", list.Entries[0].TsSeq.String())
+	if err != nil {
+		t.Fatalf("RemoveDelta: %v", err)
+	}
+	if !removed {
+		t.Fatal("RemoveDelta reported nothing removed")
+	}
+	got, err := ReadString(ctx, c.List(ctx, "users"))
+	if err != nil {
+		t.Fatalf("read after RemoveDelta: %v", err)
+	}
+	if got != "{}" {
+		t.Fatalf("read after RemoveDelta = %q, want empty document", got)
+	}
 }

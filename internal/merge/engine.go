@@ -36,8 +36,8 @@ func Merge(baseData []byte, entries []index.DeltaInfo) ([]byte, error) {
 		merged, err = merger.Merge(merged, entry.Body, ToGjsonPath(entry.Path))
 		if err != nil {
 			// Identify the exact offending delta: a single unappliable patch
-			// fails every read of the catalog, so operators need its tsSeq /
-			// uri to locate and remove it.
+			// fails every read of the catalog, and the tsSeq printed here is
+			// precisely what Client.RemoveDelta takes to clear it.
 			return nil, fmt.Errorf("merge failed (path=%s tsSeq=%s uri=%s type=%d): %w",
 				entry.Path, entry.TsSeq, entry.URI, entry.MergeType, err)
 		}

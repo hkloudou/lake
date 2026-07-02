@@ -268,6 +268,34 @@ func (s *Sampler[T]) Batch(ctx context.Context, lists map[string]*ListResult) ma
 	return out
 }
 
+// InvalidateSamples deletes the cached samples of one indicator for the given
+// catalogs (one HDEL on the memo hash) and returns how many entries existed.
+// The next Sample/Batch recomputes them.
+//
+// The memo hash has no TTL of its own, so this is the hook for the two cases
+// staleness policies cannot see: a catalog that was deleted outright (its
+// memo field would otherwise linger forever), and a loader whose CODE changed
+// (the data version didn't move, but the cached value is now computed wrong).
+// Works on any Client with the same prefix — no Sampler[T] value needed, so
+// ops tooling can sweep without knowing T.
+func (c *Client) InvalidateSamples(ctx context.Context, indicator string, catalogs ...string) (int64, error) {
+	for _, cat := range catalogs {
+		c.emitEvent(cat, "InvalidateSample", map[string]any{"indicator": indicator})
+	}
+	if err := utils.ValidateCatalog(indicator); err != nil {
+		return 0, fmt.Errorf("invalid indicator: %w", err)
+	}
+	for _, cat := range catalogs {
+		if err := utils.ValidateCatalog(cat); err != nil {
+			return 0, err
+		}
+	}
+	if len(catalogs) == 0 {
+		return 0, nil
+	}
+	return c.sampleRdb.HDel(ctx, c.reader.MakeSampleIndicatorKey(indicator), catalogs...).Result()
+}
+
 // isStale decides whether a cached entry must be recomputed. The data-
 // version floor is mandatory; maxAge and shouldRefresh only ADD triggers
 // (they can force a refresh, never suppress one the data version requires).
