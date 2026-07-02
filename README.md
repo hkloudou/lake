@@ -64,11 +64,12 @@ The index entry is created only at `WriteNotify`, *after* the upload succeeded �
 so a slow or aborted upload never appears in the index, and there is no pending
 state to roll back.
 
-**A read** fetches the snapshot pointer + delta log (2 Redis ops), loads the
-bodies through the resolver, and merges them. With a snapshot target configured a
-fresh snapshot is written back asynchronously, off the read's critical path; wrap
-the resolver in the recommended `storage/cached` decorator and bodies come from
-cache, not a cold fetch.
+**A read** fetches the snapshot pointer + delta log (1 atomic Redis op — a Lua
+script returns both together, so a read can never pair a stale pointer with a
+compacted log), loads the bodies through the resolver, and merges them. With a
+snapshot target configured a fresh snapshot is written back asynchronously, off
+the read's critical path; wrap the resolver in the recommended `storage/cached`
+decorator and bodies come from cache, not a cold fetch.
 
 ## 🚀 Quick Start
 
@@ -564,12 +565,18 @@ A snapshot is an optimization. If the async save fails, the next read
 regenerates it. Reads never wait for a snapshot to be persisted. With no
 `WithSnapTarget`, snapshotting is simply off — reads replay all deltas.
 
-### No background compaction (yet)
+### Compaction is explicit — and index-only
 
-There is no `ClearHistory` and no reaper in v3-alpha: delta zsets and their
-objects accumulate. Reads stay correct and fast (they start from the latest
-snapshot and skip everything below it), but storage grows. Compaction will
-return as explicit caller-side tooling.
+There is no background reaper. `Compact(ctx, catalog)` trims the delta zset up
+to the current snapshot (the entries a read can never fetch again) and returns
+how many it removed; sweep catalogs on your own schedule, e.g. via
+`IterateSnaps`. It is safe to run at any time from any process: reads observe
+the snap pointer and the delta log atomically, and the pointer is monotonic,
+so compaction can never remove a delta a concurrent read still needs.
+
+Compact touches Redis only. Delta *objects* in storage are untouched — they
+remain portable history, and object deletion belongs to bucket lifecycle
+rules, not Lake. A catalog with no snapshot is left intact.
 
 ## 🔄 Migrating from v2 to v3
 
@@ -585,7 +592,7 @@ v3 is **not** wire-compatible with v2. The headline changes:
   `[tsSeq, uri]` — old members/snaps don't decode; flush and repopulate.
 - **RFC 6902 removed**: only `MergeTypeReplace` (1) and `MergeTypeRFC7396` (2)
   remain.
-- **`ClearHistory` removed** (compaction deferred). **`AllSnaps` removed** — use
+- **`ClearHistory` removed** — use the explicit `Compact`. **`AllSnaps` removed** — use
   `IterateSnaps`. **File API**, **`WriteRequest.Meta`**, and **`MotionSample`**
   removed (use `NewSampler[T]`).
 - **Snapshots auto-generate** to `WithSnapTarget`; omit it to disable.
