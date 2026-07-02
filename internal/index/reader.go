@@ -49,7 +49,13 @@ type DeltaInfo struct {
 type ReadIndexResult struct {
 	Catalog string
 	Deltas  []DeltaInfo
-	Err     error
+	// RemoveGen is the catalog's removal generation observed atomically with
+	// this read ("0" until the first RemoveDelta). AddSnap refuses a snapshot
+	// carrying a stale generation, so a read that listed a delta which was
+	// removed while the read was in flight can never persist that delta's
+	// effect into a snapshot.
+	RemoveGen string
+	Err       error
 }
 
 type BatchListResult struct {
@@ -66,12 +72,16 @@ type BatchListResult struct {
 // every read observes a consistent (snap, deltas-after-it) pair.
 //
 // A snap value snap_score rejects falls back to the full range; the Go side
-// then surfaces the decode error (parseListReply). KEYS[1] = snaps hash,
-// KEYS[2] = delta zset; ARGV[1] = catalog. Returns {snapValue|false, flat
-// [member, score, ...]} — scores pass through as Redis reply strings, never
-// via Lua numbers (tostring would mangle the float).
+// then surfaces the decode error (parseListReply). The removal generation
+// ("<catalog>:rg" field of the snaps hash, absent = "0") is read in the same
+// atomic step so AddSnap can later tell whether a RemoveDelta interleaved.
+// KEYS[1] = snaps hash, KEYS[2] = delta zset; ARGV[1] = catalog. Returns
+// {snapValue|false, removeGen, flat [member, score, ...]} — scores pass
+// through as Redis reply strings, never via Lua numbers (tostring would
+// mangle the float).
 const listScript = snapScoreLua + `
 local snap = redis.call("HGET", KEYS[1], ARGV[1])
+local rg = redis.call("HGET", KEYS[1], ARGV[1] .. ":rg") or "0"
 local min = "-inf"
 if snap then
   local score = snap_score(snap)
@@ -79,7 +89,7 @@ if snap then
     min = "(" .. string.format("%.6f", score)
   end
 end
-return {snap or false, redis.call("ZRANGEBYSCORE", KEYS[2], min, "+inf", "WITHSCORES")}
+return {snap or false, rg, redis.call("ZRANGEBYSCORE", KEYS[2], min, "+inf", "WITHSCORES")}
 `
 
 // ListCatalog atomically reads the snap pointer and the deltas past it —
@@ -100,7 +110,7 @@ func (r *Reader) ListCatalog(ctx context.Context, catalog string) (*SnapInfo, *R
 // not fall back to replaying all deltas as if no snapshot existed (the full
 // log may long predate what the snapshot absorbed — or be compacted away).
 func (r *Reader) parseListResult(catalog string, res any) (*SnapInfo, *ReadIndexResult) {
-	rawSnap, zs, err := parseListReply(res)
+	rawSnap, removeGen, zs, err := parseListReply(res)
 	if err != nil {
 		return nil, &ReadIndexResult{Catalog: catalog, Err: err}
 	}
@@ -112,41 +122,47 @@ func (r *Reader) parseListResult(catalog string, res any) (*SnapInfo, *ReadIndex
 		}
 		snap = &SnapInfo{StopTsSeq: stop, URI: uri}
 	}
-	return snap, r.processZMembers(catalog, zs)
+	rr := r.processZMembers(catalog, zs)
+	rr.RemoveGen = removeGen
+	return snap, rr
 }
 
-// parseListReply unpacks the raw {snapValue|false, [member, score, ...]}
-// script reply. Scores arrive as Redis reply strings ("%.17g"), which
-// strconv.ParseFloat round-trips to the exact stored double — the same
+// parseListReply unpacks the raw {snapValue|false, removeGen, [member,
+// score, ...]} script reply. Scores arrive as Redis reply strings ("%.17g"),
+// which strconv.ParseFloat round-trips to the exact stored double — the same
 // fidelity go-redis gives ZRangeByScoreWithScores, so DecodeDeltaMember's
 // score-lockstep check keeps holding.
-func parseListReply(res any) (string, []redis.Z, error) {
+func parseListReply(res any) (string, string, []redis.Z, error) {
 	arr, ok := res.([]any)
-	if !ok || len(arr) != 2 {
-		return "", nil, fmt.Errorf("unexpected list reply: %T", res)
+	if !ok || len(arr) != 3 {
+		return "", "", nil, fmt.Errorf("unexpected list reply: %T", res)
 	}
 	rawSnap, _ := arr[0].(string) // Lua false → nil → not a string → ""
-	flat, ok := arr[1].([]any)
+	removeGen, ok := arr[1].(string)
 	if !ok {
-		return "", nil, fmt.Errorf("unexpected list deltas reply: %T", arr[1])
+		return "", "", nil, fmt.Errorf("unexpected remove-gen reply: %T", arr[1])
+	}
+	flat, ok := arr[2].([]any)
+	if !ok {
+		return "", "", nil, fmt.Errorf("unexpected list deltas reply: %T", arr[2])
 	}
 	if len(flat)%2 != 0 {
-		return "", nil, fmt.Errorf("odd WITHSCORES reply length: %d", len(flat))
+		return "", "", nil, fmt.Errorf("odd WITHSCORES reply length: %d", len(flat))
 	}
 	zs := make([]redis.Z, 0, len(flat)/2)
 	for i := 0; i+1 < len(flat); i += 2 {
 		member, ok1 := flat[i].(string)
 		scoreStr, ok2 := flat[i+1].(string)
 		if !ok1 || !ok2 {
-			return "", nil, fmt.Errorf("unexpected member/score types: %T/%T", flat[i], flat[i+1])
+			return "", "", nil, fmt.Errorf("unexpected member/score types: %T/%T", flat[i], flat[i+1])
 		}
 		score, perr := strconv.ParseFloat(scoreStr, 64)
 		if perr != nil {
-			return "", nil, fmt.Errorf("invalid score %q: %w", scoreStr, perr)
+			return "", "", nil, fmt.Errorf("invalid score %q: %w", scoreStr, perr)
 		}
 		zs = append(zs, redis.Z{Member: member, Score: score})
 	}
-	return rawSnap, zs, nil
+	return rawSnap, removeGen, zs, nil
 }
 
 func (r *Reader) GetLatestSnap(ctx context.Context, catalog string) (*SnapInfo, error) {

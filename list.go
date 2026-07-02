@@ -14,6 +14,7 @@ import (
 type ListResult struct {
 	client     *Client
 	catalog    string
+	removeGen  string // removal generation at list time; guards snapshot saves
 	LatestSnap *index.SnapInfo
 	Entries    []index.DeltaInfo
 	Err        error
@@ -87,6 +88,7 @@ func (c *Client) List(ctx context.Context, catalog string) *ListResult {
 	return &ListResult{
 		client:     c,
 		catalog:    catalog,
+		removeGen:  rr.RemoveGen,
 		LatestSnap: snap,
 		Entries:    rr.Deltas,
 		Err:        rr.Err,
@@ -119,6 +121,7 @@ func (c *Client) BatchList(ctx context.Context, catalogs []string) map[string]*L
 			lr.LatestSnap = br.Snap
 			if br.ReadResult != nil {
 				lr.Entries = br.ReadResult.Deltas
+				lr.removeGen = br.ReadResult.RemoveGen
 			}
 		}
 		out[cat] = lr

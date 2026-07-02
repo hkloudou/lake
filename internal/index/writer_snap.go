@@ -19,13 +19,23 @@ func NewWriter(rdb *redis.Client) *Writer {
 }
 
 // addSnapScript upserts the catalog's snap entry only when the new stop is
-// strictly newer than the stored one. Snapshot saves are async and may race
-// across processes: without the guard, a slow save computed at an older stop
-// could land after a newer one and regress the snap pointer (correct but
-// wasteful — every read replays more deltas until it heals). A stored value
-// snap_score rejects (see snapScoreLua, encoding.go) is treated as absent and
-// overwritten (self-heal). Returns 1 when the entry was written, 0 when the
-// stored snap was kept.
+// strictly newer than the stored one AND the snapshot was computed from the
+// catalog's current removal generation.
+//
+// Monotonicity: snapshot saves are async and may race across processes;
+// without the guard, a slow save computed at an older stop could land after
+// a newer one and regress the snap pointer (correct but wasteful). A stored
+// value snap_score rejects (see snapScoreLua, encoding.go) is treated as
+// absent and overwritten (self-heal).
+//
+// Removal barrier: a snapshot bakes in every delta the read listed. If a
+// RemoveDelta interleaved between that read and this save, the snapshot
+// would resurrect the removed write — permanently, since later reads prefer
+// the snap pointer. RemoveDelta bumps "<catalog>:rg"; a save whose
+// generation (captured atomically by listScript) no longer matches is
+// dropped. The next read starts from post-removal state and snapshots fine.
+//
+// Returns 1 when the entry was written, 0 when it was dropped/kept.
 const addSnapScript = snapScoreLua + `
 local cur = redis.call("HGET", KEYS[1], ARGV[1])
 if cur then
@@ -34,22 +44,29 @@ if cur then
     return 0
   end
 end
+if (redis.call("HGET", KEYS[1], ARGV[1] .. ":rg") or "0") ~= ARGV[4] then
+  return 0
+end
 redis.call("HSET", KEYS[1], ARGV[1], ARGV[2])
 return 1
 `
 
 // AddSnap upserts the catalog's snap entry in "<prefix>:s" as [tsSeq, uri],
-// but only monotonically: an entry at or past stopTsSeq is kept and the call
-// is a silent no-op (the freshly written snap object is left orphan in
-// storage, like any superseded snap — V3 contract).
-func (w *Writer) AddSnap(ctx context.Context, catalog string, stopTsSeq TimeSeqID, uri string) error {
+// but only monotonically, and only when removeGen still matches the
+// catalog's removal generation (see addSnapScript). Refusals are silent
+// no-ops; the freshly written snap object is left orphan in storage, like
+// any superseded snap — V3 contract.
+func (w *Writer) AddSnap(ctx context.Context, catalog string, stopTsSeq TimeSeqID, uri, removeGen string) error {
 	val, err := EncodeSnapValue(stopTsSeq, uri)
 	if err != nil {
 		return err
 	}
+	if removeGen == "" {
+		removeGen = "0"
+	}
 	return w.rdb.Eval(ctx, addSnapScript,
 		[]string{w.MakeSnapsHashKey()},
-		catalog, val, stopTsSeq.Score(),
+		catalog, val, stopTsSeq.Score(), removeGen,
 	).Err()
 }
 

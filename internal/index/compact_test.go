@@ -52,7 +52,7 @@ func TestCompactDeltas(t *testing.T) {
 
 	// Snap at the 2nd delta absorbs the first two (bound is inclusive).
 	// AddSnap self-heals over the corrupt value planted above.
-	if err := w.AddSnap(ctx, catalog, stops[1], "oss://b/"+stops[1].String()+".snap"); err != nil {
+	if err := w.AddSnap(ctx, catalog, stops[1], "oss://b/"+stops[1].String()+".snap", ""); err != nil {
 		t.Fatalf("AddSnap: %v", err)
 	}
 	if n, err = w.CompactDeltas(ctx, catalog); err != nil || n != 2 {

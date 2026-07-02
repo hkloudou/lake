@@ -211,21 +211,29 @@ func (s *Sampler[T]) Batch(ctx context.Context, lists map[string]*ListResult) ma
 	now := c.reader.NowUnix()
 	hashKey := c.reader.MakeSampleIndicatorKey(s.indicator)
 
-	cached, err := c.sampleRdb.HMGet(ctx, hashKey, probe...).Result()
+	// One HMGet probes every catalog's cached value plus the epoch field —
+	// captured before any loader runs, so a mid-batch invalidation voids the
+	// batch's write-backs.
+	fields := append(append(make([]string, 0, len(probe)+1), probe...), sampleEpochField)
+	epoch := "0"
+	cached, err := c.sampleRdb.HMGet(ctx, hashKey, fields...).Result()
 	if err != nil && err != redis.Nil {
 		// Cache-read failure: degrade to recompute-all rather than fail
 		// the batch (the cache is an optimization, not the truth).
 		for _, cat := range probe {
 			c.emitEvent(cat, "SampleCacheError", map[string]any{"op": "hmget", "err": err.Error()})
 		}
-		cached = make([]any, len(probe))
+		cached = make([]any, len(fields))
+	}
+	if e, ok := cached[len(probe)].(string); ok {
+		epoch = e
 	}
 
 	var (
 		mu     sync.Mutex
 		misses []string
 	)
-	for i, raw := range cached {
+	for i, raw := range cached[:len(probe)] {
 		cat := probe[i]
 		l := lists[cat]
 		if str, ok := raw.(string); ok {
@@ -253,7 +261,7 @@ func (s *Sampler[T]) Batch(ctx context.Context, lists map[string]*ListResult) ma
 				// Re-read the clock per loader run: with many misses ahead in
 				// the queue, the batch-start `now` could stamp an UpdatedAt
 				// already a whole maxAge in the past.
-				v, e := s.finalize(s.loadAndCache(ctx, c, l, hashKey, l.LastUpdated(), c.reader.NowUnix()))
+				v, e := s.finalize(s.loadAndCache(ctx, c, l, hashKey, l.LastUpdated(), c.reader.NowUnix(), epoch))
 				mu.Lock()
 				out[cat] = &SampleResult[T]{Value: v, Err: e}
 				mu.Unlock()
@@ -268,16 +276,47 @@ func (s *Sampler[T]) Batch(ctx context.Context, lists map[string]*ListResult) ma
 	return out
 }
 
+// sampleEpochField is the memo hash's reserved epoch field. Catalog names
+// cannot be ":" (ValidateCatalog forbids the character entirely), so it can
+// never collide with a real catalog field. The epoch is bumped by every
+// invalidation; loadAndCache captures it at probe time and its write-back is
+// discarded if the epoch moved — otherwise an in-flight HSET landing after
+// an HDEL would silently reinstate the just-invalidated value, and with the
+// data version unchanged nothing would ever evict it again.
+const sampleEpochField = ":"
+
+// sampleWriteScript writes a computed sample only if the memo epoch still
+// matches what the writer observed before running its loader.
+// KEYS[1] = memo hash; ARGV[1] = epoch, ARGV[2] = catalog, ARGV[3] = value.
+const sampleWriteScript = `
+if (redis.call("HGET", KEYS[1], ":") or "0") == ARGV[1] then
+  redis.call("HSET", KEYS[1], ARGV[2], ARGV[3])
+  return 1
+end
+return 0
+`
+
+// sampleInvalidateScript bumps the epoch and deletes the catalogs' fields in
+// one atomic step. KEYS[1] = memo hash; ARGV = catalogs. Returns the number
+// of fields deleted.
+const sampleInvalidateScript = `
+redis.call("HINCRBY", KEYS[1], ":", 1)
+return redis.call("HDEL", KEYS[1], unpack(ARGV))
+`
+
 // InvalidateSamples deletes the cached samples of one indicator for the given
-// catalogs (one HDEL on the memo hash) and returns how many entries existed.
-// The next Sample/Batch recomputes them.
+// catalogs and returns how many entries existed. The next Sample/Batch
+// recomputes them. Deletion and the epoch bump are atomic, so a compute
+// already in flight when the invalidation lands cannot write its (stale)
+// result back — its epoch no longer matches (see sampleEpochField).
 //
 // The memo hash has no TTL of its own, so this is the hook for the two cases
 // staleness policies cannot see: a catalog that was deleted outright (its
 // memo field would otherwise linger forever), and a loader whose CODE changed
 // (the data version didn't move, but the cached value is now computed wrong).
 // Works on any Client with the same prefix — no Sampler[T] value needed, so
-// ops tooling can sweep without knowing T.
+// ops tooling can sweep without knowing T. RemoveDelta calls this for every
+// indicator automatically.
 func (c *Client) InvalidateSamples(ctx context.Context, indicator string, catalogs ...string) (int64, error) {
 	for _, cat := range catalogs {
 		c.emitEvent(cat, "InvalidateSample", map[string]any{"indicator": indicator})
@@ -293,7 +332,17 @@ func (c *Client) InvalidateSamples(ctx context.Context, indicator string, catalo
 	if len(catalogs) == 0 {
 		return 0, nil
 	}
-	return c.sampleRdb.HDel(ctx, c.reader.MakeSampleIndicatorKey(indicator), catalogs...).Result()
+	args := make([]any, len(catalogs))
+	for i, cat := range catalogs {
+		args[i] = cat
+	}
+	res, err := c.sampleRdb.Eval(ctx, sampleInvalidateScript,
+		[]string{c.reader.MakeSampleIndicatorKey(indicator)}, args...).Result()
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.(int64)
+	return n, nil
 }
 
 // isStale decides whether a cached entry must be recomputed. The data-
@@ -316,30 +365,42 @@ func (s *Sampler[T]) isStale(meta SampleMeta, list *ListResult, peers map[string
 	return false
 }
 
-// sampleCore is the cache-or-compute path for a single catalog: one HGET,
-// then load on miss/stale. A cache-READ failure degrades to recompute — it
-// never fails the call.
+// sampleCore is the cache-or-compute path for a single catalog: one HMGET
+// (value + epoch), then load on miss/stale. A cache-READ failure degrades to
+// recompute — it never fails the call. The epoch is captured here, BEFORE the
+// loader runs, so an invalidation that lands during the compute makes the
+// write-back a no-op.
 func (s *Sampler[T]) sampleCore(ctx context.Context, c *Client, list *ListResult, peers map[string]*ListResult) (T, error) {
 	lastUpdated := list.LastUpdated()
 	now := c.reader.NowUnix()
 	hashKey := c.reader.MakeSampleIndicatorKey(s.indicator)
 
-	if cached, err := c.sampleRdb.HGet(ctx, hashKey, list.catalog).Bytes(); err == nil {
-		if meta, data, derr := unmarshalSampleCache[T](cached); derr == nil && !s.isStale(meta, list, peers, now) {
-			return data, nil
+	epoch := "0"
+	if vals, err := c.sampleRdb.HMGet(ctx, hashKey, list.catalog, sampleEpochField).Result(); err != nil {
+		c.emitEvent(list.catalog, "SampleCacheError", map[string]any{"op": "hmget", "err": err.Error()})
+	} else {
+		if e, ok := vals[1].(string); ok {
+			epoch = e
 		}
-	} else if err != redis.Nil {
-		c.emitEvent(list.catalog, "SampleCacheError", map[string]any{"op": "hget", "err": err.Error()})
+		if cached, ok := vals[0].(string); ok {
+			if meta, data, derr := unmarshalSampleCache[T]([]byte(cached)); derr == nil && !s.isStale(meta, list, peers, now) {
+				return data, nil
+			}
+		}
 	}
-	return s.loadAndCache(ctx, c, list, hashKey, lastUpdated, now)
+	return s.loadAndCache(ctx, c, list, hashKey, lastUpdated, now, epoch)
 }
 
 // loadAndCache runs the loader under the (catalog, indicator, version)
 // SingleFlight, stamps [score, updatedAt, data], and writes it back
-// best-effort. A loader error is wrapped (loaderError) so finalize can
-// distinguish it from an internal encode error; a cache-WRITE failure is
-// swallowed — the computed value is already correct and is returned anyway.
-func (s *Sampler[T]) loadAndCache(ctx context.Context, c *Client, list *ListResult, hashKey string, lastUpdated float64, now int64) (T, error) {
+// best-effort — and conditionally: the write lands only if the memo epoch
+// still matches what the caller observed before the loader ran, so an
+// invalidation cannot be undone by an in-flight compute (the value is still
+// returned to this caller; it just isn't cached). A loader error is wrapped
+// (loaderError) so finalize can distinguish it from an internal encode
+// error; a cache-WRITE failure is swallowed — the computed value is already
+// correct and is returned anyway.
+func (s *Sampler[T]) loadAndCache(ctx context.Context, c *Client, list *ListResult, hashKey string, lastUpdated float64, now int64, epoch string) (T, error) {
 	var zero T
 	flightKey := fmt.Sprintf("%s:%s:%.6f", list.catalog, s.indicator, lastUpdated)
 	raw, err := c.sampleFlight.Do(flightKey, func() (string, error) {
@@ -351,7 +412,7 @@ func (s *Sampler[T]) loadAndCache(ctx context.Context, c *Client, list *ListResu
 		if merr != nil {
 			return "", fmt.Errorf("marshal sample: %w", merr)
 		}
-		if werr := c.sampleRdb.HSet(ctx, hashKey, list.catalog, data).Err(); werr != nil {
+		if werr := c.sampleRdb.Eval(ctx, sampleWriteScript, []string{hashKey}, epoch, list.catalog, data).Err(); werr != nil {
 			c.emitEvent(list.catalog, "SampleCacheError", map[string]any{"op": "hset", "err": werr.Error()})
 		}
 		return string(data), nil
