@@ -3,6 +3,7 @@ package index
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -56,16 +57,96 @@ type BatchListResult struct {
 	ReadResult *ReadIndexResult
 }
 
-func (r *Reader) ReadAll(ctx context.Context, catalog string) *ReadIndexResult {
-	return r.readRange(ctx, catalog, "-inf", "+inf")
+// listScript reads the catalog's snap pointer and the deltas past it in ONE
+// atomic step. Atomicity is a correctness requirement, not an optimization:
+// with Compact in the picture, a non-atomic HGET→ZRANGE pair could observe an
+// old snap pointer, then a delta range already compacted up to a newer snap —
+// silently dropping the deltas in between from the merged document. Inside a
+// script nothing interleaves, and the snap pointer is monotonic (AddSnap), so
+// every read observes a consistent (snap, deltas-after-it) pair.
+//
+// A snap value snap_score rejects falls back to the full range; the Go side
+// then surfaces the decode error (parseListReply). KEYS[1] = snaps hash,
+// KEYS[2] = delta zset; ARGV[1] = catalog. Returns {snapValue|false, flat
+// [member, score, ...]} — scores pass through as Redis reply strings, never
+// via Lua numbers (tostring would mangle the float).
+const listScript = snapScoreLua + `
+local snap = redis.call("HGET", KEYS[1], ARGV[1])
+local min = "-inf"
+if snap then
+  local score = snap_score(snap)
+  if score then
+    min = "(" .. string.format("%.6f", score)
+  end
+end
+return {snap or false, redis.call("ZRANGEBYSCORE", KEYS[2], min, "+inf", "WITHSCORES")}
+`
+
+// ListCatalog atomically reads the snap pointer and the deltas past it —
+// the single read primitive behind Client.List / Client.BatchList.
+func (r *Reader) ListCatalog(ctx context.Context, catalog string) (*SnapInfo, *ReadIndexResult) {
+	res, err := r.rdb.Eval(ctx, listScript,
+		[]string{r.MakeSnapsHashKey(), r.MakeDeltaZsetKey(catalog)},
+		catalog,
+	).Result()
+	if err != nil {
+		return nil, &ReadIndexResult{Catalog: catalog, Err: fmt.Errorf("list eval: %w", err)}
+	}
+	return r.parseListResult(catalog, res)
 }
 
-func (r *Reader) ReadSince(ctx context.Context, catalog string, sinceTimestamp float64) *ReadIndexResult {
-	return r.readRange(ctx, catalog, fmt.Sprintf("(%.6f", sinceTimestamp), "+inf")
+// parseListResult converts one listScript reply into (snap, deltas). An
+// undecodable snap value is an error, not a silent nil: the read path must
+// not fall back to replaying all deltas as if no snapshot existed (the full
+// log may long predate what the snapshot absorbed — or be compacted away).
+func (r *Reader) parseListResult(catalog string, res any) (*SnapInfo, *ReadIndexResult) {
+	rawSnap, zs, err := parseListReply(res)
+	if err != nil {
+		return nil, &ReadIndexResult{Catalog: catalog, Err: err}
+	}
+	var snap *SnapInfo
+	if rawSnap != "" {
+		stop, uri, derr := DecodeSnapValue(rawSnap)
+		if derr != nil {
+			return nil, &ReadIndexResult{Catalog: catalog, Err: fmt.Errorf("decode snap: %w", derr)}
+		}
+		snap = &SnapInfo{StopTsSeq: stop, URI: uri}
+	}
+	return snap, r.processZMembers(catalog, zs)
 }
 
-func (r *Reader) ReadRange(ctx context.Context, catalog string, minTimestamp, maxTimestamp float64) *ReadIndexResult {
-	return r.readRange(ctx, catalog, fmt.Sprintf("%.6f", minTimestamp), fmt.Sprintf("%.6f", maxTimestamp))
+// parseListReply unpacks the raw {snapValue|false, [member, score, ...]}
+// script reply. Scores arrive as Redis reply strings ("%.17g"), which
+// strconv.ParseFloat round-trips to the exact stored double — the same
+// fidelity go-redis gives ZRangeByScoreWithScores, so DecodeDeltaMember's
+// score-lockstep check keeps holding.
+func parseListReply(res any) (string, []redis.Z, error) {
+	arr, ok := res.([]any)
+	if !ok || len(arr) != 2 {
+		return "", nil, fmt.Errorf("unexpected list reply: %T", res)
+	}
+	rawSnap, _ := arr[0].(string) // Lua false → nil → not a string → ""
+	flat, ok := arr[1].([]any)
+	if !ok {
+		return "", nil, fmt.Errorf("unexpected list deltas reply: %T", arr[1])
+	}
+	if len(flat)%2 != 0 {
+		return "", nil, fmt.Errorf("odd WITHSCORES reply length: %d", len(flat))
+	}
+	zs := make([]redis.Z, 0, len(flat)/2)
+	for i := 0; i+1 < len(flat); i += 2 {
+		member, ok1 := flat[i].(string)
+		scoreStr, ok2 := flat[i+1].(string)
+		if !ok1 || !ok2 {
+			return "", nil, fmt.Errorf("unexpected member/score types: %T/%T", flat[i], flat[i+1])
+		}
+		score, perr := strconv.ParseFloat(scoreStr, 64)
+		if perr != nil {
+			return "", nil, fmt.Errorf("invalid score %q: %w", scoreStr, perr)
+		}
+		zs = append(zs, redis.Z{Member: member, Score: score})
+	}
+	return rawSnap, zs, nil
 }
 
 func (r *Reader) GetLatestSnap(ctx context.Context, catalog string) (*SnapInfo, error) {
@@ -127,68 +208,33 @@ func (r *Reader) IterateSnaps(ctx context.Context, fn func(catalog string, snap 
 	}
 }
 
-// BatchList runs an HMGet on snaps + a pipelined ZRange for every
-// catalog — 2 round-trips total regardless of catalog count.
+// BatchList runs one pipelined listScript per catalog — a single round-trip
+// regardless of catalog count, and each catalog's (snap, deltas) pair is
+// atomic on the server (per-catalog atomicity is all a reader needs; no
+// cross-catalog consistency is promised).
 func (r *Reader) BatchList(ctx context.Context, catalogs []string) map[string]*BatchListResult {
 	out := make(map[string]*BatchListResult, len(catalogs))
 	if len(catalogs) == 0 {
 		return out
 	}
-	for _, c := range catalogs {
-		out[c] = &BatchListResult{}
-	}
-
-	snapVals, err := r.rdb.HMGet(ctx, r.MakeSnapsHashKey(), catalogs...).Result()
-	if err != nil && err != redis.Nil {
-		for _, c := range catalogs {
-			out[c].ReadResult = &ReadIndexResult{Catalog: c, Err: fmt.Errorf("hmget snaps: %w", err)}
-		}
-		return out
-	}
-	for i, raw := range snapVals {
-		c := catalogs[i]
-		s, ok := raw.(string)
-		if !ok {
-			continue
-		}
-		stop, uri, err := DecodeSnapValue(s)
-		if err != nil {
-			out[c].ReadResult = &ReadIndexResult{Catalog: c, Err: fmt.Errorf("decode snap: %w", err)}
-			continue
-		}
-		out[c].Snap = &SnapInfo{StopTsSeq: stop, URI: uri}
-	}
 
 	pipe := r.rdb.Pipeline()
-	cmds := make(map[string]*redis.ZSliceCmd, len(catalogs))
+	cmds := make(map[string]*redis.Cmd, len(catalogs))
 	for _, c := range catalogs {
-		if out[c].ReadResult != nil && out[c].ReadResult.Err != nil {
-			continue
-		}
-		min := "-inf"
-		if out[c].Snap != nil {
-			min = fmt.Sprintf("(%.6f", out[c].Snap.StopTsSeq.Score())
-		}
-		cmds[c] = pipe.ZRangeByScoreWithScores(ctx, r.MakeDeltaZsetKey(c), &redis.ZRangeBy{Min: min, Max: "+inf"})
+		out[c] = &BatchListResult{}
+		cmds[c] = pipe.Eval(ctx, listScript,
+			[]string{r.MakeSnapsHashKey(), r.MakeDeltaZsetKey(c)}, c)
 	}
 	pipe.Exec(ctx)
 	for c, cmd := range cmds {
-		zs, err := cmd.Result()
-		if err != nil && err != redis.Nil {
-			out[c].ReadResult = &ReadIndexResult{Catalog: c, Err: fmt.Errorf("zrange: %w", err)}
+		res, err := cmd.Result()
+		if err != nil {
+			out[c].ReadResult = &ReadIndexResult{Catalog: c, Err: fmt.Errorf("list eval: %w", err)}
 			continue
 		}
-		out[c].ReadResult = r.processZMembers(c, zs)
+		out[c].Snap, out[c].ReadResult = r.parseListResult(c, res)
 	}
 	return out
-}
-
-func (r *Reader) readRange(ctx context.Context, catalog, min, max string) *ReadIndexResult {
-	zs, err := r.rdb.ZRangeByScoreWithScores(ctx, r.MakeDeltaZsetKey(catalog), &redis.ZRangeBy{Min: min, Max: max}).Result()
-	if err != nil {
-		return &ReadIndexResult{Catalog: catalog, Err: err}
-	}
-	return r.processZMembers(catalog, zs)
 }
 
 // processZMembers parses zset entries into deltas. V3 has no pending

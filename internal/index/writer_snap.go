@@ -2,6 +2,7 @@ package index
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -22,27 +23,15 @@ func NewWriter(rdb *redis.Client) *Writer {
 // across processes: without the guard, a slow save computed at an older stop
 // could land after a newer one and regress the snap pointer (correct but
 // wasteful — every read replays more deltas until it heals). A stored value
-// that fails to decode is treated as absent and overwritten (self-heal).
-// Returns 1 when the entry was written, 0 when the stored snap was kept.
-//
-// The keep branch must accept only values DecodeSnapValue (encoding.go) +
-// ParseTimeSeqID (timeseqid.go) accept — keeping anything the Go reader
-// rejects would wedge the catalog (GetLatestSnap fails, and no later AddSnap
-// could overwrite). Hence the full mirror of the Go rules: a 2-string
-// [tsSeq, uri] with non-empty uri; ts with no leading zero, ≤ year-3000 cap;
-// seq 1..999999 with no leading zero. (The "0_0" sentinel deliberately fails
-// the match: it scores 0, so any real stop would overwrite it anyway.)
-const addSnapScript = `
+// snap_score rejects (see snapScoreLua, encoding.go) is treated as absent and
+// overwritten (self-heal). Returns 1 when the entry was written, 0 when the
+// stored snap was kept.
+const addSnapScript = snapScoreLua + `
 local cur = redis.call("HGET", KEYS[1], ARGV[1])
 if cur then
-  local ok, arr = pcall(cjson.decode, cur)
-  if ok and type(arr) == "table" and type(arr[1]) == "string"
-        and type(arr[2]) == "string" and arr[2] ~= "" then
-    local ts, seq = string.match(arr[1], "^([1-9]%d*)_([1-9]%d?%d?%d?%d?%d?)$")
-    if ts and tonumber(ts) <= 32503680000
-          and tonumber(ts) + tonumber(seq) / 1000000.0 >= tonumber(ARGV[3]) then
-      return 0
-    end
+  local score = snap_score(cur)
+  if score and score >= tonumber(ARGV[3]) then
+    return 0
   end
 end
 redis.call("HSET", KEYS[1], ARGV[1], ARGV[2])
@@ -62,4 +51,40 @@ func (w *Writer) AddSnap(ctx context.Context, catalog string, stopTsSeq TimeSeqI
 		[]string{w.MakeSnapsHashKey()},
 		catalog, val, stopTsSeq.Score(),
 	).Err()
+}
+
+// compactDeltasScript removes every delta zset entry the catalog's current
+// snapshot has absorbed: score ≤ the snap's stop score, inclusive — the read
+// path fetches deltas strictly AFTER the stop (listScript, reader.go), so an
+// absorbed delta can never be read again. Missing or undecodable snap → 0
+// (never trim on a pointer the Go reader would reject). Returns the number
+// of entries removed.
+const compactDeltasScript = snapScoreLua + `
+local cur = redis.call("HGET", KEYS[1], ARGV[1])
+if not cur then
+  return 0
+end
+local score = snap_score(cur)
+if not score then
+  return 0
+end
+return redis.call("ZREMRANGEBYSCORE", KEYS[2], "-inf", string.format("%.6f", score))
+`
+
+// CompactDeltas trims the catalog's delta zset up to (and including) the
+// current snap stop, atomically with reading the snap pointer. Only index
+// entries are removed — delta objects in storage are untouched.
+func (w *Writer) CompactDeltas(ctx context.Context, catalog string) (int64, error) {
+	res, err := w.rdb.Eval(ctx, compactDeltasScript,
+		[]string{w.MakeSnapsHashKey(), w.MakeDeltaZsetKey(catalog)},
+		catalog,
+	).Result()
+	if err != nil {
+		return 0, fmt.Errorf("compact eval: %w", err)
+	}
+	n, ok := res.(int64)
+	if !ok {
+		return 0, fmt.Errorf("unexpected compact result: %v", res)
+	}
+	return n, nil
 }

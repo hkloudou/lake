@@ -111,5 +111,29 @@ func DecodeSnapValue(value string) (TimeSeqID, string, error) {
 	return stop, arr[1], nil
 }
 
+// snapScoreLua defines snap_score(raw) → score|nil for use inside index Lua
+// scripts (prepend this const to the script body). It is the Lua mirror of
+// DecodeSnapValue + ParseTimeSeqID above and MUST accept exactly what they
+// accept: a 2-string [tsSeq, uri] with non-empty uri; ts with no leading zero
+// within the year-3000 cap; seq 1..999999 with no leading zero. Accepting
+// more would let a script trust a value the Go reader rejects (wedging the
+// catalog); accepting less would make it discard a valid snap. The "0_0"
+// sentinel deliberately yields nil: it scores 0, so no caller's comparison
+// against a real stop can need it.
+const snapScoreLua = `
+local function snap_score(raw)
+  local ok, arr = pcall(cjson.decode, raw)
+  if not (ok and type(arr) == "table" and type(arr[1]) == "string"
+        and type(arr[2]) == "string" and arr[2] ~= "") then
+    return nil
+  end
+  local ts, seq = string.match(arr[1], "^([1-9]%d*)_([1-9]%d?%d?%d?%d?%d?)$")
+  if not ts or tonumber(ts) > 32503680000 then
+    return nil
+  end
+  return tonumber(ts) + tonumber(seq) / 1000000.0
+end
+`
+
 // IsDeltaMember reports whether a zset member looks like a delta (JSON array).
 func IsDeltaMember(m string) bool { return len(m) > 0 && m[0] == '[' }

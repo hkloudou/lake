@@ -73,8 +73,9 @@ func (m ListResult) Dump() string {
 	return b.String()
 }
 
-// List reads the catalog metadata in two Redis ops (HGet snap + ZRange
-// deltas).
+// List reads the catalog metadata in one atomic Redis op (a Lua script
+// fetches the snap pointer and the deltas past it together — atomicity is
+// what makes Compact safe to run concurrently with reads).
 func (c *Client) List(ctx context.Context, catalog string) *ListResult {
 	c.emitEvent(catalog, "List", nil)
 
@@ -82,16 +83,7 @@ func (c *Client) List(ctx context.Context, catalog string) *ListResult {
 		return &ListResult{client: c, catalog: catalog, Err: err}
 	}
 
-	snap, err := c.reader.GetLatestSnap(ctx, catalog)
-	if err != nil {
-		return &ListResult{client: c, catalog: catalog, Err: fmt.Errorf("get snapshot: %w", err)}
-	}
-	var rr *index.ReadIndexResult
-	if snap != nil {
-		rr = c.reader.ReadSince(ctx, catalog, snap.StopTsSeq.Score())
-	} else {
-		rr = c.reader.ReadAll(ctx, catalog)
-	}
+	snap, rr := c.reader.ListCatalog(ctx, catalog)
 	return &ListResult{
 		client:     c,
 		catalog:    catalog,
@@ -101,7 +93,7 @@ func (c *Client) List(ctx context.Context, catalog string) *ListResult {
 	}
 }
 
-// BatchList runs List for many catalogs in 2 Redis round-trips total.
+// BatchList runs List for many catalogs in one pipelined Redis round-trip.
 func (c *Client) BatchList(ctx context.Context, catalogs []string) map[string]*ListResult {
 	out := make(map[string]*ListResult, len(catalogs))
 	for _, cat := range catalogs {
