@@ -225,6 +225,15 @@ func TestSampleStaleListNotCached_Redis(t *testing.T) {
 		return int(runs.Add(1)), nil
 	})
 
+	// The exported generation accessor tracks the removal (predicates use it
+	// for peer-dependency baselines).
+	if g := staleList.RemoveGen(); g != "0" {
+		t.Fatalf("pre-removal RemoveGen() = %q, want \"0\"", g)
+	}
+	if g := c.List(ctx, "users").RemoveGen(); g != "1" {
+		t.Fatalf("post-removal RemoveGen() = %q, want \"1\"", g)
+	}
+
 	// Sampling the PRE-removal list: value returned, write-back dropped.
 	if v, err := sampler.Sample(ctx, staleList); err != nil || v != 1 {
 		t.Fatalf("stale-list Sample: v=%d err=%v, want 1/nil", v, err)

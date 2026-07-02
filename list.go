@@ -36,6 +36,19 @@ func (m ListResult) Exist() bool {
 	return m.LatestSnap != nil || len(m.Entries) > 0
 }
 
+// RemoveGen is the catalog's removal generation observed atomically with
+// this list ("0" until the first RemoveDelta). Cross-catalog Samplers use it
+// the same way they use LastUpdated: record the peer generations the sample
+// depended on inside T, and have a WithShouldRefresh predicate compare them
+// against peers[...].RemoveGen() — a removal on a peer can lower or preserve
+// that peer's LastUpdated, so the version alone cannot reveal it.
+func (m ListResult) RemoveGen() string {
+	if m.removeGen == "" {
+		return "0"
+	}
+	return m.removeGen
+}
+
 func (m ListResult) HasNextSnap() bool { return len(m.Entries) > 0 }
 
 // NextSnap is the snap that should next be persisted, or nil if there

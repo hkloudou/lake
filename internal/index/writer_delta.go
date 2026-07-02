@@ -17,6 +17,13 @@ import (
 // computed from an older generation, so an in-flight read that listed the
 // removed delta can never persist its effect (see addSnapScript).
 //
+// The bump comes BEFORE the ZREM: Redis Lua does not roll back on error, so
+// if the HINCRBY can fail (a hand-corrupted non-integer ":rg" field), it
+// must fail while the delta is still present — the reverse order would
+// leave the delta gone with the generation unmoved, and an in-flight
+// old-generation snapshot could then resurrect it. A bump whose ZREM then
+// cannot fail (plain ZREM never errors) needs no compensation.
+//
 // Returns 1 if removed, 0 if no entry at that tsSeq. KEYS[1] = delta zset,
 // KEYS[2] = snaps hash; ARGV[1] = score, ARGV[2] = tsSeq, ARGV[3] = catalog.
 const removeDeltaScript = `
@@ -24,8 +31,8 @@ local members = redis.call("ZRANGEBYSCORE", KEYS[1], ARGV[1], ARGV[1])
 for _, m in ipairs(members) do
   local ok, arr = pcall(cjson.decode, m)
   if ok and type(arr) == "table" and arr[3] == ARGV[2] then
-    redis.call("ZREM", KEYS[1], m)
     redis.call("HINCRBY", KEYS[2], ARGV[3] .. ":rg", 1)
+    redis.call("ZREM", KEYS[1], m)
     return 1
   end
 end

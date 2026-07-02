@@ -57,6 +57,27 @@ func TestRemoveDelta(t *testing.T) {
 	if rr.RemoveGen != "1" {
 		t.Fatalf("RemoveGen = %q, want \"1\" (exactly one successful removal)", rr.RemoveGen)
 	}
+
+	// Bump-before-delete: if the generation cannot advance (hand-corrupted
+	// non-integer ":rg"), the removal must fail with the delta INTACT — the
+	// reverse order would leave it gone under an unmoved generation, and an
+	// in-flight old-generation snapshot could resurrect it.
+	if err := rdb.HSet(ctx, w.MakeSnapsHashKey(), catalog+":rg", "corrupt").Err(); err != nil {
+		t.Fatalf("HSet corrupt rg: %v", err)
+	}
+	if _, err := w.RemoveDelta(ctx, catalog, stops[0]); err == nil {
+		t.Fatal("RemoveDelta with corrupt rg must error")
+	}
+	if card := rdb.ZCard(ctx, w.MakeDeltaZsetKey(catalog)).Val(); card != 2 {
+		t.Fatalf("delta removed despite failed generation bump: %d entries, want 2", card)
+	}
+	// Healing the field lets the removal proceed.
+	if err := rdb.HSet(ctx, w.MakeSnapsHashKey(), catalog+":rg", "1").Err(); err != nil {
+		t.Fatalf("heal rg: %v", err)
+	}
+	if removed, err := w.RemoveDelta(ctx, catalog, stops[0]); err != nil || !removed {
+		t.Fatalf("RemoveDelta after heal: removed=%v err=%v", removed, err)
+	}
 }
 
 // TestAddSnapRemoveGenBarrier pins the snapshot-resurrection guard: a

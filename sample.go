@@ -119,9 +119,11 @@ func WithMaxAge[T any](d time.Duration) SamplerOption[T] {
 // so it MUST be pure and cheap: do no I/O.
 //
 // To act on a cross-catalog dependency, fan out a single BatchList covering
-// the catalogs you care about, then compare peers["B"].LastUpdated() against
-// whatever version of B the cached T recorded at compute time (T is the
-// natural place to carry "what I depended on" — Sampler does not track it).
+// the catalogs you care about, then compare peers["B"].LastUpdated() — and
+// peers["B"].RemoveGen(), since a RemoveDelta on B can lower or preserve
+// B's version — against whatever baseline the cached T recorded at compute
+// time (T is the natural place to carry "what I depended on" — Sampler does
+// not track it, and its own generation check covers only self's catalog).
 // If the relevant peer is absent from peers, the dependency cannot be
 // evaluated this call; either return false (accept the stale value this
 // time) or arrange for BatchList to include it next time.
