@@ -378,6 +378,66 @@ func TestRemoveDeltaSweepsGlobPrefix_Redis(t *testing.T) {
 	}
 }
 
+// TestSampleUnsweptStaleEntryRejected_Redis pins the read-time generation
+// check: an entry the post-removal sweep failed to delete (simulated by
+// re-planting it) must NOT be served to a post-removal ListResult, even
+// though its Score satisfies the version floor.
+func TestSampleUnsweptStaleEntryRejected_Redis(t *testing.T) {
+	rdb := redisTestDB(t, 13)
+	prefix := testPrefix(t)
+	cleanupKeys(t, rdb, prefix+":*")
+
+	store := mem.New()
+	resolve := func(_ storage.Kind, provider, bucket string) (storage.Storage, error) {
+		return presignBucket{store.Bucket(bucket)}, nil
+	}
+	c := New(prefix, rdb, resolve)
+
+	ctx := context.Background()
+	h, err := c.WriteBegin(ctx, WriteBeginRequest{
+		Catalog: "users", Path: "/", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data",
+	})
+	if err != nil {
+		t.Fatalf("WriteBegin: %v", err)
+	}
+	if err := store.Bucket(h.Bucket).Put(ctx, h.Catalog, h.Key, []byte(`{"n":1}`)); err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	if err := c.WriteNotify(ctx, h); err != nil {
+		t.Fatalf("WriteNotify: %v", err)
+	}
+	pre := c.List(ctx, "users")
+	if pre.Err != nil || len(pre.Entries) != 1 {
+		t.Fatalf("List: err=%v entries=%d", pre.Err, len(pre.Entries))
+	}
+
+	// A pre-removal cached entry, planted as if the sweep had missed it:
+	// generation "0", score high enough to satisfy the version floor.
+	stale, _ := marshalSampleCache(SampleMeta{Score: pre.LastUpdated() + 100, UpdatedAt: 1, RemoveGen: "0"}, 111)
+	memoKey := c.reader.MakeSampleIndicatorKey("views")
+
+	if removed, err := c.RemoveDelta(ctx, "users", pre.Entries[0].TsSeq.String()); err != nil || !removed {
+		t.Fatalf("RemoveDelta: removed=%v err=%v", removed, err)
+	}
+	if err := c.sampleRdb.HSet(ctx, memoKey, "users", stale).Err(); err != nil {
+		t.Fatalf("plant stale entry: %v", err)
+	}
+
+	var runs atomic.Int64
+	sampler := NewSampler[int]("views", func(*ListResult) (int, error) {
+		runs.Add(1)
+		return 222, nil
+	})
+	// Post-removal list (generation "1") must reject the generation-"0" hit
+	// and recompute, despite the planted score beating the version floor.
+	if v, err := sampler.Sample(ctx, c.List(ctx, "users")); err != nil || v != 222 {
+		t.Fatalf("Sample: v=%d err=%v, want recomputed 222/nil", v, err)
+	}
+	if runs.Load() != 1 {
+		t.Fatalf("loader ran %d times, want 1 (stale hit must be rejected)", runs.Load())
+	}
+}
+
 // TestInvalidateSamples_NewFlightAfterInvalidation: a Sample that probes
 // AFTER an invalidation must not join a still-running pre-invalidation
 // loader (same catalog, indicator, and data version) and share its stale

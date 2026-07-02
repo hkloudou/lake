@@ -54,6 +54,12 @@ type SampleMeta struct {
 	// UpdatedAt is the Redis-server wall clock (unix seconds) when the
 	// sample was computed; the basis for WithMaxAge.
 	UpdatedAt int64
+	// RemoveGen is the catalog's removal generation the sample was computed
+	// under ("0" until the first RemoveDelta). A cached entry is served only
+	// to a ListResult of the SAME generation: a removal can lower — or leave
+	// unchanged — the data version, so Score alone cannot tell that a value
+	// still reflects a removed write.
+	RemoveGen string
 }
 
 // SampleResult is one entry of Batch's output: a value, or an error
@@ -325,11 +331,17 @@ return 0
 `
 
 // sampleInvalidateScript bumps the epoch and deletes the catalogs' fields in
-// one atomic step. KEYS[1] = memo hash; ARGV = catalogs. Returns the number
-// of fields deleted.
+// one atomic step. The HDELs iterate rather than unpack(ARGV): unpack is
+// bounded by Lua's stack (~8k), and a large ops sweep must not die after the
+// epoch bump with the fields still in place. KEYS[1] = memo hash;
+// ARGV = catalogs. Returns the number of fields deleted.
 const sampleInvalidateScript = `
 redis.call("HINCRBY", KEYS[1], ":", 1)
-return redis.call("HDEL", KEYS[1], unpack(ARGV))
+local n = 0
+for i = 1, #ARGV do
+  n = n + redis.call("HDEL", KEYS[1], ARGV[i])
+end
+return n
 `
 
 // InvalidateSamples deletes the cached samples of one indicator for the given
@@ -374,12 +386,20 @@ func (c *Client) InvalidateSamples(ctx context.Context, indicator string, catalo
 }
 
 // isStale decides whether a cached entry must be recomputed. The data-
-// version floor is mandatory; maxAge and shouldRefresh only ADD triggers
-// (they can force a refresh, never suppress one the data version requires).
+// version floor and the removal-generation match are mandatory; maxAge and
+// shouldRefresh only ADD triggers (they can force a refresh, never suppress
+// one the mandatory checks require).
 func (s *Sampler[T]) isStale(meta SampleMeta, list *ListResult, peers map[string]*ListResult, now int64) bool {
 	lastUpdated := list.LastUpdated()
 	if !(meta.Score >= lastUpdated && meta.Score > 0) {
 		return true // data advanced past the cached version (or none) → refresh
+	}
+	// A removal can lower or preserve LastUpdated, so the floor above cannot
+	// see it: an entry computed under a different removal generation than
+	// the caller's ListResult must not be served (e.g. the post-removal
+	// sweep has not reached — or failed to reach — this memo hash yet).
+	if normalizeGen(meta.RemoveGen) != normalizeGen(list.removeGen) {
+		return true
 	}
 	// Compare in time.Duration so a sub-second maxAge keeps its value instead
 	// of truncating to 0 (which would mark every hit stale). The clock itself
@@ -466,7 +486,7 @@ func (s *Sampler[T]) loadAndCache(ctx context.Context, c *Client, list *ListResu
 		if lerr != nil {
 			return "", &loaderError{err: lerr}
 		}
-		data, merr := marshalSampleCache(SampleMeta{Score: lastUpdated, UpdatedAt: now}, result)
+		data, merr := marshalSampleCache(SampleMeta{Score: lastUpdated, UpdatedAt: now, RemoveGen: listGen}, result)
 		if merr != nil {
 			return "", fmt.Errorf("marshal sample: %w", merr)
 		}
@@ -517,15 +537,26 @@ type loaderError struct{ err error }
 func (e *loaderError) Error() string { return e.err.Error() }
 func (e *loaderError) Unwrap() error { return e.err }
 
-// Cache value format: a JSON array "[score, updatedAt, data]". score is the
-// data version and updatedAt the compute wall-clock; data is the sample.
+// normalizeGen maps the two spellings of "no removal ever" — a missing/empty
+// generation and the literal "0" — onto one value for comparison.
+func normalizeGen(g string) string {
+	if g == "" {
+		return "0"
+	}
+	return g
+}
+
+// Cache value format: a JSON array "[score, updatedAt, removeGen, data]".
+// score is the data version, updatedAt the compute wall-clock, removeGen the
+// catalog's removal generation at compute time; data is the sample. Older
+// 2/3-element formats fail to decode and read as a miss (recompute).
 func marshalSampleCache[T any](meta SampleMeta, data T) ([]byte, error) {
-	return json.Marshal([3]any{meta.Score, meta.UpdatedAt, data})
+	return json.Marshal([4]any{meta.Score, meta.UpdatedAt, normalizeGen(meta.RemoveGen), data})
 }
 
 func unmarshalSampleCache[T any](raw []byte) (SampleMeta, T, error) {
 	var (
-		arr  [3]json.RawMessage
+		arr  [4]json.RawMessage
 		meta SampleMeta
 		zero T
 	)
@@ -538,8 +569,11 @@ func unmarshalSampleCache[T any](raw []byte) (SampleMeta, T, error) {
 	if err := json.Unmarshal(arr[1], &meta.UpdatedAt); err != nil {
 		return meta, zero, err
 	}
+	if err := json.Unmarshal(arr[2], &meta.RemoveGen); err != nil {
+		return meta, zero, err
+	}
 	var data T
-	if err := json.Unmarshal(arr[2], &data); err != nil {
+	if err := json.Unmarshal(arr[3], &data); err != nil {
 		return meta, zero, err
 	}
 	return meta, data, nil

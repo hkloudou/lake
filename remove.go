@@ -30,10 +30,13 @@ import (
 //     removed delta) cannot persist its effect. Snapshots that ALREADY
 //     absorbed the delta before this call keep it — RemoveDelta unblocks the
 //     log, it does not rewrite history.
-//   - samples: every indicator's memo entry for the catalog is invalidated
-//     (epoch-bumped, so in-flight sample computes cannot write stale values
-//     back either). On sweep failure the delta is still removed; the error
-//     tells the operator to retry InvalidateSamples per indicator.
+//   - samples: the catalog's sample removal generation is bumped BEFORE the
+//     removal (in-flight computes for any indicator — even one that has
+//     never cached — cannot write pre-removal state back), cached entries
+//     carry the generation they were computed under and are rejected on
+//     generation mismatch at read time, and every indicator's memo entry is
+//     swept eagerly. A sweep failure therefore costs memory, not
+//     correctness.
 //
 // DESTRUCTIVE: the removed delta's write disappears from every future read.
 // That is the point — the delta was blocking the catalog — but it is not an
@@ -47,32 +50,37 @@ func (c *Client) RemoveDelta(ctx context.Context, catalog, tsSeq string) (bool, 
 	if err != nil {
 		return false, err
 	}
+	// Install the sample write barrier BEFORE removing anything: if the bump
+	// failed after the ZREM (e.g. a separate sample-cache Redis briefly
+	// down), the delta would be gone with the barrier at the old generation,
+	// an in-flight first-ever sampler could still cache pre-removal state,
+	// and a retry would return false without ever installing the barrier. A
+	// bump whose removal then fails is harmless — it only discards some
+	// in-flight cache writes.
+	if err := c.sampleRdb.HIncrBy(ctx, c.reader.MakeSampleRemoveGenKey(), catalog, 1).Err(); err != nil {
+		return false, fmt.Errorf("install sample barrier: %w", err)
+	}
 	removed, err := c.writer.RemoveDelta(ctx, catalog, id)
 	if err != nil || !removed {
 		return removed, err
 	}
-	if err := c.invalidateAllSamples(ctx, catalog); err != nil {
-		return true, fmt.Errorf("delta removed, but sample invalidation failed (retry InvalidateSamples per indicator): %w", err)
+	if err := c.sweepSamples(ctx, catalog); err != nil {
+		// Correctness no longer depends on the sweep (stale entries carry an
+		// older generation and are rejected at read time); failing here only
+		// leaves memory to reclaim.
+		return true, fmt.Errorf("delta removed, but memo sweep failed (entries expire from reads; retry InvalidateSamples to reclaim now): %w", err)
 	}
 	return true, nil
 }
 
-// invalidateAllSamples voids the catalog's sample state across ALL
-// indicators after a removal, in two steps whose order matters:
-//
-//  1. Bump the catalog's removal generation ("<prefix>:mrg"). Every memo
-//     write is conditional on the generation it observed at probe time, so
-//     this instantly voids in-flight computes for every indicator —
-//     including one whose memo hash does not exist yet (a first-ever Sample
-//     racing the removal), which no key scan could reach.
-//  2. Delete the catalog's entry from every EXISTING memo hash (SCAN
-//     "<prefix>:m:*"; never blocks the server on the full keyspace).
-//     Necessary because a removal can lower LastUpdated(), so the staleness
-//     floor would keep serving an already-cached entry forever.
-func (c *Client) invalidateAllSamples(ctx context.Context, catalog string) error {
-	if err := c.sampleRdb.HIncrBy(ctx, c.reader.MakeSampleRemoveGenKey(), catalog, 1).Err(); err != nil {
-		return fmt.Errorf("bump sample removal gen: %w", err)
-	}
+// sweepSamples deletes the catalog's entry from every EXISTING memo hash
+// (SCAN "<prefix>:m:*"; never blocks the server on the full keyspace). The
+// write barrier ("<prefix>:mrg", bumped by RemoveDelta before the removal)
+// already voids in-flight computes for every indicator — including ones
+// whose memo hash does not exist yet, which no key scan could reach — and
+// the per-entry generation check rejects unswept entries at read time; this
+// sweep just reclaims their memory eagerly.
+func (c *Client) sweepSamples(ctx context.Context, catalog string) error {
 	// The prefix is user-supplied and MATCH treats *?[]\ as glob syntax —
 	// unescaped, a prefix like "app[1]" would silently match the wrong keys
 	// (missing this deployment's memo hashes, or sweeping another's).
