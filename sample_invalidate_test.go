@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/hkloudou/lake/v3/internal/index"
+	"github.com/hkloudou/lake/v3/internal/objkey"
 	"github.com/hkloudou/lake/v3/storage"
 	"github.com/hkloudou/lake/v3/storage/mem"
 )
@@ -172,6 +173,208 @@ func TestRemoveDeltaBlocksUnseenIndicatorWrite_Redis(t *testing.T) {
 	}
 	if n, err := c.sampleRdb.HExists(ctx, hashKey, "users").Result(); err != nil || !n {
 		t.Fatalf("current-generation write was wrongly discarded (exists=%v err=%v)", n, err)
+	}
+}
+
+// TestSampleStaleListNotCached_Redis pins the list-time generation recheck:
+// a loader that computed from a ListResult taken BEFORE a RemoveDelta must
+// not cache its result AFTER the removal — the probe-time barriers look
+// current, but the entries the value was derived from are not. The caller
+// still gets the value; only the write-back is dropped.
+func TestSampleStaleListNotCached_Redis(t *testing.T) {
+	rdb := redisTestDB(t, 13)
+	prefix := testPrefix(t)
+	cleanupKeys(t, rdb, prefix+":*")
+
+	store := mem.New()
+	resolve := func(_ storage.Kind, provider, bucket string) (storage.Storage, error) {
+		return presignBucket{store.Bucket(bucket)}, nil
+	}
+	c := New(prefix, rdb, resolve)
+
+	ctx := context.Background()
+	write := func(body string) {
+		t.Helper()
+		h, err := c.WriteBegin(ctx, WriteBeginRequest{
+			Catalog: "users", Path: "/", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data",
+		})
+		if err != nil {
+			t.Fatalf("WriteBegin: %v", err)
+		}
+		if err := store.Bucket(h.Bucket).Put(ctx, h.Catalog, h.Key, []byte(body)); err != nil {
+			t.Fatalf("upload: %v", err)
+		}
+		if err := c.WriteNotify(ctx, h); err != nil {
+			t.Fatalf("WriteNotify: %v", err)
+		}
+	}
+	write(`{"a":1}`)
+	write(`{"b":2}`)
+
+	staleList := c.List(ctx, "users")
+	if staleList.Err != nil || len(staleList.Entries) != 2 {
+		t.Fatalf("List: err=%v entries=%d", staleList.Err, len(staleList.Entries))
+	}
+
+	if removed, err := c.RemoveDelta(ctx, "users", staleList.Entries[0].TsSeq.String()); err != nil || !removed {
+		t.Fatalf("RemoveDelta: removed=%v err=%v", removed, err)
+	}
+
+	var runs atomic.Int64
+	sampler := NewSampler[int]("views", func(*ListResult) (int, error) {
+		return int(runs.Add(1)), nil
+	})
+
+	// Sampling the PRE-removal list: value returned, write-back dropped.
+	if v, err := sampler.Sample(ctx, staleList); err != nil || v != 1 {
+		t.Fatalf("stale-list Sample: v=%d err=%v, want 1/nil", v, err)
+	}
+	if n, err := c.sampleRdb.HExists(ctx, c.reader.MakeSampleIndicatorKey("views"), "users").Result(); err != nil || n {
+		t.Fatalf("stale-list result was cached (exists=%v err=%v)", n, err)
+	}
+
+	// A fresh list samples, recomputes, and caches normally.
+	if v, err := sampler.Sample(ctx, c.List(ctx, "users")); err != nil || v != 2 {
+		t.Fatalf("fresh-list Sample: v=%d err=%v, want 2/nil", v, err)
+	}
+	if n, err := c.sampleRdb.HExists(ctx, c.reader.MakeSampleIndicatorKey("views"), "users").Result(); err != nil || !n {
+		t.Fatalf("fresh-list result missing from cache (exists=%v err=%v)", n, err)
+	}
+}
+
+// TestRemoveDeltaSnapshotPathIsolation_Redis pins the per-generation object
+// path: removing a non-latest delta leaves the stop unchanged, so the stale
+// and fresh generations save snapshots FOR THE SAME STOP. The stale save's
+// Put must not be able to overwrite the object the published pointer
+// references — even when it finishes last.
+func TestRemoveDeltaSnapshotPathIsolation_Redis(t *testing.T) {
+	rdb := redisTestDB(t, 13)
+	prefix := testPrefix(t)
+	cleanupKeys(t, rdb, prefix+":*")
+
+	store := mem.New()
+	resolve := func(_ storage.Kind, provider, bucket string) (storage.Storage, error) {
+		return presignBucket{store.Bucket(bucket)}, nil
+	}
+	c := New(prefix, rdb, resolve, WithSnapTarget("mem", "snaps"))
+
+	ctx := context.Background()
+	write := func(body string) {
+		t.Helper()
+		h, err := c.WriteBegin(ctx, WriteBeginRequest{
+			Catalog: "users", Path: "/", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data",
+		})
+		if err != nil {
+			t.Fatalf("WriteBegin: %v", err)
+		}
+		if err := store.Bucket(h.Bucket).Put(ctx, h.Catalog, h.Key, []byte(body)); err != nil {
+			t.Fatalf("upload: %v", err)
+		}
+		if err := c.WriteNotify(ctx, h); err != nil {
+			t.Fatalf("WriteNotify: %v", err)
+		}
+	}
+	write(`{"a":1}`)
+	write(`{"b":2}`)
+
+	preList := c.List(ctx, "users")
+	if preList.Err != nil || len(preList.Entries) != 2 {
+		t.Fatalf("pre List: err=%v entries=%d", preList.Err, len(preList.Entries))
+	}
+	if removed, err := c.RemoveDelta(ctx, "users", preList.Entries[0].TsSeq.String()); err != nil || !removed {
+		t.Fatalf("RemoveDelta: removed=%v err=%v", removed, err)
+	}
+	postList := c.List(ctx, "users")
+	if postList.Err != nil || len(postList.Entries) != 1 {
+		t.Fatalf("post List: err=%v entries=%d", postList.Err, len(postList.Entries))
+	}
+	if preList.NextSnap().StopTsSeq != postList.NextSnap().StopTsSeq {
+		t.Fatal("test setup: stops must be identical across the removal")
+	}
+
+	// The fresh generation publishes first…
+	freshURI, err := c.saveSnapshot(ctx, "users", postList.NextSnap().StopTsSeq, postList.removeGen, []byte(`{"fresh":true}`))
+	if err != nil {
+		t.Fatalf("fresh saveSnapshot: %v", err)
+	}
+	// …then the stale generation's save finishes LAST (the overwrite race).
+	staleURI, err := c.saveSnapshot(ctx, "users", preList.NextSnap().StopTsSeq, preList.removeGen, []byte(`{"stale":true}`))
+	if err != nil {
+		t.Fatalf("stale saveSnapshot: %v", err)
+	}
+	if staleURI == freshURI {
+		t.Fatalf("generations share an object path: %s", freshURI)
+	}
+
+	snap, err := c.reader.GetLatestSnap(ctx, "users")
+	if err != nil || snap == nil {
+		t.Fatalf("GetLatestSnap: snap=%+v err=%v", snap, err)
+	}
+	if snap.URI != freshURI {
+		t.Fatalf("pointer = %s, want the fresh generation's %s", snap.URI, freshURI)
+	}
+	_, _, path, err := objkey.ParseURI(snap.URI)
+	if err != nil {
+		t.Fatalf("parse pointer URI: %v", err)
+	}
+	data, err := store.Bucket("snaps").Get(ctx, "users", path)
+	if err != nil {
+		t.Fatalf("fetch pointer object: %v", err)
+	}
+	if string(data) != `{"fresh":true}` {
+		t.Fatalf("pointer object overwritten by the stale generation: %s", data)
+	}
+}
+
+// TestRemoveDeltaSweepsGlobPrefix_Redis: a deployment prefix may contain
+// Redis MATCH metacharacters; the memo sweep must still reach this
+// deployment's literal keys (unescaped, "p[g]…" would match "pg…" instead).
+func TestRemoveDeltaSweepsGlobPrefix_Redis(t *testing.T) {
+	rdb := redisTestDB(t, 13)
+	prefix := testPrefix(t) + "[g]*?"
+	t.Cleanup(func() {
+		rdb.Del(context.Background(),
+			prefix+":d:users", prefix+":s", prefix+":m:views", prefix+":mrg")
+	})
+
+	store := mem.New()
+	resolve := func(_ storage.Kind, provider, bucket string) (storage.Storage, error) {
+		return presignBucket{store.Bucket(bucket)}, nil
+	}
+	c := New(prefix, rdb, resolve)
+
+	ctx := context.Background()
+	h, err := c.WriteBegin(ctx, WriteBeginRequest{
+		Catalog: "users", Path: "/", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data",
+	})
+	if err != nil {
+		t.Fatalf("WriteBegin: %v", err)
+	}
+	if err := store.Bucket(h.Bucket).Put(ctx, h.Catalog, h.Key, []byte(`{"n":1}`)); err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	if err := c.WriteNotify(ctx, h); err != nil {
+		t.Fatalf("WriteNotify: %v", err)
+	}
+	list := c.List(ctx, "users")
+	if list.Err != nil || len(list.Entries) != 1 {
+		t.Fatalf("List: err=%v entries=%d", list.Err, len(list.Entries))
+	}
+
+	sampler := NewSampler[int]("views", func(*ListResult) (int, error) { return 7, nil })
+	if _, err := sampler.Sample(ctx, list); err != nil {
+		t.Fatalf("prime Sample: %v", err)
+	}
+	memoKey := c.reader.MakeSampleIndicatorKey("views")
+	if n, err := c.sampleRdb.HExists(ctx, memoKey, "users").Result(); err != nil || !n {
+		t.Fatalf("prime not cached (exists=%v err=%v)", n, err)
+	}
+
+	if removed, err := c.RemoveDelta(ctx, "users", list.Entries[0].TsSeq.String()); err != nil || !removed {
+		t.Fatalf("RemoveDelta: removed=%v err=%v", removed, err)
+	}
+	if n, err := c.sampleRdb.HExists(ctx, memoKey, "users").Result(); err != nil || n {
+		t.Fatalf("glob-prefix memo hash escaped the sweep (exists=%v err=%v)", n, err)
 	}
 }
 

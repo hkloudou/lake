@@ -430,24 +430,37 @@ func (s *Sampler[T]) sampleCore(ctx context.Context, c *Client, list *ListResult
 
 // loadAndCache runs the loader under the (catalog, indicator, version,
 // barriers) SingleFlight, stamps [score, updatedAt, data], and writes it
-// back best-effort — and conditionally: the write lands only if both
-// barriers (indicator epoch, catalog removal generation) still match what
-// the caller observed before the loader ran, so an invalidation or removal
-// cannot be undone by an in-flight compute (the value is still returned to
-// this caller; it just isn't cached).
+// back best-effort — and conditionally, behind three checks that together
+// guarantee a value computed from a pre-removal ListResult can never stick:
 //
-// The barriers are part of the flight key on purpose: a removal can leave
-// LastUpdated() unchanged (dropping a non-latest delta), so a caller that
-// probed AFTER the invalidation must not join a flight computed from the
-// pre-removal list and share its stale result — the barrier values differ,
-// so it starts its own flight.
+//  1. list-time recheck: the loader computed from list's ENTRIES, so the
+//     authoritative removal generation must still equal list.removeGen
+//     (captured atomically with those entries). This catches a removal that
+//     happened between the List and this call — probing the current value
+//     instead would happily bless a stale computation.
+//  2. probe-time catalog generation ("<prefix>:mrg", checked atomically in
+//     the write script): closes the window between the recheck and the
+//     write itself, and exists even for an indicator that has never cached
+//     anything.
+//  3. probe-time indicator epoch (also in the script): the
+//     InvalidateSamples barrier.
+//
+// The value is still returned to the caller in all cases; it just isn't
+// cached. The barriers are part of the flight key so callers holding
+// different generations never share a result — a removal can leave
+// LastUpdated() unchanged (dropping a non-latest delta), so the version
+// alone cannot separate them.
 //
 // A loader error is wrapped (loaderError) so finalize can distinguish it
 // from an internal encode error; a cache-WRITE failure is swallowed — the
 // computed value is already correct and is returned anyway.
 func (s *Sampler[T]) loadAndCache(ctx context.Context, c *Client, list *ListResult, hashKey string, lastUpdated float64, now int64, epoch, catGen string) (T, error) {
 	var zero T
-	flightKey := fmt.Sprintf("%s:%s:%.6f:%s:%s", list.catalog, s.indicator, lastUpdated, epoch, catGen)
+	listGen := list.removeGen
+	if listGen == "" {
+		listGen = "0"
+	}
+	flightKey := fmt.Sprintf("%s:%s:%.6f:%s:%s:%s", list.catalog, s.indicator, lastUpdated, epoch, catGen, listGen)
 	raw, err := c.sampleFlight.Do(flightKey, func() (string, error) {
 		result, lerr := s.loader(list)
 		if lerr != nil {
@@ -456,6 +469,11 @@ func (s *Sampler[T]) loadAndCache(ctx context.Context, c *Client, list *ListResu
 		data, merr := marshalSampleCache(SampleMeta{Score: lastUpdated, UpdatedAt: now}, result)
 		if merr != nil {
 			return "", fmt.Errorf("marshal sample: %w", merr)
+		}
+		if curGen, gerr := c.reader.RemoveGen(ctx, list.catalog); gerr != nil || curGen != listGen {
+			// Unreadable or moved generation: skip the write (never cache a
+			// value the current log may no longer support), keep the result.
+			return string(data), nil
 		}
 		if werr := c.sampleRdb.Eval(ctx, sampleWriteScript,
 			[]string{hashKey, c.reader.MakeSampleRemoveGenKey()},

@@ -32,7 +32,20 @@ func (c *Client) saveSnapshot(ctx context.Context, catalog string, stop index.Ti
 		return "", nil
 	}
 	return c.snapFlight.Do(fmt.Sprintf("%s_%s_%s", catalog, stop, removeGen), func() (string, error) {
-		path := objkey.SnapPath(catalog, stop.String())
+		// The object path must be unique per (stop, removal generation), not
+		// just per stop: removing a non-latest delta leaves the stop
+		// unchanged, and if both generations shared one path, the stale
+		// generation's Put could finish LAST and overwrite the bytes the
+		// already-published pointer references — resurrecting the removed
+		// write behind AddSnap's back. Same stop + same generation implies
+		// identical content, so sharing within a generation stays benign.
+		// Readers fetch the URI recorded in the pointer verbatim, so the
+		// name shape is free to vary; gen 0 keeps the legacy name.
+		name := stop.String()
+		if removeGen != "" && removeGen != "0" {
+			name += "-g" + removeGen
+		}
+		path := objkey.SnapPath(catalog, name)
 		st, err := c.storageFor(storage.Snap, c.snapProvider, c.snapBucket)
 		if err != nil {
 			return "", fmt.Errorf("resolve snap target: %w", err)

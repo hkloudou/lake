@@ -165,6 +165,21 @@ func parseListReply(res any) (string, string, []redis.Z, error) {
 	return rawSnap, removeGen, zs, nil
 }
 
+// RemoveGen returns the catalog's current removal generation ("0" if no
+// delta was ever removed). Sample write-backs recheck it against the
+// generation captured with their ListResult: a loader computing from a list
+// taken BEFORE a removal must not cache its result after it.
+func (r *Reader) RemoveGen(ctx context.Context, catalog string) (string, error) {
+	gen, err := r.rdb.HGet(ctx, r.MakeSnapsHashKey(), catalog+":rg").Result()
+	if err == redis.Nil {
+		return "0", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return gen, nil
+}
+
 func (r *Reader) GetLatestSnap(ctx context.Context, catalog string) (*SnapInfo, error) {
 	val, err := r.rdb.HGet(ctx, r.MakeSnapsHashKey(), catalog).Result()
 	if err == redis.Nil {

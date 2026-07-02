@@ -3,6 +3,7 @@ package lake
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/hkloudou/lake/v3/internal/index"
 	"github.com/hkloudou/lake/v3/internal/utils"
@@ -72,7 +73,10 @@ func (c *Client) invalidateAllSamples(ctx context.Context, catalog string) error
 	if err := c.sampleRdb.HIncrBy(ctx, c.reader.MakeSampleRemoveGenKey(), catalog, 1).Err(); err != nil {
 		return fmt.Errorf("bump sample removal gen: %w", err)
 	}
-	pattern := c.reader.Prefix() + ":m:*"
+	// The prefix is user-supplied and MATCH treats *?[]\ as glob syntax —
+	// unescaped, a prefix like "app[1]" would silently match the wrong keys
+	// (missing this deployment's memo hashes, or sweeping another's).
+	pattern := globEscape(c.reader.Prefix()) + ":m:*"
 	var cursor uint64
 	for {
 		keys, next, err := c.sampleRdb.Scan(ctx, cursor, pattern, 256).Result()
@@ -89,4 +93,19 @@ func (c *Client) invalidateAllSamples(ctx context.Context, catalog string) error
 		}
 		cursor = next
 	}
+}
+
+// globEscape backslash-escapes Redis MATCH metacharacters so s matches only
+// itself as a literal pattern segment.
+func globEscape(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '*', '?', '[', ']', '\\':
+			b.WriteByte('\\')
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }
