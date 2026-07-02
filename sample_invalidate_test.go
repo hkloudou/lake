@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/hkloudou/lake/v3/internal/index"
 	"github.com/hkloudou/lake/v3/storage"
@@ -77,6 +78,7 @@ func TestInvalidateSamples_BarriersInFlightWrite_Redis(t *testing.T) {
 
 	ctx := context.Background()
 	hashKey := c.reader.MakeSampleIndicatorKey("views")
+	genKey := c.reader.MakeSampleRemoveGenKey()
 	staleValue, _ := marshalSampleCache(SampleMeta{Score: 42, UpdatedAt: 1}, 1)
 
 	// An in-flight compute captured epoch "0" (no invalidation yet)…
@@ -86,7 +88,7 @@ func TestInvalidateSamples_BarriersInFlightWrite_Redis(t *testing.T) {
 		t.Fatalf("InvalidateSamples: %v", err)
 	}
 	// …and the in-flight write-back must be discarded.
-	if err := c.sampleRdb.Eval(ctx, sampleWriteScript, []string{hashKey}, inFlightEpoch, "users", staleValue).Err(); err != nil {
+	if err := c.sampleRdb.Eval(ctx, sampleWriteScript, []string{hashKey, genKey}, inFlightEpoch, "0", "users", staleValue).Err(); err != nil {
 		t.Fatalf("stale write eval: %v", err)
 	}
 	if n, err := c.sampleRdb.HExists(ctx, hashKey, "users").Result(); err != nil || n {
@@ -98,11 +100,146 @@ func TestInvalidateSamples_BarriersInFlightWrite_Redis(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read epoch: %v", err)
 	}
-	if err := c.sampleRdb.Eval(ctx, sampleWriteScript, []string{hashKey}, epoch, "users", staleValue).Err(); err != nil {
+	if err := c.sampleRdb.Eval(ctx, sampleWriteScript, []string{hashKey, genKey}, epoch, "0", "users", staleValue).Err(); err != nil {
 		t.Fatalf("fresh write eval: %v", err)
 	}
 	if n, err := c.sampleRdb.HExists(ctx, hashKey, "users").Result(); err != nil || !n {
 		t.Fatalf("current-epoch write was wrongly discarded (exists=%v err=%v)", n, err)
+	}
+}
+
+// TestRemoveDeltaBlocksUnseenIndicatorWrite_Redis pins the catalog-level
+// barrier for an indicator that has NEVER cached anything: its memo hash
+// does not exist, so no key sweep can reach it — but a first-ever compute
+// that read the pre-removal list must still not land its value after the
+// removal. The "<prefix>:mrg" generation exists independently of memo
+// hashes and blocks exactly that write.
+func TestRemoveDeltaBlocksUnseenIndicatorWrite_Redis(t *testing.T) {
+	rdb := redisTestDB(t, 13)
+	prefix := testPrefix(t)
+	cleanupKeys(t, rdb, prefix+":*")
+
+	store := mem.New()
+	resolve := func(_ storage.Kind, provider, bucket string) (storage.Storage, error) {
+		return presignBucket{store.Bucket(bucket)}, nil
+	}
+	c := New(prefix, rdb, resolve)
+
+	ctx := context.Background()
+	h, err := c.WriteBegin(ctx, WriteBeginRequest{
+		Catalog: "users", Path: "/", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data",
+	})
+	if err != nil {
+		t.Fatalf("WriteBegin: %v", err)
+	}
+	if err := store.Bucket(h.Bucket).Put(ctx, h.Catalog, h.Key, []byte(`{"n":1}`)); err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	if err := c.WriteNotify(ctx, h); err != nil {
+		t.Fatalf("WriteNotify: %v", err)
+	}
+	list := c.List(ctx, "users")
+	if list.Err != nil || len(list.Entries) != 1 {
+		t.Fatalf("List: err=%v entries=%d", list.Err, len(list.Entries))
+	}
+
+	// A first-ever compute for indicator "fresh" captured its barriers
+	// before the removal: memo hash absent → epoch "0", gen "0".
+	hashKey := c.reader.MakeSampleIndicatorKey("fresh")
+	genKey := c.reader.MakeSampleRemoveGenKey()
+	staleValue, _ := marshalSampleCache(SampleMeta{Score: list.LastUpdated(), UpdatedAt: 1}, 1)
+
+	if removed, err := c.RemoveDelta(ctx, "users", list.Entries[0].TsSeq.String()); err != nil || !removed {
+		t.Fatalf("RemoveDelta: removed=%v err=%v", removed, err)
+	}
+
+	// The pre-removal compute's write-back must be discarded even though its
+	// memo hash never existed for the sweep to find.
+	if err := c.sampleRdb.Eval(ctx, sampleWriteScript, []string{hashKey, genKey}, "0", "0", "users", staleValue).Err(); err != nil {
+		t.Fatalf("stale write eval: %v", err)
+	}
+	if n, err := c.sampleRdb.HExists(ctx, hashKey, "users").Result(); err != nil || n {
+		t.Fatalf("pre-removal write for an unseen indicator landed (exists=%v err=%v)", n, err)
+	}
+
+	// A compute that observed the post-removal generation caches normally.
+	gen, err := c.sampleRdb.HGet(ctx, genKey, "users").Result()
+	if err != nil || gen != "1" {
+		t.Fatalf("removal gen = %q err=%v, want \"1\"", gen, err)
+	}
+	if err := c.sampleRdb.Eval(ctx, sampleWriteScript, []string{hashKey, genKey}, "0", gen, "users", staleValue).Err(); err != nil {
+		t.Fatalf("fresh write eval: %v", err)
+	}
+	if n, err := c.sampleRdb.HExists(ctx, hashKey, "users").Result(); err != nil || !n {
+		t.Fatalf("current-generation write was wrongly discarded (exists=%v err=%v)", n, err)
+	}
+}
+
+// TestInvalidateSamples_NewFlightAfterInvalidation: a Sample that probes
+// AFTER an invalidation must not join a still-running pre-invalidation
+// loader (same catalog, indicator, and data version) and share its stale
+// result — the barrier values are part of the flight key, so it computes
+// its own.
+func TestInvalidateSamples_NewFlightAfterInvalidation(t *testing.T) {
+	rdb := redisTestDB(t, 13)
+	prefix := testPrefix(t)
+	cleanupKeys(t, rdb, prefix+":*")
+	c := New(prefix, rdb, memResolver())
+
+	ctx := context.Background()
+	list := &ListResult{client: c, catalog: "users", Entries: []index.DeltaInfo{{Score: 42}}}
+
+	gate := make(chan struct{})
+	var runs atomic.Int64
+	sampler := NewSampler[int]("views", func(*ListResult) (int, error) {
+		n := int(runs.Add(1))
+		if n == 1 {
+			<-gate // first (pre-invalidation) loader hangs mid-compute
+		}
+		return n, nil
+	})
+
+	first := make(chan int, 1)
+	go func() {
+		v, _ := sampler.Sample(ctx, list)
+		first <- v
+	}()
+	if !waitFor(func() bool { return runs.Load() == 1 }) {
+		t.Fatal("first loader did not start")
+	}
+
+	if _, err := c.InvalidateSamples(ctx, "views", "users"); err != nil {
+		t.Fatalf("InvalidateSamples: %v", err)
+	}
+
+	// Post-invalidation call: must run its own loader (value 2), not join
+	// the hung pre-invalidation flight and inherit its value 1.
+	done := make(chan struct{})
+	var v2 int
+	var err2 error
+	go func() {
+		v2, err2 = sampler.Sample(ctx, list)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("post-invalidation Sample joined the hung pre-invalidation flight")
+	}
+	if err2 != nil || v2 != 2 {
+		t.Fatalf("post-invalidation Sample: v=%d err=%v, want 2/nil", v2, err2)
+	}
+
+	close(gate)
+	if v1 := <-first; v1 != 1 {
+		t.Fatalf("pre-invalidation Sample: v=%d, want 1", v1)
+	}
+	// And its stale write-back must not have landed.
+	if raw, err := c.sampleRdb.HGet(ctx, c.reader.MakeSampleIndicatorKey("views"), "users").Bytes(); err == nil {
+		_, cachedVal, derr := unmarshalSampleCache[int](raw)
+		if derr == nil && cachedVal == 1 {
+			t.Fatal("stale pre-invalidation value was cached")
+		}
 	}
 }
 

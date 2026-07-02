@@ -56,12 +56,22 @@ func (c *Client) RemoveDelta(ctx context.Context, catalog, tsSeq string) (bool, 
 	return true, nil
 }
 
-// invalidateAllSamples sweeps every indicator's memo hash ("<prefix>:m:*" on
-// the sample Redis) and invalidates the catalog's entry in each — the same
-// epoch-bump + delete InvalidateSamples performs, so in-flight computes for
-// any indicator cannot reinstate a value derived from the removed delta.
-// SCAN-based: never blocks the server on the full keyspace.
+// invalidateAllSamples voids the catalog's sample state across ALL
+// indicators after a removal, in two steps whose order matters:
+//
+//  1. Bump the catalog's removal generation ("<prefix>:mrg"). Every memo
+//     write is conditional on the generation it observed at probe time, so
+//     this instantly voids in-flight computes for every indicator —
+//     including one whose memo hash does not exist yet (a first-ever Sample
+//     racing the removal), which no key scan could reach.
+//  2. Delete the catalog's entry from every EXISTING memo hash (SCAN
+//     "<prefix>:m:*"; never blocks the server on the full keyspace).
+//     Necessary because a removal can lower LastUpdated(), so the staleness
+//     floor would keep serving an already-cached entry forever.
 func (c *Client) invalidateAllSamples(ctx context.Context, catalog string) error {
+	if err := c.sampleRdb.HIncrBy(ctx, c.reader.MakeSampleRemoveGenKey(), catalog, 1).Err(); err != nil {
+		return fmt.Errorf("bump sample removal gen: %w", err)
+	}
 	pattern := c.reader.Prefix() + ":m:*"
 	var cursor uint64
 	for {
@@ -70,7 +80,7 @@ func (c *Client) invalidateAllSamples(ctx context.Context, catalog string) error
 			return err
 		}
 		for _, key := range keys {
-			if err := c.sampleRdb.Eval(ctx, sampleInvalidateScript, []string{key}, catalog).Err(); err != nil {
+			if err := c.sampleRdb.HDel(ctx, key, catalog).Err(); err != nil {
 				return fmt.Errorf("invalidate %s: %w", key, err)
 			}
 		}

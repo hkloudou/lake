@@ -75,6 +75,20 @@ func TestHandleSignature_RejectsTampering(t *testing.T) {
 	}
 }
 
+// TestHandleSignature_RejectsExpiredHandle: the signature makes ExpiresAt
+// trustworthy, so Notify must also enforce it — a leaked signed handle is
+// not replayable indefinitely. (The handle here is validly signed OVER the
+// past expiry, isolating the expiry check from the tamper check.)
+func TestHandleSignature_RejectsExpiredHandle(t *testing.T) {
+	c := newSignedDeadClient(t, "s3cret")
+	h := beginSigned(t, c)
+	h.ExpiresAt = time.Now().Add(-time.Hour).Unix()
+	h.Signature = c.signHandle(h)
+	if err := c.WriteNotify(context.Background(), h); err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("expected expiry rejection, got %v", err)
+	}
+}
+
 // TestHandleSignature_IgnoredWithoutSecret: verification is opt-in — a
 // secretless client must not reject a handle for carrying (or lacking) a
 // signature. The structurally valid handle passes every pre-Redis check and

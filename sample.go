@@ -211,12 +211,33 @@ func (s *Sampler[T]) Batch(ctx context.Context, lists map[string]*ListResult) ma
 	now := c.reader.NowUnix()
 	hashKey := c.reader.MakeSampleIndicatorKey(s.indicator)
 
-	// One HMGet probes every catalog's cached value plus the epoch field —
-	// captured before any loader runs, so a mid-batch invalidation voids the
-	// batch's write-backs.
+	// One pipelined round-trip probes every catalog's cached value plus both
+	// write barriers (indicator epoch + per-catalog removal generation) —
+	// captured before any loader runs, so a mid-batch invalidation or
+	// removal voids the batch's write-backs.
 	fields := append(append(make([]string, 0, len(probe)+1), probe...), sampleEpochField)
 	epoch := "0"
-	cached, err := c.sampleRdb.HMGet(ctx, hashKey, fields...).Result()
+	pipe := c.sampleRdb.Pipeline()
+	memoCmd := pipe.HMGet(ctx, hashKey, fields...)
+	genCmd := pipe.HMGet(ctx, c.reader.MakeSampleRemoveGenKey(), probe...)
+	_, _ = pipe.Exec(ctx)
+
+	catGens := make(map[string]string, len(probe))
+	if genVals, err := genCmd.Result(); err == nil && len(genVals) == len(probe) {
+		for i, raw := range genVals {
+			if g, ok := raw.(string); ok {
+				catGens[probe[i]] = g
+			}
+		}
+	}
+	catGen := func(cat string) string {
+		if g, ok := catGens[cat]; ok {
+			return g
+		}
+		return "0"
+	}
+
+	cached, err := memoCmd.Result()
 	if err != nil && err != redis.Nil {
 		// Cache-read failure: degrade to recompute-all rather than fail
 		// the batch (the cache is an optimization, not the truth).
@@ -261,7 +282,7 @@ func (s *Sampler[T]) Batch(ctx context.Context, lists map[string]*ListResult) ma
 				// Re-read the clock per loader run: with many misses ahead in
 				// the queue, the batch-start `now` could stamp an UpdatedAt
 				// already a whole maxAge in the past.
-				v, e := s.finalize(s.loadAndCache(ctx, c, l, hashKey, l.LastUpdated(), c.reader.NowUnix(), epoch))
+				v, e := s.finalize(s.loadAndCache(ctx, c, l, hashKey, l.LastUpdated(), c.reader.NowUnix(), epoch, catGen(cat)))
 				mu.Lock()
 				out[cat] = &SampleResult[T]{Value: v, Err: e}
 				mu.Unlock()
@@ -285,12 +306,19 @@ func (s *Sampler[T]) Batch(ctx context.Context, lists map[string]*ListResult) ma
 // data version unchanged nothing would ever evict it again.
 const sampleEpochField = ":"
 
-// sampleWriteScript writes a computed sample only if the memo epoch still
-// matches what the writer observed before running its loader.
-// KEYS[1] = memo hash; ARGV[1] = epoch, ARGV[2] = catalog, ARGV[3] = value.
+// sampleWriteScript writes a computed sample only if BOTH barriers still
+// match what the writer observed before running its loader: the indicator's
+// memo epoch (bumped by InvalidateSamples) and the catalog's removal
+// generation in "<prefix>:mrg" (bumped by RemoveDelta — this one exists even
+// for an indicator that has never cached anything, which the memo epoch
+// alone cannot cover: a first-ever compute would see the missing epoch as
+// "0" and land a value derived from the removed delta).
+// KEYS[1] = memo hash, KEYS[2] = removal-gen hash; ARGV[1] = memo epoch,
+// ARGV[2] = catalog removal gen, ARGV[3] = catalog, ARGV[4] = value.
 const sampleWriteScript = `
-if (redis.call("HGET", KEYS[1], ":") or "0") == ARGV[1] then
-  redis.call("HSET", KEYS[1], ARGV[2], ARGV[3])
+if (redis.call("HGET", KEYS[1], ":") or "0") == ARGV[1]
+    and (redis.call("HGET", KEYS[2], ARGV[3]) or "0") == ARGV[2] then
+  redis.call("HSET", KEYS[1], ARGV[3], ARGV[4])
   return 1
 end
 return 0
@@ -365,18 +393,27 @@ func (s *Sampler[T]) isStale(meta SampleMeta, list *ListResult, peers map[string
 	return false
 }
 
-// sampleCore is the cache-or-compute path for a single catalog: one HMGET
-// (value + epoch), then load on miss/stale. A cache-READ failure degrades to
-// recompute — it never fails the call. The epoch is captured here, BEFORE the
-// loader runs, so an invalidation that lands during the compute makes the
-// write-back a no-op.
+// sampleCore is the cache-or-compute path for a single catalog: one
+// pipelined round-trip probing the cached value plus both write barriers,
+// then load on miss/stale. A cache-READ failure degrades to recompute — it
+// never fails the call. Both barriers are captured here, BEFORE the loader
+// runs, so an invalidation or removal that lands during the compute makes
+// the write-back a no-op. An unreadable barrier stays "0", which can only
+// DISCARD the write — never admit a stale one.
 func (s *Sampler[T]) sampleCore(ctx context.Context, c *Client, list *ListResult, peers map[string]*ListResult) (T, error) {
 	lastUpdated := list.LastUpdated()
 	now := c.reader.NowUnix()
 	hashKey := c.reader.MakeSampleIndicatorKey(s.indicator)
 
-	epoch := "0"
-	if vals, err := c.sampleRdb.HMGet(ctx, hashKey, list.catalog, sampleEpochField).Result(); err != nil {
+	epoch, catGen := "0", "0"
+	pipe := c.sampleRdb.Pipeline()
+	memoCmd := pipe.HMGet(ctx, hashKey, list.catalog, sampleEpochField)
+	genCmd := pipe.HGet(ctx, c.reader.MakeSampleRemoveGenKey(), list.catalog)
+	_, _ = pipe.Exec(ctx)
+	if g, err := genCmd.Result(); err == nil {
+		catGen = g
+	}
+	if vals, err := memoCmd.Result(); err != nil {
 		c.emitEvent(list.catalog, "SampleCacheError", map[string]any{"op": "hmget", "err": err.Error()})
 	} else {
 		if e, ok := vals[1].(string); ok {
@@ -388,21 +425,29 @@ func (s *Sampler[T]) sampleCore(ctx context.Context, c *Client, list *ListResult
 			}
 		}
 	}
-	return s.loadAndCache(ctx, c, list, hashKey, lastUpdated, now, epoch)
+	return s.loadAndCache(ctx, c, list, hashKey, lastUpdated, now, epoch, catGen)
 }
 
-// loadAndCache runs the loader under the (catalog, indicator, version)
-// SingleFlight, stamps [score, updatedAt, data], and writes it back
-// best-effort — and conditionally: the write lands only if the memo epoch
-// still matches what the caller observed before the loader ran, so an
-// invalidation cannot be undone by an in-flight compute (the value is still
-// returned to this caller; it just isn't cached). A loader error is wrapped
-// (loaderError) so finalize can distinguish it from an internal encode
-// error; a cache-WRITE failure is swallowed — the computed value is already
-// correct and is returned anyway.
-func (s *Sampler[T]) loadAndCache(ctx context.Context, c *Client, list *ListResult, hashKey string, lastUpdated float64, now int64, epoch string) (T, error) {
+// loadAndCache runs the loader under the (catalog, indicator, version,
+// barriers) SingleFlight, stamps [score, updatedAt, data], and writes it
+// back best-effort — and conditionally: the write lands only if both
+// barriers (indicator epoch, catalog removal generation) still match what
+// the caller observed before the loader ran, so an invalidation or removal
+// cannot be undone by an in-flight compute (the value is still returned to
+// this caller; it just isn't cached).
+//
+// The barriers are part of the flight key on purpose: a removal can leave
+// LastUpdated() unchanged (dropping a non-latest delta), so a caller that
+// probed AFTER the invalidation must not join a flight computed from the
+// pre-removal list and share its stale result — the barrier values differ,
+// so it starts its own flight.
+//
+// A loader error is wrapped (loaderError) so finalize can distinguish it
+// from an internal encode error; a cache-WRITE failure is swallowed — the
+// computed value is already correct and is returned anyway.
+func (s *Sampler[T]) loadAndCache(ctx context.Context, c *Client, list *ListResult, hashKey string, lastUpdated float64, now int64, epoch, catGen string) (T, error) {
 	var zero T
-	flightKey := fmt.Sprintf("%s:%s:%.6f", list.catalog, s.indicator, lastUpdated)
+	flightKey := fmt.Sprintf("%s:%s:%.6f:%s:%s", list.catalog, s.indicator, lastUpdated, epoch, catGen)
 	raw, err := c.sampleFlight.Do(flightKey, func() (string, error) {
 		result, lerr := s.loader(list)
 		if lerr != nil {
@@ -412,7 +457,9 @@ func (s *Sampler[T]) loadAndCache(ctx context.Context, c *Client, list *ListResu
 		if merr != nil {
 			return "", fmt.Errorf("marshal sample: %w", merr)
 		}
-		if werr := c.sampleRdb.Eval(ctx, sampleWriteScript, []string{hashKey}, epoch, list.catalog, data).Err(); werr != nil {
+		if werr := c.sampleRdb.Eval(ctx, sampleWriteScript,
+			[]string{hashKey, c.reader.MakeSampleRemoveGenKey()},
+			epoch, catGen, list.catalog, data).Err(); werr != nil {
 			c.emitEvent(list.catalog, "SampleCacheError", map[string]any{"op": "hset", "err": werr.Error()})
 		}
 		return string(data), nil

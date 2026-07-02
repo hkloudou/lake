@@ -112,9 +112,11 @@ func WithSampleCacheRedis(rdb *redis.Client) func(*option) {
 // rejects any handle whose signature is missing or does not match — so a
 // handle that round-tripped through an untrusted client provably carries
 // exactly the Catalog/Path/MergeType/UUID/URI/ExpiresAt that WriteBegin
-// issued. (Without a secret, notify still enforces the structural
-// URI↔catalog/uuid binding; the secret additionally pins Path, MergeType and
-// ExpiresAt.) Every process sharing the prefix must be given the same secret.
+// issued — and, because ExpiresAt is then trustworthy, WriteNotify also
+// rejects handles past it (no indefinite replay of a leaked handle).
+// (Without a secret, notify still enforces the structural URI↔catalog/uuid
+// binding; the secret additionally pins Path, MergeType and ExpiresAt.)
+// Every process sharing the prefix must be given the same secret.
 // Panics on an empty secret (programmer error at construction time).
 func WithHandleSecret(secret []byte) func(*option) {
 	if len(secret) == 0 {

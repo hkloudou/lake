@@ -219,6 +219,13 @@ func (c *Client) WriteNotify(ctx context.Context, h *WriteHandle) error {
 		if !hmac.Equal([]byte(c.signHandle(h)), []byte(h.Signature)) {
 			return errors.New("invalid handle signature")
 		}
+		// The signature authenticates ExpiresAt, so enforce it too: a leaked
+		// signed handle must not be replayable indefinitely. (Without a
+		// secret the field is client-editable, so checking it there would
+		// only be theater.)
+		if now := time.Now().Unix(); now > h.ExpiresAt {
+			return fmt.Errorf("handle expired at %d (now %d)", h.ExpiresAt, now)
+		}
 	}
 	_, _, err = c.writer.Notify(ctx, h.Catalog, h.Path, h.MergeType, h.URI)
 	return err
