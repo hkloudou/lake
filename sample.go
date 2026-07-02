@@ -250,7 +250,10 @@ func (s *Sampler[T]) Batch(ctx context.Context, lists map[string]*ListResult) ma
 		wg.Go(func() {
 			for cat := range jobs {
 				l := lists[cat]
-				v, e := s.finalize(s.loadAndCache(ctx, c, l, hashKey, l.LastUpdated(), now))
+				// Re-read the clock per loader run: with many misses ahead in
+				// the queue, the batch-start `now` could stamp an UpdatedAt
+				// already a whole maxAge in the past.
+				v, e := s.finalize(s.loadAndCache(ctx, c, l, hashKey, l.LastUpdated(), c.reader.NowUnix()))
 				mu.Lock()
 				out[cat] = &SampleResult[T]{Value: v, Err: e}
 				mu.Unlock()

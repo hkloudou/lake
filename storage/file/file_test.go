@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -23,6 +24,55 @@ func TestFile_RoundTrip(t *testing.T) {
 	}
 	if string(got) != "hello" {
 		t.Fatalf("Get = %q, want hello", got)
+	}
+}
+
+// TestFile_ConcurrentPutSamePath pins the staging contract: every writer
+// stages through its OWN temp file, so racing Puts of one path never
+// interleave bytes — the final content is exactly one writer's payload, and
+// no *.tmp* staging file survives.
+func TestFile_ConcurrentPutSamePath(t *testing.T) {
+	fs, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := fs.Bucket("data")
+	ctx := context.Background()
+
+	payload := func(i int) []byte {
+		return append([]byte{byte('a' + i)}, make([]byte, 64*1024)...)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Go(func() {
+			if err := b.Put(ctx, "users", "x.snap", payload(i)); err != nil {
+				t.Errorf("Put: %v", err)
+			}
+		})
+	}
+	wg.Wait()
+
+	got, err := b.Get(ctx, "users", "x.snap")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	var whole bool
+	for i := 0; i < 8; i++ {
+		if string(got) == string(payload(i)) {
+			whole = true
+			break
+		}
+	}
+	if !whole {
+		t.Fatalf("content is not any single writer's payload (len=%d, first byte %q) — writes interleaved", len(got), got[0])
+	}
+
+	matches, err := filepath.Glob(filepath.Join(fs.base, "data", "*.tmp*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("staging files left behind: %v", matches)
 	}
 }
 
