@@ -27,8 +27,10 @@ func newTestClientRDB(rdb *redis.Client) *Client {
 
 // newTestClient builds a test Client pointed at a Redis addr (often
 // unreachable, to exercise error paths) with a 200ms dial timeout.
+// MaxRetries -1 disables go-redis's default dial retries (3 with backoff
+// since v9.6) so error-path tests fail fast instead of ~1.7s each.
 func newTestClient(addr string) *Client {
-	return newTestClientRDB(redis.NewClient(&redis.Options{Addr: addr, DialTimeout: 200 * time.Millisecond}))
+	return newTestClientRDB(redis.NewClient(&redis.Options{Addr: addr, DialTimeout: 200 * time.Millisecond, MaxRetries: -1}))
 }
 
 // unreachableRedis is a closed-port addr: any Redis op against it fails fast
@@ -49,7 +51,7 @@ func newDeadClient(t *testing.T) *Client {
 // mem-backed default.
 func newDeadClientOpts(t *testing.T, resolve storage.Resolver, opts ...func(*option)) *Client {
 	t.Helper()
-	rdb := redis.NewClient(&redis.Options{Addr: unreachableRedis, DialTimeout: 200 * time.Millisecond})
+	rdb := redis.NewClient(&redis.Options{Addr: unreachableRedis, DialTimeout: 200 * time.Millisecond, MaxRetries: -1})
 	t.Cleanup(func() { _ = rdb.Close() })
 	return New("test", rdb, resolve, opts...)
 }
