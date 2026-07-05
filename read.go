@@ -57,7 +57,7 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 	if c.snapProvider != "" {
 		if next := list.NextSnap(); next != nil {
 			snapData := append([]byte(nil), resultData...)
-			go c.saveSnapshot(context.Background(), list.catalog, next.StopTsSeq, list.removeGen, snapData)
+			go c.saveSnapshotGuarded(list.catalog, next.StopTsSeq, list.removeGen, snapData)
 		}
 	}
 	return resultData, nil

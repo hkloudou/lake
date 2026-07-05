@@ -43,3 +43,13 @@ func newDeadClient(t *testing.T) *Client {
 	t.Helper()
 	return newTestClient(unreachableRedis)
 }
+
+// newDeadClientOpts is newDeadClient for tests that need a custom resolver
+// and/or client options (e.g. a failing snap target) instead of the plain
+// mem-backed default.
+func newDeadClientOpts(t *testing.T, resolve storage.Resolver, opts ...func(*option)) *Client {
+	t.Helper()
+	rdb := redis.NewClient(&redis.Options{Addr: unreachableRedis, DialTimeout: 200 * time.Millisecond})
+	t.Cleanup(func() { _ = rdb.Close() })
+	return New("test", rdb, resolve, opts...)
+}

@@ -231,11 +231,10 @@ func (s *Sampler[T]) Batch(ctx context.Context, lists map[string]*ListResult) ma
 	_, _ = pipe.Exec(ctx)
 
 	catGens := make(map[string]string, len(probe))
-	if genVals, err := genCmd.Result(); err == nil && len(genVals) == len(probe) {
-		for i, raw := range genVals {
-			if g, ok := raw.(string); ok {
-				catGens[probe[i]] = g
-			}
+	genVals, _ := genCmd.Result()
+	for i, raw := range hmgetRow(genVals, len(probe)) {
+		if g, ok := raw.(string); ok {
+			catGens[probe[i]] = g
 		}
 	}
 	catGen := func(cat string) string {
@@ -252,8 +251,8 @@ func (s *Sampler[T]) Batch(ctx context.Context, lists map[string]*ListResult) ma
 		for _, cat := range probe {
 			c.emitEvent(cat, "SampleCacheError", map[string]any{"op": "hmget", "err": err.Error()})
 		}
-		cached = make([]any, len(fields))
 	}
+	cached = hmgetRow(cached, len(fields))
 	if e, ok := cached[len(probe)].(string); ok {
 		epoch = e
 	}
@@ -435,16 +434,17 @@ func (s *Sampler[T]) sampleCore(ctx context.Context, c *Client, list *ListResult
 	if g, err := genCmd.Result(); err == nil {
 		catGen = g
 	}
-	if vals, err := memoCmd.Result(); err != nil {
-		c.emitEvent(list.catalog, "SampleCacheError", map[string]any{"op": "hmget", "err": err.Error()})
-	} else {
-		if e, ok := vals[1].(string); ok {
-			epoch = e
-		}
-		if cached, ok := vals[0].(string); ok {
-			if meta, data, derr := unmarshalSampleCache[T]([]byte(cached)); derr == nil && !s.isStale(meta, list, peers, now) {
-				return data, nil
-			}
+	vals, verr := memoCmd.Result()
+	if verr != nil {
+		c.emitEvent(list.catalog, "SampleCacheError", map[string]any{"op": "hmget", "err": verr.Error()})
+	}
+	vals = hmgetRow(vals, 2)
+	if e, ok := vals[1].(string); ok {
+		epoch = e
+	}
+	if cached, ok := vals[0].(string); ok {
+		if meta, data, derr := unmarshalSampleCache[T]([]byte(cached)); derr == nil && !s.isStale(meta, list, peers, now) {
+			return data, nil
 		}
 	}
 	return s.loadAndCache(ctx, c, list, hashKey, lastUpdated, now, epoch, catGen)
@@ -538,6 +538,19 @@ type loaderError struct{ err error }
 
 func (e *loaderError) Error() string { return e.err.Error() }
 func (e *loaderError) Unwrap() error { return e.err }
+
+// hmgetRow normalizes a pipelined HMGet reply to exactly n entries: an
+// errored, nil, or short reply becomes an all-nil row, so callers can index
+// it unconditionally and absent values read as cache misses. (Redis returns
+// exactly one entry per requested field on success; anything else — a
+// transport error, redis.Nil, a truncating proxy — must degrade to a miss,
+// never an index-out-of-range panic.)
+func hmgetRow(vals []any, n int) []any {
+	if len(vals) != n {
+		return make([]any, n)
+	}
+	return vals
+}
 
 // normalizeGen maps the two spellings of "no removal ever" — a missing/empty
 // generation and the literal "0" — onto one value for comparison.

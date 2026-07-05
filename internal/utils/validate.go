@@ -31,3 +31,29 @@ func ValidateCatalog(catalog string) error {
 	}
 	return nil
 }
+
+// storagePartRegex: storage provider / bucket name, as embedded in object
+// URIs ("provider://bucket/path"). ParseURI splits a URI on the FIRST "://"
+// and the FIRST "/" after it, so neither part may contain "/" or ":" —
+// otherwise BuildURI/ParseURI disagree and the recorded locator resolves to
+// a different object than the one written. Conservative ASCII charset; no
+// leading "." or "-" (hidden-file / flag conventions, and "-internal"-style
+// endpoint suffixing must not be forgeable via the name).
+var storagePartRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._\-]*$`)
+
+func ValidateStorageProvider(provider string) error {
+	return validateStoragePart("provider", provider)
+}
+
+func ValidateStorageBucket(bucket string) error {
+	return validateStoragePart("bucket", bucket)
+}
+
+// validateStoragePart is the single definition of the URI-part format; the
+// two exported wrappers exist only to name the offending part in the error.
+func validateStoragePart(kind, s string) error {
+	if !storagePartRegex.MatchString(s) {
+		return fmt.Errorf(`invalid storage %s %q: ASCII [a-zA-Z0-9][a-zA-Z0-9._\-]* required ("/" ":" "|" forbidden)`, kind, s)
+	}
+	return nil
+}
