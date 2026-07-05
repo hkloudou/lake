@@ -2,7 +2,9 @@ package xsync
 
 import (
 	"errors"
+	"strings"
 	"testing"
+	"time"
 )
 
 // TestSingleFlight_PanicDoesNotWedgeKey is the regression guard: a fn that
@@ -24,6 +26,49 @@ func TestSingleFlight_PanicDoesNotWedgeKey(t *testing.T) {
 	got, err := g.Do("k", func() (int, error) { return 42, nil })
 	if err != nil || got != 42 {
 		t.Fatalf("after a panicking call, Do(k) = (%d, %v), want (42, nil)", got, err)
+	}
+}
+
+// TestSingleFlight_PanicSurfacesToWaiters: a waiter joined to a leader whose fn
+// panics must observe an ERROR — not (zero, nil), which would be
+// indistinguishable from a successful call that produced the zero value (an
+// empty cache entry, a zero sample). The panic itself still belongs to the
+// leader only.
+func TestSingleFlight_PanicSurfacesToWaiters(t *testing.T) {
+	g := NewSingleFlight[int]()
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	go func() { // leader: panics once released
+		defer func() { _ = recover() }()
+		_, _ = g.Do("k", func() (int, error) {
+			close(entered)
+			<-release
+			panic("boom")
+		})
+	}()
+	<-entered
+
+	type result struct {
+		v   int
+		err error
+	}
+	done := make(chan result, 1)
+	go func() { // waiter: joins the in-flight call
+		v, err := g.Do("k", func() (int, error) {
+			t.Error("waiter must join the leader's flight, not run its own fn")
+			return -1, nil
+		})
+		done <- result{v, err}
+	}()
+	// Give the waiter time to register on the in-flight call before the
+	// leader panics; if it were somehow late, its own fn would t.Error above.
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+
+	res := <-done
+	if res.err == nil || !strings.Contains(res.err.Error(), "panicked") {
+		t.Fatalf("waiter got (%d, %v), want a leader-panicked error", res.v, res.err)
 	}
 }
 

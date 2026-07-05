@@ -252,6 +252,11 @@ func (s *Sampler[T]) Batch(ctx context.Context, lists map[string]*ListResult) ma
 		for _, cat := range probe {
 			c.emitEvent(cat, "SampleCacheError", map[string]any{"op": "hmget", "err": err.Error()})
 		}
+	}
+	if len(cached) != len(fields) {
+		// Covers the error path above AND any short reply (redis.Nil leaves
+		// cached nil; a misbehaving proxy could truncate): every index below
+		// must be in range, and an all-nil row simply reads as a miss.
 		cached = make([]any, len(fields))
 	}
 	if e, ok := cached[len(probe)].(string); ok {
@@ -437,7 +442,7 @@ func (s *Sampler[T]) sampleCore(ctx context.Context, c *Client, list *ListResult
 	}
 	if vals, err := memoCmd.Result(); err != nil {
 		c.emitEvent(list.catalog, "SampleCacheError", map[string]any{"op": "hmget", "err": err.Error()})
-	} else {
+	} else if len(vals) == 2 { // guard against a short reply — treat as a miss
 		if e, ok := vals[1].(string); ok {
 			epoch = e
 		}

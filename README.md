@@ -216,9 +216,17 @@ func New(prefix string, rdb *redis.Client, resolve storage.Resolver, opts ...fun
 |--------|-------------|
 | `WithSnapTarget(provider, bucket)` | Where Lake writes auto-generated snapshots. Omit → no auto-snapshotting (reads replay all deltas) |
 | `WithSampleCacheURL(url)` / `WithSampleCacheRedis(rdb)` | Route the Sampler memo hash (`<prefix>:m:*`) to a separate Redis |
+| `WithHandleSecret(secret)` | HMAC-sign every `WriteHandle`; `WriteNotify` then rejects tampered or expired handles (see **Write** below). Every process sharing the prefix needs the same secret |
 | `(*Client) Use(handler EventHandler)` | Register an event handler |
 
-`New` panics on an empty `prefix`, nil `rdb`, or nil `resolve` (programmer error).
+`New` panics on an empty `prefix`, nil `rdb`, or nil `resolve`; option
+constructors panic on invalid input (`WithSnapTarget` on an ambiguous
+provider/bucket, `WithHandleSecret` on an empty secret, `WithSampleCacheURL` on
+a bad URL) — all programmer errors, caught at construction time.
+
+> **Redis compatibility**: developed and tested against Redis 7.x. The notify
+> script calls `TIME` before writing, which relies on effect-based script
+> replication — the default since Redis 5.0 and the only mode since 7.0.
 
 ### Storage
 
@@ -291,10 +299,24 @@ type WriteHandle struct {
     UploadMethod  string            `json:"uploadMethod"`
     UploadHeaders map[string]string `json:"uploadHeaders"`
     ExpiresAt     int64             `json:"expiresAt"` // unix seconds
+    Signature     string            `json:"signature,omitempty"` // set iff WithHandleSecret; echo back unchanged
 }
 ```
 
 **Begin options**: `WithUploadTTL(d)`, `WithUploadContentType(ct)`.
+
+**Handle integrity**: handles round-trip through clients Lake does not trust,
+so `WriteNotify` always re-derives the object path from the handle's own
+`(Catalog, UUID)` and rejects a URI that doesn't match — a tampered handle can
+never point one catalog's index at another catalog's objects. With
+`WithHandleSecret` configured, WriteBegin additionally stamps `Signature`
+(HMAC-SHA256 over the identity fields) and WriteNotify rejects handles whose
+signature is missing/invalid or whose `ExpiresAt` has passed (no indefinite
+replay of a leaked handle).
+
+`Provider` / `Bucket` must be ASCII `[a-zA-Z0-9][a-zA-Z0-9._-]*` — they are
+embedded in the recorded URI, so `/` `:` `|` are rejected at WriteBegin (an
+ambiguous name would make the URI parse back to a different object).
 
 > **Presign capability**: WriteBegin requires the resolved backend to implement
 > `storage.Presigner`. OSS supports it; file / memory return
@@ -390,6 +412,22 @@ err := client.IterateSnaps(ctx, func(catalog string, snap lake.SnapInfo) bool {
     return copyToArchive(ctx, snap.URI) == nil // stop on first failure
 })
 ```
+
+### Operations
+
+| Function | Description |
+|----------|-------------|
+| `(*Client) RemoveDelta(ctx, catalog, tsSeq) (bool, error)` | Remove one poison delta from the index (the body object stays). The **only** correct way to unblock a catalog wedged by an unappliable body |
+| `(*Client) Compact(ctx, catalog) (int64, error)` | Trim the delta zset up to the current snapshot; index-only, safe anytime, no background reaper |
+| `(*Client) InvalidateSamples(ctx, indicator, catalogs...) (int64, error)` | Drop cached samples (e.g. after a loader code change or catalog deletion); next Sample/Batch recomputes |
+
+`RemoveDelta` takes the `tsSeq` string verbatim from the merge error
+(`merge failed (path=… tsSeq=1700000000_42 …)`). It is destructive — the
+removed write disappears from every future read — and it is coherent with
+derived state: the removal bumps the catalog's **removal generation**, so an
+in-flight read that listed the removed delta can neither persist a snapshot
+nor cache a sample computed from pre-removal state. That barrier is exactly
+what a hand-issued `ZREM` would skip.
 
 ## 📖 Core Concepts
 
@@ -517,6 +555,14 @@ client.Use(func(catalog, event string, attrs map[string]any) {
 | `WriteNotify` | `path`, `uri` |
 | `Sample` / `BatchSample` | `indicator` |
 | `SampleCacheError` | `op`, `err` |
+| `InvalidateSample` | `indicator` |
+| `RemoveDelta` | `tsSeq` |
+| `Compact` | — |
+| `SnapshotError` | `stop`, `err` — the async snapshot save failed (it is otherwise invisible: reads never wait for it) |
+
+Events fire at operation **start** (before validation / Redis I/O), so
+handlers observe every attempt; `SampleCacheError` / `SnapshotError` fire when
+the corresponding failure happens.
 
 > For distributed tracing, instrument the Redis / storage clients in your
 > resolver; Lake intentionally avoids dragging in OpenTelemetry.
@@ -555,9 +601,11 @@ a body that cannot be applied (invalid JSON, an RFC 7396 patch that doesn't
 parse) fails merge, and because the same merge gates snapshotting the failure is
 sticky: every read of that catalog errors until the bad delta is removed. There
 is intentionally no read-time skip/quarantine. The merge error names the
-offending delta (`path`, `tsSeq`, `uri`, `catalog`); recovery is manual (`ZREM`
-the member from `{prefix}:d:{catalog}`). Keeping bodies valid before upload is
-the contract.
+offending delta (`path`, `tsSeq`, `uri`, `catalog`); recovery is
+`client.RemoveDelta(ctx, catalog, tsSeq)` — see **Operations** below. (Do NOT
+hand-`ZREM` the member: that bypasses the removal-generation barrier, so an
+in-flight read could persist a snapshot that resurrects the removed write.)
+Keeping bodies valid before upload is the contract.
 
 ### Snapshot save failure is not user-visible
 

@@ -98,6 +98,15 @@ func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...
 	if req.Provider == "" || req.Bucket == "" {
 		return nil, errors.New("WriteBegin requires Provider and Bucket")
 	}
+	// Provider/Bucket are embedded in the delta URI (provider://bucket/path);
+	// an ambiguous character ("/", ":") would make ParseURI resolve the
+	// recorded locator to a different object than the one presigned here.
+	if err := utils.ValidateStorageProvider(req.Provider); err != nil {
+		return nil, err
+	}
+	if err := utils.ValidateStorageBucket(req.Bucket); err != nil {
+		return nil, err
+	}
 
 	st, err := c.storageFor(storage.Delta, req.Provider, req.Bucket)
 	if err != nil {

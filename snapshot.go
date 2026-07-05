@@ -27,11 +27,20 @@ func (c *Client) IterateSnaps(ctx context.Context, fn func(catalog string, snap 
 // that produced data (which would otherwise resurrect the removed write).
 // No-op when no snap target is configured. SingleFlight on (catalog, stop,
 // gen) dedupes concurrent saves within this process.
+//
+// The read path calls this fire-and-forget, so a failure is user-invisible by
+// design (the next read just regenerates); a "SnapshotError" event is emitted
+// per failed attempt so operators still see a snap target that never works.
 func (c *Client) saveSnapshot(ctx context.Context, catalog string, stop index.TimeSeqID, removeGen string, data []byte) (string, error) {
 	if c.snapProvider == "" || c.snapBucket == "" {
 		return "", nil
 	}
-	return c.snapFlight.Do(fmt.Sprintf("%s_%s_%s", catalog, stop, removeGen), func() (string, error) {
+	return c.snapFlight.Do(fmt.Sprintf("%s_%s_%s", catalog, stop, removeGen), func() (uri string, err error) {
+		defer func() {
+			if err != nil {
+				c.emitEvent(catalog, "SnapshotError", map[string]any{"stop": stop.String(), "err": err.Error()})
+			}
+		}()
 		// The object path must be unique per (stop, removal generation), not
 		// just per stop: removing a non-latest delta leaves the stop
 		// unchanged, and if both generations shared one path, the stale
@@ -53,7 +62,7 @@ func (c *Client) saveSnapshot(ctx context.Context, catalog string, stop index.Ti
 		if err := st.Put(ctx, catalog, path, data); err != nil {
 			return "", fmt.Errorf("save snapshot: %w", err)
 		}
-		uri := objkey.BuildURI(c.snapProvider, c.snapBucket, path)
+		uri = objkey.BuildURI(c.snapProvider, c.snapBucket, path)
 		if err := c.writer.AddSnap(ctx, catalog, stop, uri, removeGen); err != nil {
 			return "", fmt.Errorf("index snapshot: %w", err)
 		}
