@@ -17,7 +17,9 @@ import (
 // deletes only this test's "<prefix>:*" keys, so any other data is untouched.
 func indexTestRedis(t *testing.T) (*redis.Client, string) {
 	t.Helper()
-	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379", DB: 13, DialTimeout: 200 * time.Millisecond})
+	// MaxRetries -1 / DialerRetries 1: fail the skip probe fast when Redis is
+	// absent instead of burning the ping context in go-redis retry loops.
+	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379", DB: 13, DialTimeout: 200 * time.Millisecond, MaxRetries: -1, DialerRetries: 1})
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	if err := rdb.Ping(ctx).Err(); err != nil {

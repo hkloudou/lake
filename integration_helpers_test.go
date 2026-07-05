@@ -20,9 +20,12 @@ const testRedisAddr = "127.0.0.1:6379"
 
 // redisTestDB returns a client to the given logical DB, or skips when Redis is
 // unreachable. It registers Close on cleanup but never flushes the DB.
+// MaxRetries -1 / DialerRetries 1 disable go-redis's command and dial retry
+// loops so the skip probe fails fast when Redis is absent (with defaults,
+// every probe would burn its full 500ms context across ~19 call sites).
 func redisTestDB(t *testing.T, db int) *redis.Client {
 	t.Helper()
-	rdb := redis.NewClient(&redis.Options{Addr: testRedisAddr, DB: db, DialTimeout: 200 * time.Millisecond})
+	rdb := redis.NewClient(&redis.Options{Addr: testRedisAddr, DB: db, DialTimeout: 200 * time.Millisecond, MaxRetries: -1, DialerRetries: 1})
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	if err := rdb.Ping(ctx).Err(); err != nil {
