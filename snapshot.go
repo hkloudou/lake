@@ -20,6 +20,28 @@ func (c *Client) IterateSnaps(ctx context.Context, fn func(catalog string, snap 
 	return c.reader.IterateSnaps(ctx, fn)
 }
 
+// saveSnapshotGuarded is the fire-and-forget form of saveSnapshot for the
+// read path's async goroutine. That goroutine outlives the read and has no
+// caller to recover a panic — from a storage backend, or a user event
+// handler fired on the failure path — so an escaped panic would kill the
+// whole process to save an optimization. Contained, not silent: a panic
+// still emits SnapshotError (saveSnapshot's own error emit cannot fire
+// during unwinding — its named err is nil then), and the emit itself is
+// guarded again in case the panicking party IS a handler.
+func (c *Client) saveSnapshotGuarded(catalog string, stop index.TimeSeqID, removeGen string, data []byte) {
+	defer func() {
+		if r := recover(); r != nil {
+			defer func() { _ = recover() }() // a panicking handler must not escape either
+			c.emitEvent(catalog, "SnapshotError", map[string]any{
+				"stop": stop.String(), "err": fmt.Sprintf("panic: %v", r),
+			})
+		}
+	}()
+	// Background context: an aborted Read must not cancel a snapshot that
+	// benefits every future reader.
+	_, _ = c.saveSnapshot(context.Background(), catalog, stop, removeGen, data)
+}
+
 // saveSnapshot writes snap bytes to the configured snap target and upserts the
 // Redis hash entry (as [tsSeq, uri]) — monotonically, and only if removeGen
 // still matches the catalog's removal generation: AddSnap drops the upsert if

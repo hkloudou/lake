@@ -28,3 +28,25 @@ func TestSaveSnapshot_EmitsSnapshotErrorEvent(t *testing.T) {
 		t.Fatal("SnapshotError event must be emitted when the snapshot save fails")
 	}
 }
+
+// TestSaveSnapshotGuarded_PanicIsContainedAndObservable: a snap backend that
+// PANICS (rather than returning an error) unwinds past saveSnapshot's
+// error-emit (named err is nil during unwinding). The guarded wrapper must
+// both contain the panic — it runs on a goroutine nothing can recover — and
+// still emit SnapshotError, or a panicking snap target would fail forever
+// with zero signal.
+func TestSaveSnapshotGuarded_PanicIsContainedAndObservable(t *testing.T) {
+	resolve := func(_ storage.Kind, _, _ string) (storage.Storage, error) {
+		panic("resolver boom")
+	}
+	c := newDeadClientOpts(t, resolve, WithSnapTarget("mem", "snaps"))
+	spy := &spyHandler{}
+	c.Use(spy.handler())
+
+	// Must not panic the caller (stands in for the detached goroutine).
+	c.saveSnapshotGuarded("users", TimeSeqID{Timestamp: 1700000000, SeqID: 1}, "0", []byte("{}"))
+
+	if !spy.seen("SnapshotError") {
+		t.Fatal("SnapshotError event must be emitted when the snapshot save panics")
+	}
+}
