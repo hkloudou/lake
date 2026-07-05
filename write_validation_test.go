@@ -119,10 +119,34 @@ func TestWriteBegin_RejectsAmbiguousProviderBucket(t *testing.T) {
 	}
 }
 
+// TestWriteNotify_RejectsAmbiguousURIParts: the handle URI is untrusted
+// input recorded verbatim into the index, where reads feed its parsed
+// provider/bucket to the resolver — so notify holds both to WriteBegin's
+// charset even when the path component binds correctly.
+func TestWriteNotify_RejectsAmbiguousURIParts(t *testing.T) {
+	c := newDeadClient(t)
+	for _, uri := range []string{
+		"me:m://data/" + objkey.DeltaPath("users", testUUID), // ":" in provider
+		"mem://da|ta/" + objkey.DeltaPath("users", testUUID), // "|" in bucket
+	} {
+		err := c.WriteNotify(context.Background(), &WriteHandle{
+			Catalog:   "users",
+			Path:      "/",
+			MergeType: MergeTypeReplace,
+			UUID:      testUUID,
+			URI:       uri,
+		})
+		if err == nil || !strings.Contains(err.Error(), "invalid storage") {
+			t.Fatalf("uri %q: expected invalid storage error, got %v", uri, err)
+		}
+	}
+}
+
 // TestWithSnapTarget_PanicsOnAmbiguousTarget: an invalid snap target is a
 // construction-time programmer error (package policy: panic). Catching it at
 // New matters because a snap URI that parses back to a different bucket
-// would wedge every read of a snapshotted catalog at runtime.
+// would wedge every read of a snapshotted catalog at runtime. Both-empty is
+// the documented "disabled" spelling and must NOT panic; one-empty must.
 func TestWithSnapTarget_PanicsOnAmbiguousTarget(t *testing.T) {
 	for _, tc := range []struct{ provider, bucket string }{
 		{"oss", "bucket/sub"},
@@ -138,6 +162,14 @@ func TestWithSnapTarget_PanicsOnAmbiguousTarget(t *testing.T) {
 			}()
 			WithSnapTarget(tc.provider, tc.bucket)
 		}()
+	}
+
+	// Both-empty = "auto-snapshotting disabled": stays valid for callers that
+	// pass unset config through; the option must be a no-op, not a panic.
+	opt := &option{}
+	WithSnapTarget("", "")(opt)
+	if opt.snapProvider != "" || opt.snapBucket != "" {
+		t.Fatalf("WithSnapTarget(\"\", \"\") must leave the target unset, got %q/%q", opt.snapProvider, opt.snapBucket)
 	}
 }
 

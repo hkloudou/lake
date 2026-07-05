@@ -57,7 +57,16 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 	if c.snapProvider != "" {
 		if next := list.NextSnap(); next != nil {
 			snapData := append([]byte(nil), resultData...)
-			go c.saveSnapshot(context.Background(), list.catalog, next.StopTsSeq, list.removeGen, snapData)
+			go func() {
+				// This goroutine outlives the read and has no caller to
+				// recover a panic (from a storage backend, or a user event
+				// handler fired on the failure path) — without this guard a
+				// panic here would kill the whole process to save an
+				// optimization. Contained, not silent: saveSnapshot emits
+				// SnapshotError for failures, and the next read regenerates.
+				defer func() { _ = recover() }()
+				_, _ = c.saveSnapshot(context.Background(), list.catalog, next.StopTsSeq, list.removeGen, snapData)
+			}()
 		}
 	}
 	return resultData, nil

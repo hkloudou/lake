@@ -214,8 +214,18 @@ func (c *Client) WriteNotify(ctx context.Context, h *WriteHandle) error {
 	if h.URI == "" {
 		return errors.New("empty URI in handle")
 	}
-	_, _, path, err := objkey.ParseURI(h.URI)
+	provider, bucket, path, err := objkey.ParseURI(h.URI)
 	if err != nil {
+		return err
+	}
+	// The URI round-trips through untrusted clients and is recorded verbatim
+	// into the index, where reads feed its provider/bucket to the resolver —
+	// so hold both to the same charset WriteBegin enforces. ParseURI alone
+	// would accept e.g. bucket "da|ta", which WriteBegin can never emit.
+	if err := utils.ValidateStorageProvider(provider); err != nil {
+		return err
+	}
+	if err := utils.ValidateStorageBucket(bucket); err != nil {
 		return err
 	}
 	if want := objkey.DeltaPath(h.Catalog, h.UUID); path != want {

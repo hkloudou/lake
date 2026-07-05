@@ -3,10 +3,8 @@ package lake
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/hkloudou/lake/v3/storage"
-	"github.com/redis/go-redis/v9"
 )
 
 // TestSaveSnapshot_EmitsSnapshotErrorEvent: the snapshot save runs
@@ -17,9 +15,7 @@ func TestSaveSnapshot_EmitsSnapshotErrorEvent(t *testing.T) {
 	resolve := func(_ storage.Kind, _, _ string) (storage.Storage, error) {
 		return nil, errIntentional // every resolution fails, incl. the snap target
 	}
-	rdb := redis.NewClient(&redis.Options{Addr: unreachableRedis, DialTimeout: 200 * time.Millisecond})
-	t.Cleanup(func() { _ = rdb.Close() })
-	c := New("snaperrtest", rdb, resolve, WithSnapTarget("mem", "snaps"))
+	c := newDeadClientOpts(t, resolve, WithSnapTarget("mem", "snaps"))
 	spy := &spyHandler{}
 	c.Use(spy.handler())
 

@@ -42,15 +42,18 @@ func ValidateCatalog(catalog string) error {
 var storagePartRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._\-]*$`)
 
 func ValidateStorageProvider(provider string) error {
-	if !storagePartRegex.MatchString(provider) {
-		return fmt.Errorf(`invalid storage provider %q: ASCII [a-zA-Z0-9][a-zA-Z0-9._\-]* required ("/" ":" "|" forbidden)`, provider)
-	}
-	return nil
+	return validateStoragePart("provider", provider)
 }
 
 func ValidateStorageBucket(bucket string) error {
-	if !storagePartRegex.MatchString(bucket) {
-		return fmt.Errorf(`invalid storage bucket %q: ASCII [a-zA-Z0-9][a-zA-Z0-9._\-]* required ("/" ":" "|" forbidden)`, bucket)
+	return validateStoragePart("bucket", bucket)
+}
+
+// validateStoragePart is the single definition of the URI-part format; the
+// two exported wrappers exist only to name the offending part in the error.
+func validateStoragePart(kind, s string) error {
+	if !storagePartRegex.MatchString(s) {
+		return fmt.Errorf(`invalid storage %s %q: ASCII [a-zA-Z0-9][a-zA-Z0-9._\-]* required ("/" ":" "|" forbidden)`, kind, s)
 	}
 	return nil
 }

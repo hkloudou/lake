@@ -214,7 +214,7 @@ func New(prefix string, rdb *redis.Client, resolve storage.Resolver, opts ...fun
 
 | Option | Description |
 |--------|-------------|
-| `WithSnapTarget(provider, bucket)` | Where Lake writes auto-generated snapshots. Omit → no auto-snapshotting (reads replay all deltas) |
+| `WithSnapTarget(provider, bucket)` | Where Lake writes auto-generated snapshots. Omit — or pass both empty — → no auto-snapshotting (reads replay all deltas) |
 | `WithSampleCacheURL(url)` / `WithSampleCacheRedis(rdb)` | Route the Sampler memo hash (`<prefix>:m:*`) to a separate Redis |
 | `WithHandleSecret(secret)` | HMAC-sign every `WriteHandle`; `WriteNotify` then rejects tampered or expired handles (see **Write** below). Every process sharing the prefix needs the same secret |
 | `(*Client) Use(handler EventHandler)` | Register an event handler |
@@ -316,7 +316,9 @@ replay of a leaked handle).
 
 `Provider` / `Bucket` must be ASCII `[a-zA-Z0-9][a-zA-Z0-9._-]*` — they are
 embedded in the recorded URI, so `/` `:` `|` are rejected at WriteBegin (an
-ambiguous name would make the URI parse back to a different object).
+ambiguous name would make the URI parse back to a different object), and
+WriteNotify re-checks the parsed parts of the handle's URI (the handle is
+untrusted input).
 
 > **Presign capability**: WriteBegin requires the resolved backend to implement
 > `storage.Presigner`. OSS supports it; file / memory return
@@ -602,7 +604,8 @@ parse) fails merge, and because the same merge gates snapshotting the failure is
 sticky: every read of that catalog errors until the bad delta is removed. There
 is intentionally no read-time skip/quarantine. The merge error names the
 offending delta (`path`, `tsSeq`, `uri`, `catalog`); recovery is
-`client.RemoveDelta(ctx, catalog, tsSeq)` — see **Operations** below. (Do NOT
+`client.RemoveDelta(ctx, catalog, tsSeq)` — see **Operations** in the API
+reference above. (Do NOT
 hand-`ZREM` the member: that bypasses the removal-generation barrier, so an
 in-flight read could persist a snapshot that resurrects the removed write.)
 Keeping bodies valid before upload is the contract.

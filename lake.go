@@ -95,16 +95,22 @@ func New(prefix string, rdb *redis.Client, resolve storage.Resolver, opts ...fun
 }
 
 // WithSnapTarget sets where Lake writes the snapshots it auto-generates on the
-// read path (resolved via the client's Resolver). Omit it to disable
-// auto-snapshotting: reads then replay all deltas from "{}" — correct, just
-// slower for long histories.
+// read path (resolved via the client's Resolver). Omit it — or pass both
+// arguments empty — to disable auto-snapshotting: reads then replay all
+// deltas from "{}" — correct, just slower for long histories. (Both-empty
+// stays a valid "disabled" spelling so config-driven callers can pass unset
+// values through.)
 //
 // Panics on an invalid provider/bucket (programmer error at construction
 // time): both are embedded in every snapshot's URI (provider://bucket/path),
 // and a "/" or ":" inside either part would make the recorded locator parse
 // back to a different bucket — every read of a snapshotted catalog would
-// then fail.
+// then fail. One-empty-one-set is also a panic: it silently disabled
+// snapshotting before, which can only be a config mistake.
 func WithSnapTarget(provider, bucket string) func(*option) {
+	if provider == "" && bucket == "" {
+		return func(*option) {} // explicit "disabled"
+	}
 	if err := utils.ValidateStorageProvider(provider); err != nil {
 		panic(fmt.Errorf("lake: WithSnapTarget: %w", err))
 	}
