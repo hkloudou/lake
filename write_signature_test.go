@@ -22,7 +22,7 @@ func newSignedDeadClient(t *testing.T, secret string) *Client {
 	resolve := func(_ storage.Kind, _, bucket string) (storage.Storage, error) {
 		return presignBucket{store.Bucket(bucket)}, nil
 	}
-	rdb := redis.NewClient(&redis.Options{Addr: unreachableRedis, DialTimeout: 200 * time.Millisecond})
+	rdb := redis.NewClient(&redis.Options{Addr: unreachableRedis, DialTimeout: 200 * time.Millisecond, MaxRetries: -1, DialerRetries: 1})
 	t.Cleanup(func() { _ = rdb.Close() })
 	return New("sigtest", rdb, resolve, WithHandleSecret([]byte(secret)))
 }
