@@ -227,6 +227,11 @@ a bad URL) — all programmer errors, caught at construction time.
 > **Redis compatibility**: developed and tested against Redis 7.x. The notify
 > script calls `TIME` before writing, which relies on effect-based script
 > replication — the default since Redis 5.0 and the only mode since 7.0.
+> **Redis Cluster is not supported** for the index: the scripts operate on
+> multiple keys per catalog (snap hash + delta zset) and derive the seqid
+> counter key inside Lua, which cluster's one-slot-per-script rule rejects.
+> Use a standalone / primary-replica (Sentinel) index Redis; the cache tier
+> (`storage/cached`) has no such constraint.
 
 ### Storage
 
