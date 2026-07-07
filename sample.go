@@ -345,6 +345,13 @@ end
 return n
 `
 
+// luaSampleWrite / luaSampleInvalidate dispatch the two sample scripts by SHA
+// (EVALSHA with EVAL fallback on a cold script cache).
+var (
+	luaSampleWrite      = redis.NewScript(sampleWriteScript)
+	luaSampleInvalidate = redis.NewScript(sampleInvalidateScript)
+)
+
 // InvalidateSamples deletes the cached samples of one indicator for the given
 // catalogs and returns how many entries existed. The next Sample/Batch
 // recomputes them. Deletion and the epoch bump are atomic, so a compute
@@ -377,7 +384,7 @@ func (c *Client) InvalidateSamples(ctx context.Context, indicator string, catalo
 	for i, cat := range catalogs {
 		args[i] = cat
 	}
-	res, err := c.sampleRdb.Eval(ctx, sampleInvalidateScript,
+	res, err := luaSampleInvalidate.Run(ctx, c.sampleRdb,
 		[]string{c.reader.MakeSampleIndicatorKey(indicator)}, args...).Result()
 	if err != nil {
 		return 0, err
@@ -497,7 +504,7 @@ func (s *Sampler[T]) loadAndCache(ctx context.Context, c *Client, list *ListResu
 			// value the current log may no longer support), keep the result.
 			return string(data), nil
 		}
-		if werr := c.sampleRdb.Eval(ctx, sampleWriteScript,
+		if werr := luaSampleWrite.Run(ctx, c.sampleRdb,
 			[]string{hashKey, c.reader.MakeSampleRemoveGenKey()},
 			epoch, catGen, list.catalog, data).Err(); werr != nil {
 			c.emitEvent(list.catalog, "SampleCacheError", map[string]any{"op": "hset", "err": werr.Error()})
