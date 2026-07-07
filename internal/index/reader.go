@@ -254,16 +254,14 @@ func (r *Reader) BatchList(ctx context.Context, catalogs []string) map[string]*B
 	}
 
 	cmds := r.evalListPipelined(ctx, catalogs, false)
-	// Script.Run's NOSCRIPT fallback cannot fire inside a pipeline (command
-	// errors surface only at Exec), so the cold-cache case is handled here:
+	// RunScript's fallback cannot fire inside a pipeline (command errors
+	// surface only at Exec), so it is mirrored here with the same predicate:
 	// re-run the whole pipeline with full-body EVAL, which executes AND
-	// re-caches the script in one step — the same strategy as Script.Run,
-	// and it needs no SCRIPT LOAD permission (ACL/proxy setups may deny that
-	// while allowing EVAL). Rare — the first BatchList of a process against
-	// a server that has never seen the script, or a restarted /
-	// SCRIPT-FLUSHed one; listScript is read-only, so re-running is safe.
+	// re-caches the script in one step — no SCRIPT LOAD (or even EVALSHA)
+	// permission required. Rare — a cold script cache, or an ACL that denies
+	// EVALSHA; listScript is read-only, so re-running is always safe.
 	for _, cmd := range cmds {
-		if redis.HasErrorPrefix(cmd.Err(), "NOSCRIPT") {
+		if needsEvalFallback(cmd.Err()) {
 			cmds = r.evalListPipelined(ctx, catalogs, true)
 			break
 		}

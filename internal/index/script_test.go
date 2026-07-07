@@ -54,15 +54,17 @@ func (f *fakeScripter) ScriptLoad(ctx context.Context, script string) *redis.Str
 // TestRunScriptFallsBackOnPrefixedNoScript pins why RunScript exists instead
 // of go-redis's Script.Run: v9 falls back only when the error is
 // byte-identical to real Redis's NOSCRIPT message, missing compatible servers
-// that reply "ERR NOSCRIPT ..." (the spelling HasErrorPrefix absorbs). Both
-// spellings must fall back to EVAL; any other error must not.
+// that reply "ERR NOSCRIPT ..." (the spelling HasErrorPrefix absorbs) and
+// ACL setups that allow EVAL but deny the EVALSHA command (NOPERM). All of
+// these must fall back to EVAL; any other error must not.
 func TestRunScriptFallsBackOnPrefixedNoScript(t *testing.T) {
 	ctx := context.Background()
 	s := redis.NewScript(`return 1`)
 
 	for _, spelling := range []string{
-		"NOSCRIPT No matching script. Please use EVAL.", // real Redis
-		"ERR NOSCRIPT No matching script",               // KVRocks-style prefix
+		"NOSCRIPT No matching script. Please use EVAL.",                    // real Redis
+		"ERR NOSCRIPT No matching script",                                  // KVRocks-style prefix
+		"NOPERM this user has no permissions to run the 'evalsha' command", // EVAL-only ACL
 	} {
 		f := &fakeScripter{shaErr: fakeRedisErr(spelling), evalReply: "ok"}
 		res, err := RunScript(ctx, f, s, nil).Result()
