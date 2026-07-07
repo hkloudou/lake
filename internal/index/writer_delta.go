@@ -49,7 +49,7 @@ var luaRemoveDelta = redis.NewScript(removeDeltaScript)
 // the catalog's removal generation. The body object in storage is untouched.
 // Returns whether an entry was removed.
 func (w *Writer) RemoveDelta(ctx context.Context, catalog string, tsSeq TimeSeqID) (bool, error) {
-	res, err := luaRemoveDelta.Run(ctx, w.rdb,
+	res, err := RunScript(ctx, w.rdb, luaRemoveDelta,
 		[]string{w.MakeDeltaZsetKey(catalog), w.MakeSnapsHashKey()},
 		tsSeq.Score(), tsSeq.String(), catalog,
 	).Result()

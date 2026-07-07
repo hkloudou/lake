@@ -99,7 +99,7 @@ var luaList = redis.NewScript(listScript)
 // ListCatalog atomically reads the snap pointer and the deltas past it —
 // the single read primitive behind Client.List / Client.BatchList.
 func (r *Reader) ListCatalog(ctx context.Context, catalog string) (*SnapInfo, *ReadIndexResult) {
-	res, err := luaList.Run(ctx, r.rdb,
+	res, err := RunScript(ctx, r.rdb, luaList,
 		[]string{r.MakeSnapsHashKey(), r.MakeDeltaZsetKey(catalog)},
 		catalog,
 	).Result()

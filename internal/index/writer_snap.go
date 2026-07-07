@@ -71,7 +71,7 @@ func (w *Writer) AddSnap(ctx context.Context, catalog string, stopTsSeq TimeSeqI
 	if removeGen == "" {
 		removeGen = "0"
 	}
-	return luaAddSnap.Run(ctx, w.rdb,
+	return RunScript(ctx, w.rdb, luaAddSnap,
 		[]string{w.MakeSnapsHashKey()},
 		catalog, val, stopTsSeq.Score(), removeGen,
 	).Err()
@@ -99,7 +99,7 @@ return redis.call("ZREMRANGEBYSCORE", KEYS[2], "-inf", string.format("%.6f", sco
 // current snap stop, atomically with reading the snap pointer. Only index
 // entries are removed — delta objects in storage are untouched.
 func (w *Writer) CompactDeltas(ctx context.Context, catalog string) (int64, error) {
-	res, err := luaCompactDeltas.Run(ctx, w.rdb,
+	res, err := RunScript(ctx, w.rdb, luaCompactDeltas,
 		[]string{w.MakeSnapsHashKey(), w.MakeDeltaZsetKey(catalog)},
 		catalog,
 	).Result()

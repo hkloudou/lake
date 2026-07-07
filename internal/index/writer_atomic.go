@@ -56,7 +56,7 @@ func (w *Writer) Notify(ctx context.Context, catalog, fieldPath string, mergeTyp
 	if w.prefix == "" {
 		return TimeSeqID{}, "", fmt.Errorf("writer prefix not set; call SetPrefix")
 	}
-	res, err := luaNotify.Run(ctx, w.rdb,
+	res, err := RunScript(ctx, w.rdb, luaNotify,
 		[]string{encode.EncodeRedisCatalogName(catalog), w.MakeDeltaZsetKey(catalog)},
 		fieldPath, int(mergeType), w.prefix, uri,
 	).Result()

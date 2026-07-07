@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hkloudou/lake/v3/internal/index"
 	"github.com/hkloudou/lake/v3/internal/utils"
 	"github.com/redis/go-redis/v9"
 )
@@ -386,7 +387,7 @@ func (c *Client) InvalidateSamples(ctx context.Context, indicator string, catalo
 	for i, cat := range catalogs {
 		args[i] = cat
 	}
-	res, err := luaSampleInvalidate.Run(ctx, c.sampleRdb,
+	res, err := index.RunScript(ctx, c.sampleRdb, luaSampleInvalidate,
 		[]string{c.reader.MakeSampleIndicatorKey(indicator)}, args...).Result()
 	if err != nil {
 		return 0, err
@@ -506,7 +507,7 @@ func (s *Sampler[T]) loadAndCache(ctx context.Context, c *Client, list *ListResu
 			// value the current log may no longer support), keep the result.
 			return string(data), nil
 		}
-		if werr := luaSampleWrite.Run(ctx, c.sampleRdb,
+		if werr := index.RunScript(ctx, c.sampleRdb, luaSampleWrite,
 			[]string{hashKey, c.reader.MakeSampleRemoveGenKey()},
 			epoch, catGen, list.catalog, data).Err(); werr != nil {
 			c.emitEvent(list.catalog, "SampleCacheError", map[string]any{"op": "hset", "err": werr.Error()})
