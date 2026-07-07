@@ -1,6 +1,9 @@
 package utils
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestValidateCatalog_Accepted(t *testing.T) {
 	cases := []string{
@@ -18,6 +21,7 @@ func TestValidateCatalog_Accepted(t *testing.T) {
 		"_users",     // underscore-led segment OK
 		"123-tenant", // digit-led segment OK
 		"v3.0.0-alpha.1",
+		strings.Repeat("a", MaxCatalogLen), // exactly at the length cap
 	}
 	for _, c := range cases {
 		t.Run(c, func(t *testing.T) {
@@ -58,6 +62,7 @@ func TestValidateCatalog_Rejected(t *testing.T) {
 		{"asterisk", "tenant*users"},
 		{"question_mark", "tenant?users"},
 		{"control_char", "tenant\x00users"},
+		{"over_length_cap", strings.Repeat("a", MaxCatalogLen+1)},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -104,6 +109,8 @@ func TestValidateFieldPath(t *testing.T) {
 		{"starts with dot", "/.config", true},
 		{"segment starts with dot", "/user/.config", true},
 		{"contains chinese characters", "/用户", true},
+		{"exactly at length cap", "/" + strings.Repeat("a", MaxFieldPathLen-1), false},
+		{"over length cap", "/" + strings.Repeat("a", MaxFieldPathLen), true},
 	}
 
 	for _, tt := range tests {
