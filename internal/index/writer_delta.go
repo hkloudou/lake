@@ -3,8 +3,6 @@ package index
 import (
 	"context"
 	"fmt"
-
-	"github.com/redis/go-redis/v9"
 )
 
 // removeDeltaScript removes exactly one delta entry, located by its score and
@@ -43,7 +41,7 @@ return 0
 
 // luaRemoveDelta dispatches removeDeltaScript by SHA (EVALSHA with EVAL
 // fallback on a cold script cache).
-var luaRemoveDelta = redis.NewScript(removeDeltaScript)
+var luaRemoveDelta = NewScript(removeDeltaScript)
 
 // RemoveDelta deletes the delta index entry with the given tsSeq and bumps
 // the catalog's removal generation. The body object in storage is untouched.

@@ -54,8 +54,8 @@ return 1
 // luaAddSnap / luaCompactDeltas dispatch their scripts by SHA (EVALSHA with
 // EVAL fallback), so the shared snapScoreLua prelude is not re-sent per call.
 var (
-	luaAddSnap       = redis.NewScript(addSnapScript)
-	luaCompactDeltas = redis.NewScript(compactDeltasScript)
+	luaAddSnap       = NewScript(addSnapScript)
+	luaCompactDeltas = NewScript(compactDeltasScript)
 )
 
 // AddSnap upserts the catalog's snap entry in "<prefix>:s" as [tsSeq, uri],

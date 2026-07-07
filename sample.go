@@ -351,8 +351,8 @@ return n
 // luaSampleWrite / luaSampleInvalidate dispatch the two sample scripts by SHA
 // (EVALSHA with EVAL fallback on a cold script cache).
 var (
-	luaSampleWrite      = redis.NewScript(sampleWriteScript)
-	luaSampleInvalidate = redis.NewScript(sampleInvalidateScript)
+	luaSampleWrite      = index.NewScript(sampleWriteScript)
+	luaSampleInvalidate = index.NewScript(sampleInvalidateScript)
 )
 
 // InvalidateSamples deletes the cached samples of one indicator for the given

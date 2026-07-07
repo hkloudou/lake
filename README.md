@@ -229,8 +229,9 @@ a bad URL) — all programmer errors, caught at construction time.
 > replication — the default since Redis 5.0 and the only mode since 7.0.
 > Scripts are dispatched by `EVALSHA` with an automatic full-body `EVAL`
 > fallback (cold script cache, `ERR NOSCRIPT` spellings, or an ACL that
-> denies `EVALSHA`), so only the `EVAL` permission is strictly required —
-> no `SCRIPT LOAD`.
+> denies the `EVALSHA` command itself), so only the `EVAL` permission is
+> strictly required — no `SCRIPT LOAD`. If local SHA-1 is unavailable (Go's
+> `fips140=only` mode) dispatch degrades to plain `EVAL` automatically.
 > **Redis Cluster is not supported** for the index: the scripts operate on
 > multiple keys per catalog (snap hash + delta zset) and derive the seqid
 > counter key inside Lua, which cluster's one-slot-per-script rule rejects.

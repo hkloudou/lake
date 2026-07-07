@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/hkloudou/lake/v3/internal/encode"
-	"github.com/redis/go-redis/v9"
 )
 
 // notifyScript atomically allocates a TimeSeqID and adds the committed delta
@@ -46,7 +45,7 @@ return {tonumber(ts), seqid, member}
 
 // luaNotify dispatches notifyScript by SHA — the hottest write-path script,
 // so its body travels once per server, not once per write.
-var luaNotify = redis.NewScript(notifyScript)
+var luaNotify = NewScript(notifyScript)
 
 // Notify allocates a TimeSeqID for an already-uploaded delta and commits it to
 // the Redis index. uri is the storage locator (provider://bucket/path) the
