@@ -15,11 +15,17 @@ import (
 // and a unique key prefix, or skips when Redis is unreachable. Shared by every
 // index Redis test (snap hash, notify). It never flushes the DB: cleanup
 // deletes only this test's "<prefix>:*" keys, so any other data is untouched.
+// The address defaults to 127.0.0.1:6379; LAKE_TEST_REDIS_ADDR overrides it
+// (same variable the root package's helper honours).
 func indexTestRedis(t *testing.T) (*redis.Client, string) {
 	t.Helper()
+	addr := os.Getenv("LAKE_TEST_REDIS_ADDR")
+	if addr == "" {
+		addr = "127.0.0.1:6379"
+	}
 	// MaxRetries -1 / DialerRetries 1: fail the skip probe fast when Redis is
 	// absent instead of burning the ping context in go-redis retry loops.
-	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379", DB: 13, DialTimeout: 200 * time.Millisecond, MaxRetries: -1, DialerRetries: 1})
+	rdb := redis.NewClient(&redis.Options{Addr: addr, DB: 13, DialTimeout: 200 * time.Millisecond, MaxRetries: -1, DialerRetries: 1})
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	if err := rdb.Ping(ctx).Err(); err != nil {

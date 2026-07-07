@@ -43,6 +43,10 @@ redis.call("ZADD", zaddKey, score, member)
 return {tonumber(ts), seqid, member}
 `
 
+// luaNotify dispatches notifyScript by SHA — the hottest write-path script,
+// so its body travels once per server, not once per write.
+var luaNotify = NewScript(notifyScript)
+
 // Notify allocates a TimeSeqID for an already-uploaded delta and commits it to
 // the Redis index. uri is the storage locator (provider://bucket/path) the
 // client uploaded to; it is embedded in the member so reads resolve the body
@@ -51,7 +55,7 @@ func (w *Writer) Notify(ctx context.Context, catalog, fieldPath string, mergeTyp
 	if w.prefix == "" {
 		return TimeSeqID{}, "", fmt.Errorf("writer prefix not set; call SetPrefix")
 	}
-	res, err := w.rdb.Eval(ctx, notifyScript,
+	res, err := RunScript(ctx, w.rdb, luaNotify,
 		[]string{encode.EncodeRedisCatalogName(catalog), w.MakeDeltaZsetKey(catalog)},
 		fieldPath, int(mergeType), w.prefix, uri,
 	).Result()

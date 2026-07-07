@@ -92,10 +92,14 @@ end
 return {snap or false, rg, redis.call("ZRANGEBYSCORE", KEYS[2], min, "+inf", "WITHSCORES")}
 `
 
+// luaList dispatches listScript by SHA (EVALSHA, falling back to EVAL on a
+// cold script cache) so the ~1 KB script body is not re-sent on every List.
+var luaList = NewScript(listScript)
+
 // ListCatalog atomically reads the snap pointer and the deltas past it —
 // the single read primitive behind Client.List / Client.BatchList.
 func (r *Reader) ListCatalog(ctx context.Context, catalog string) (*SnapInfo, *ReadIndexResult) {
-	res, err := r.rdb.Eval(ctx, listScript,
+	res, err := RunScript(ctx, r.rdb, luaList,
 		[]string{r.MakeSnapsHashKey(), r.MakeDeltaZsetKey(catalog)},
 		catalog,
 	).Result()
@@ -249,15 +253,22 @@ func (r *Reader) BatchList(ctx context.Context, catalogs []string) map[string]*B
 		return out
 	}
 
-	pipe := r.rdb.Pipeline()
-	cmds := make(map[string]*redis.Cmd, len(catalogs))
-	for _, c := range catalogs {
-		out[c] = &BatchListResult{}
-		cmds[c] = pipe.Eval(ctx, listScript,
-			[]string{r.MakeSnapsHashKey(), r.MakeDeltaZsetKey(c)}, c)
+	cmds := r.evalListPipelined(ctx, catalogs, false)
+	// RunScript's fallback cannot fire inside a pipeline (command errors
+	// surface only at Exec), so it is mirrored here with the same predicate:
+	// re-run the whole pipeline with full-body EVAL, which executes AND
+	// re-caches the script in one step — no SCRIPT LOAD (or even EVALSHA)
+	// permission required. Rare — a cold script cache, or an ACL that denies
+	// EVALSHA; listScript is read-only, so re-running is always safe.
+	for _, cmd := range cmds {
+		if needsEvalFallback(cmd.Err()) {
+			cmds = r.evalListPipelined(ctx, catalogs, true)
+			break
+		}
 	}
-	pipe.Exec(ctx)
+
 	for c, cmd := range cmds {
+		out[c] = &BatchListResult{}
 		res, err := cmd.Result()
 		if err != nil {
 			out[c].ReadResult = &ReadIndexResult{Catalog: c, Err: fmt.Errorf("list eval: %w", err)}
@@ -266,6 +277,30 @@ func (r *Reader) BatchList(ctx context.Context, catalogs []string) map[string]*B
 		out[c].Snap, out[c].ReadResult = r.parseListResult(c, res)
 	}
 	return out
+}
+
+// evalListPipelined queues one listScript call per catalog on a single
+// pipeline and executes it. With fullBody false it uses EVALSHA (only the
+// 40-byte SHA travels per catalog); with fullBody true it uses EVAL — the
+// cold-cache retry path, which also re-caches the script server-side. When
+// SHA-1 is unavailable (fips140=only) it is EVAL-only, mirroring RunScript.
+func (r *Reader) evalListPipelined(ctx context.Context, catalogs []string, fullBody bool) map[string]*redis.Cmd {
+	compiled := luaList.compiled()
+	if compiled == nil {
+		fullBody = true
+	}
+	pipe := r.rdb.Pipeline()
+	cmds := make(map[string]*redis.Cmd, len(catalogs))
+	for _, c := range catalogs {
+		keys := []string{r.MakeSnapsHashKey(), r.MakeDeltaZsetKey(c)}
+		if fullBody {
+			cmds[c] = pipe.Eval(ctx, luaList.src, keys, c)
+		} else {
+			cmds[c] = compiled.EvalSha(ctx, pipe, keys, c)
+		}
+	}
+	pipe.Exec(ctx)
+	return cmds
 }
 
 // processZMembers parses zset entries into deltas. V3 has no pending
@@ -310,13 +345,9 @@ func (r *Reader) NowUnix() int64 {
 }
 
 func (r *Reader) serverUnix(ctx context.Context) (int64, error) {
-	res, err := r.rdb.Eval(ctx, `return tonumber(redis.call("TIME")[1])`, nil).Result()
+	t, err := r.rdb.Time(ctx).Result()
 	if err != nil {
 		return 0, err
 	}
-	ts, ok := res.(int64)
-	if !ok {
-		return 0, fmt.Errorf("redis TIME returned %T, want int64", res)
-	}
-	return ts, nil
+	return t.Unix(), nil
 }

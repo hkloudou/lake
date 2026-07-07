@@ -51,6 +51,13 @@ redis.call("HSET", KEYS[1], ARGV[1], ARGV[2])
 return 1
 `
 
+// luaAddSnap / luaCompactDeltas dispatch their scripts by SHA (EVALSHA with
+// EVAL fallback), so the shared snapScoreLua prelude is not re-sent per call.
+var (
+	luaAddSnap       = NewScript(addSnapScript)
+	luaCompactDeltas = NewScript(compactDeltasScript)
+)
+
 // AddSnap upserts the catalog's snap entry in "<prefix>:s" as [tsSeq, uri],
 // but only monotonically, and only when removeGen still matches the
 // catalog's removal generation (see addSnapScript). Refusals are silent
@@ -64,7 +71,7 @@ func (w *Writer) AddSnap(ctx context.Context, catalog string, stopTsSeq TimeSeqI
 	if removeGen == "" {
 		removeGen = "0"
 	}
-	return w.rdb.Eval(ctx, addSnapScript,
+	return RunScript(ctx, w.rdb, luaAddSnap,
 		[]string{w.MakeSnapsHashKey()},
 		catalog, val, stopTsSeq.Score(), removeGen,
 	).Err()
@@ -92,7 +99,7 @@ return redis.call("ZREMRANGEBYSCORE", KEYS[2], "-inf", string.format("%.6f", sco
 // current snap stop, atomically with reading the snap pointer. Only index
 // entries are removed — delta objects in storage are untouched.
 func (w *Writer) CompactDeltas(ctx context.Context, catalog string) (int64, error) {
-	res, err := w.rdb.Eval(ctx, compactDeltasScript,
+	res, err := RunScript(ctx, w.rdb, luaCompactDeltas,
 		[]string{w.MakeSnapsHashKey(), w.MakeDeltaZsetKey(catalog)},
 		catalog,
 	).Result()

@@ -86,10 +86,12 @@ func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...
 		"path": req.Path, "mergeType": int(req.MergeType), "provider": req.Provider, "bucket": req.Bucket,
 	})
 
-	if err := utils.ValidateCatalog(req.Catalog); err != nil {
+	// New* variants: WriteBegin mints new index/storage state, so the length
+	// caps apply here (read/ops paths accept longer legacy names).
+	if err := utils.ValidateNewCatalog(req.Catalog); err != nil {
 		return nil, err
 	}
-	if err := utils.ValidateFieldPath(req.Path); err != nil {
+	if err := utils.ValidateNewFieldPath(req.Path); err != nil {
 		return nil, err
 	}
 	if req.MergeType < MergeTypeReplace || req.MergeType > MergeTypeRFC7396 {
@@ -199,10 +201,12 @@ func (c *Client) WriteNotify(ctx context.Context, h *WriteHandle) error {
 	}
 	c.emitEvent(h.Catalog, "WriteNotify", map[string]any{"path": h.Path, "uri": h.URI})
 
-	if err := utils.ValidateCatalog(h.Catalog); err != nil {
+	// New* variants: the handle is untrusted input about to be recorded, so
+	// it is held to the same length caps WriteBegin enforces.
+	if err := utils.ValidateNewCatalog(h.Catalog); err != nil {
 		return err
 	}
-	if err := utils.ValidateFieldPath(h.Path); err != nil {
+	if err := utils.ValidateNewFieldPath(h.Path); err != nil {
 		return err
 	}
 	if h.MergeType < MergeTypeReplace || h.MergeType > MergeTypeRFC7396 {

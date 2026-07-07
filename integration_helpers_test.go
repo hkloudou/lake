@@ -11,12 +11,20 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Integration tests talk to a developer's real local Redis (127.0.0.1:6379).
+// Integration tests talk to a developer's real Redis — 127.0.0.1:6379 unless
+// LAKE_TEST_REDIS_ADDR points elsewhere (devcontainers, docker-compose hosts).
 // To stay non-destructive they NEVER FlushDB: each test uses a unique key
 // prefix (testPrefix) and registers cleanupKeys to delete only its own keys.
 // Whatever else lives in that logical DB is left untouched.
 
-const testRedisAddr = "127.0.0.1:6379"
+var testRedisAddr = testRedisAddrFromEnv()
+
+func testRedisAddrFromEnv() string {
+	if a := os.Getenv("LAKE_TEST_REDIS_ADDR"); a != "" {
+		return a
+	}
+	return "127.0.0.1:6379"
+}
 
 // redisTestDB returns a client to the given logical DB, or skips when Redis is
 // unreachable. It registers Close on cleanup but never flushes the DB.

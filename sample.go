@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hkloudou/lake/v3/internal/index"
 	"github.com/hkloudou/lake/v3/internal/utils"
 	"github.com/redis/go-redis/v9"
 )
@@ -82,7 +83,9 @@ func NewSampler[T any](indicator string, loader func(*ListResult) (T, error), op
 	if indicator == "" {
 		panic("lake: NewSampler indicator must be non-empty")
 	}
-	if err := utils.ValidateCatalog(indicator); err != nil {
+	// ValidateNewCatalog: an indicator mints new memo-hash state, so the
+	// length cap applies (it is code-chosen, so failing fast is cheap).
+	if err := utils.ValidateNewCatalog(indicator); err != nil {
 		panic(fmt.Sprintf("lake: NewSampler invalid indicator: %v", err))
 	}
 	if loader == nil {
@@ -345,6 +348,13 @@ end
 return n
 `
 
+// luaSampleWrite / luaSampleInvalidate dispatch the two sample scripts by SHA
+// (EVALSHA with EVAL fallback on a cold script cache).
+var (
+	luaSampleWrite      = index.NewScript(sampleWriteScript)
+	luaSampleInvalidate = index.NewScript(sampleInvalidateScript)
+)
+
 // InvalidateSamples deletes the cached samples of one indicator for the given
 // catalogs and returns how many entries existed. The next Sample/Batch
 // recomputes them. Deletion and the epoch bump are atomic, so a compute
@@ -377,7 +387,7 @@ func (c *Client) InvalidateSamples(ctx context.Context, indicator string, catalo
 	for i, cat := range catalogs {
 		args[i] = cat
 	}
-	res, err := c.sampleRdb.Eval(ctx, sampleInvalidateScript,
+	res, err := index.RunScript(ctx, c.sampleRdb, luaSampleInvalidate,
 		[]string{c.reader.MakeSampleIndicatorKey(indicator)}, args...).Result()
 	if err != nil {
 		return 0, err
@@ -497,7 +507,7 @@ func (s *Sampler[T]) loadAndCache(ctx context.Context, c *Client, list *ListResu
 			// value the current log may no longer support), keep the result.
 			return string(data), nil
 		}
-		if werr := c.sampleRdb.Eval(ctx, sampleWriteScript,
+		if werr := index.RunScript(ctx, c.sampleRdb, luaSampleWrite,
 			[]string{hashKey, c.reader.MakeSampleRemoveGenKey()},
 			epoch, catGen, list.catalog, data).Err(); werr != nil {
 			c.emitEvent(list.catalog, "SampleCacheError", map[string]any{"op": "hset", "err": werr.Error()})

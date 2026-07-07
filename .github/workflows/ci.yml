@@ -15,6 +15,11 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      # The service Redis below is dedicated to this job, so the one test
+      # that issues a server-wide SCRIPT FLUSH may run here (it is skipped
+      # by default to keep `go test ./...` safe against a shared Redis).
+      LAKE_TEST_SCRIPT_FLUSH: "1"
     services:
       redis:
         image: redis:7-alpine

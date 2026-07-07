@@ -39,11 +39,15 @@ end
 return 0
 `
 
+// luaRemoveDelta dispatches removeDeltaScript by SHA (EVALSHA with EVAL
+// fallback on a cold script cache).
+var luaRemoveDelta = NewScript(removeDeltaScript)
+
 // RemoveDelta deletes the delta index entry with the given tsSeq and bumps
 // the catalog's removal generation. The body object in storage is untouched.
 // Returns whether an entry was removed.
 func (w *Writer) RemoveDelta(ctx context.Context, catalog string, tsSeq TimeSeqID) (bool, error) {
-	res, err := w.rdb.Eval(ctx, removeDeltaScript,
+	res, err := RunScript(ctx, w.rdb, luaRemoveDelta,
 		[]string{w.MakeDeltaZsetKey(catalog), w.MakeSnapsHashKey()},
 		tsSeq.Score(), tsSeq.String(), catalog,
 	).Result()

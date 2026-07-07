@@ -227,6 +227,11 @@ a bad URL) — all programmer errors, caught at construction time.
 > **Redis compatibility**: developed and tested against Redis 7.x. The notify
 > script calls `TIME` before writing, which relies on effect-based script
 > replication — the default since Redis 5.0 and the only mode since 7.0.
+> Scripts are dispatched by `EVALSHA` with an automatic full-body `EVAL`
+> fallback (cold script cache, `ERR NOSCRIPT` spellings, or an ACL that
+> denies the `EVALSHA` command itself), so only the `EVAL` permission is
+> strictly required — no `SCRIPT LOAD`. If local SHA-1 is unavailable (Go's
+> `fips140=only` mode) dispatch degrades to plain `EVAL` automatically.
 > **Redis Cluster is not supported** for the index: the scripts operate on
 > multiple keys per catalog (snap hash + delta zset) and derive the seqid
 > counter key inside Lua, which cluster's one-slot-per-script rule rejects.
@@ -319,11 +324,14 @@ never point one catalog's index at another catalog's objects. With
 signature is missing/invalid or whose `ExpiresAt` has passed (no indefinite
 replay of a leaked handle).
 
-`Provider` / `Bucket` must be ASCII `[a-zA-Z0-9][a-zA-Z0-9._-]*` — they are
-embedded in the recorded URI, so `/` `:` `|` are rejected at WriteBegin (an
-ambiguous name would make the URI parse back to a different object), and
-WriteNotify re-checks the parsed parts of the handle's URI (the handle is
-untrusted input).
+`Provider` / `Bucket` must be ASCII `[a-zA-Z0-9][a-zA-Z0-9._-]*`, at most 128
+bytes — Lake's own backend-agnostic sanity bound (both parts are recorded in
+every delta's URI; a bucket is one path component on the file backend). Real
+object stores impose tighter rules of their own (OSS / S3 buckets: 63 chars),
+surfaced by the backend itself. They are embedded in the recorded URI, so `/`
+`:` `|` are rejected at WriteBegin (an ambiguous name would make the URI parse
+back to a different object), and WriteNotify re-checks the parsed parts of the
+handle's URI (the handle is untrusted input).
 
 > **Presign capability**: WriteBegin requires the resolved backend to implement
 > `storage.Presigner`. OSS supports it; file / memory return
@@ -443,6 +451,8 @@ what a hand-issued `ZREM` would skip.
 - Must start with `/`; must not end with `/`
 - Each segment starts with a letter / `_` / `$` (no leading digit)
 - `/` alone means the whole document
+- New writes cap the path at 512 bytes (it is recorded verbatim in every
+  delta's index entry); reads accept longer paths recorded before the cap
 
 ### Storage URI
 
@@ -457,7 +467,13 @@ object path is a Lake convention:
 
 For path safety the catalog is encoded: pure-lowercase `users` → `(users`,
 pure-uppercase `USERS` → `)USERS`, mixed / non-ASCII → lowercased base32.
-Catalog validation forbids `:` `|` `(` `)` so the forms never collide.
+Catalog validation forbids `:` `|` `(` `)` so the forms never collide, and
+**new writes** cap names at 128 bytes so the encoded form always fits one path
+component on every backend (the base32 form of 128 bytes is 208 chars, under
+the 255-byte filesystem limit). Length caps bind only where a name mints new
+state (WriteBegin / WriteNotify / NewSampler); List, RemoveDelta, Compact and
+the read path accept longer pre-existing names, so tightening a cap can never
+strand persisted data. Sample indicators follow the same rules as catalogs.
 
 ### Three-step direct upload
 
@@ -581,12 +597,16 @@ go test ./...
 go test -count=1 -race ./...
 ```
 
-Integration tests need a reachable Redis at `127.0.0.1:6379`; they skip
-gracefully when it is absent, and they are **non-destructive** — each uses a
-unique key prefix and deletes only its own keys on cleanup (never `FLUSHDB`), so
-it is safe to point them at a Redis that holds other data. The notify Lua's
-cjson-encoded member is only exercised end-to-end with Redis present
-(`TestWriteReadRoundTrip_Redis`).
+Integration tests need a reachable Redis at `127.0.0.1:6379` — e.g.
+`docker run --rm -d -p 6379:6379 redis:7-alpine` — or wherever
+`LAKE_TEST_REDIS_ADDR=host:port` points. They skip gracefully when it is
+absent, and they are **non-destructive** — each uses a unique key prefix and
+deletes only its own keys on cleanup (never `FLUSHDB`), so it is safe to point
+them at a Redis that holds other data. The one exception is opt-in: the
+EVALSHA cold-cache test issues a server-wide `SCRIPT FLUSH` and only runs with
+`LAKE_TEST_SCRIPT_FLUSH=1` (CI sets it against its dedicated Redis). The
+notify Lua's cjson-encoded member is only exercised end-to-end with Redis
+present (`TestWriteReadRoundTrip_Redis`).
 
 ## 💡 Design Philosophy
 
