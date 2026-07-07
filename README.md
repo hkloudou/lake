@@ -319,11 +319,14 @@ never point one catalog's index at another catalog's objects. With
 signature is missing/invalid or whose `ExpiresAt` has passed (no indefinite
 replay of a leaked handle).
 
-`Provider` / `Bucket` must be ASCII `[a-zA-Z0-9][a-zA-Z0-9._-]*`, at most 63
-bytes (the OSS / S3 bucket-name ceiling) — they are embedded in the recorded
-URI, so `/` `:` `|` are rejected at WriteBegin (an ambiguous name would make
-the URI parse back to a different object), and WriteNotify re-checks the
-parsed parts of the handle's URI (the handle is untrusted input).
+`Provider` / `Bucket` must be ASCII `[a-zA-Z0-9][a-zA-Z0-9._-]*`, at most 128
+bytes — Lake's own backend-agnostic sanity bound (both parts are recorded in
+every delta's URI; a bucket is one path component on the file backend). Real
+object stores impose tighter rules of their own (OSS / S3 buckets: 63 chars),
+surfaced by the backend itself. They are embedded in the recorded URI, so `/`
+`:` `|` are rejected at WriteBegin (an ambiguous name would make the URI parse
+back to a different object), and WriteNotify re-checks the parsed parts of the
+handle's URI (the handle is untrusted input).
 
 > **Presign capability**: WriteBegin requires the resolved backend to implement
 > `storage.Presigner`. OSS supports it; file / memory return

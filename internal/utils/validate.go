@@ -29,9 +29,13 @@ const (
 	// the merge engine on every read.
 	MaxFieldPathLen = 512
 	// MaxStoragePartLen bounds provider / bucket names embedded in object
-	// URIs. Real object stores cap bucket names lower still (OSS / S3: 63
-	// chars), so a longer value can only be a mistake.
-	MaxStoragePartLen = 63
+	// URIs. This is Lake's own backend-agnostic sanity bound — both parts are
+	// recorded in every delta's URI, and a bucket maps to one path component
+	// on the file backend (255-byte limit) — NOT a cloud rule: real object
+	// stores impose tighter limits of their own (OSS / S3 buckets: 63 chars)
+	// and surface them from the backend itself, while file / mem / custom
+	// resolvers may use longer logical names up to this bound.
+	MaxStoragePartLen = 128
 )
 
 // fieldPathRegex: JSON field path used in delta members.

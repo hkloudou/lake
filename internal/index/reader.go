@@ -253,18 +253,18 @@ func (r *Reader) BatchList(ctx context.Context, catalogs []string) map[string]*B
 		return out
 	}
 
-	cmds := r.evalListPipelined(ctx, catalogs)
+	cmds := r.evalListPipelined(ctx, catalogs, false)
 	// Script.Run's NOSCRIPT fallback cannot fire inside a pipeline (command
 	// errors surface only at Exec), so the cold-cache case is handled here:
-	// load the script once and re-run the whole pipeline. Rare — the first
-	// BatchList of a process against a server that has never seen the script,
-	// or a restarted / SCRIPT-FLUSHed one. The load is best-effort: if Redis
-	// is down, the retry surfaces the real connection error, which is more
-	// truthful than either the load error or a misleading NOSCRIPT.
+	// re-run the whole pipeline with full-body EVAL, which executes AND
+	// re-caches the script in one step — the same strategy as Script.Run,
+	// and it needs no SCRIPT LOAD permission (ACL/proxy setups may deny that
+	// while allowing EVAL). Rare — the first BatchList of a process against
+	// a server that has never seen the script, or a restarted /
+	// SCRIPT-FLUSHed one; listScript is read-only, so re-running is safe.
 	for _, cmd := range cmds {
 		if redis.HasErrorPrefix(cmd.Err(), "NOSCRIPT") {
-			_ = luaList.Load(ctx, r.rdb).Err()
-			cmds = r.evalListPipelined(ctx, catalogs)
+			cmds = r.evalListPipelined(ctx, catalogs, true)
 			break
 		}
 	}
@@ -281,13 +281,20 @@ func (r *Reader) BatchList(ctx context.Context, catalogs []string) map[string]*B
 	return out
 }
 
-// evalListPipelined queues one EVALSHA of listScript per catalog on a single
-// pipeline and executes it; only the 40-byte SHA travels per catalog.
-func (r *Reader) evalListPipelined(ctx context.Context, catalogs []string) map[string]*redis.Cmd {
+// evalListPipelined queues one listScript call per catalog on a single
+// pipeline and executes it. With fullBody false it uses EVALSHA (only the
+// 40-byte SHA travels per catalog); with fullBody true it uses EVAL — the
+// cold-cache retry path, which also re-caches the script server-side.
+func (r *Reader) evalListPipelined(ctx context.Context, catalogs []string, fullBody bool) map[string]*redis.Cmd {
 	pipe := r.rdb.Pipeline()
 	cmds := make(map[string]*redis.Cmd, len(catalogs))
 	for _, c := range catalogs {
-		cmds[c] = luaList.EvalSha(ctx, pipe, []string{r.MakeSnapsHashKey(), r.MakeDeltaZsetKey(c)}, c)
+		keys := []string{r.MakeSnapsHashKey(), r.MakeDeltaZsetKey(c)}
+		if fullBody {
+			cmds[c] = luaList.Eval(ctx, pipe, keys, c)
+		} else {
+			cmds[c] = luaList.EvalSha(ctx, pipe, keys, c)
+		}
 	}
 	pipe.Exec(ctx)
 	return cmds
