@@ -82,7 +82,9 @@ func NewSampler[T any](indicator string, loader func(*ListResult) (T, error), op
 	if indicator == "" {
 		panic("lake: NewSampler indicator must be non-empty")
 	}
-	if err := utils.ValidateCatalog(indicator); err != nil {
+	// ValidateNewCatalog: an indicator mints new memo-hash state, so the
+	// length cap applies (it is code-chosen, so failing fast is cheap).
+	if err := utils.ValidateNewCatalog(indicator); err != nil {
 		panic(fmt.Sprintf("lake: NewSampler invalid indicator: %v", err))
 	}
 	if loader == nil {

@@ -443,7 +443,8 @@ what a hand-issued `ZREM` would skip.
 - Must start with `/`; must not end with `/`
 - Each segment starts with a letter / `_` / `$` (no leading digit)
 - `/` alone means the whole document
-- At most 512 bytes (the path is recorded verbatim in every delta's index entry)
+- New writes cap the path at 512 bytes (it is recorded verbatim in every
+  delta's index entry); reads accept longer paths recorded before the cap
 
 ### Storage URI
 
@@ -458,10 +459,13 @@ object path is a Lake convention:
 
 For path safety the catalog is encoded: pure-lowercase `users` → `(users`,
 pure-uppercase `USERS` → `)USERS`, mixed / non-ASCII → lowercased base32.
-Catalog validation forbids `:` `|` `(` `)` so the forms never collide, and caps
-names at 128 bytes so the encoded form always fits one path component on every
-backend (the base32 form of 128 bytes is 208 chars, under the 255-byte
-filesystem limit). Sample indicators follow the same rules.
+Catalog validation forbids `:` `|` `(` `)` so the forms never collide, and
+**new writes** cap names at 128 bytes so the encoded form always fits one path
+component on every backend (the base32 form of 128 bytes is 208 chars, under
+the 255-byte filesystem limit). Length caps bind only where a name mints new
+state (WriteBegin / WriteNotify / NewSampler); List, RemoveDelta, Compact and
+the read path accept longer pre-existing names, so tightening a cap can never
+strand persisted data. Sample indicators follow the same rules as catalogs.
 
 ### Three-step direct upload
 
@@ -590,8 +594,11 @@ Integration tests need a reachable Redis at `127.0.0.1:6379` — e.g.
 `LAKE_TEST_REDIS_ADDR=host:port` points. They skip gracefully when it is
 absent, and they are **non-destructive** — each uses a unique key prefix and
 deletes only its own keys on cleanup (never `FLUSHDB`), so it is safe to point
-them at a Redis that holds other data. The notify Lua's cjson-encoded member
-is only exercised end-to-end with Redis present (`TestWriteReadRoundTrip_Redis`).
+them at a Redis that holds other data. The one exception is opt-in: the
+EVALSHA cold-cache test issues a server-wide `SCRIPT FLUSH` and only runs with
+`LAKE_TEST_SCRIPT_FLUSH=1` (CI sets it against its dedicated Redis). The
+notify Lua's cjson-encoded member is only exercised end-to-end with Redis
+present (`TestWriteReadRoundTrip_Redis`).
 
 ## 💡 Design Philosophy
 

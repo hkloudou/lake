@@ -62,7 +62,6 @@ func TestValidateCatalog_Rejected(t *testing.T) {
 		{"asterisk", "tenant*users"},
 		{"question_mark", "tenant?users"},
 		{"control_char", "tenant\x00users"},
-		{"over_length_cap", strings.Repeat("a", MaxCatalogLen+1)},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -109,8 +108,6 @@ func TestValidateFieldPath(t *testing.T) {
 		{"starts with dot", "/.config", true},
 		{"segment starts with dot", "/user/.config", true},
 		{"contains chinese characters", "/用户", true},
-		{"exactly at length cap", "/" + strings.Repeat("a", MaxFieldPathLen-1), false},
-		{"over length cap", "/" + strings.Repeat("a", MaxFieldPathLen), true},
 	}
 
 	for _, tt := range tests {
@@ -120,5 +117,42 @@ func TestValidateFieldPath(t *testing.T) {
 				t.Errorf("ValidateFieldPath(%q) error = %v, wantErr %v", tt.path, err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestLengthCapsBindOnlyOnCreate pins the write/read validation split: the
+// New* variants reject names past the cap, while the plain variants accept
+// them — data persisted under a longer name when the cap was laxer must stay
+// listable, readable, and removable after an upgrade.
+func TestLengthCapsBindOnlyOnCreate(t *testing.T) {
+	longCatalog := strings.Repeat("a", MaxCatalogLen+1)
+	longPath := "/" + strings.Repeat("a", MaxFieldPathLen)
+
+	if err := ValidateNewCatalog(strings.Repeat("a", MaxCatalogLen)); err != nil {
+		t.Errorf("ValidateNewCatalog at cap: unexpected error: %v", err)
+	}
+	if err := ValidateNewCatalog(longCatalog); err == nil {
+		t.Error("ValidateNewCatalog over cap: expected error, got nil")
+	}
+	if err := ValidateCatalog(longCatalog); err != nil {
+		t.Errorf("ValidateCatalog must accept legacy over-cap names, got: %v", err)
+	}
+
+	if err := ValidateNewFieldPath("/" + strings.Repeat("a", MaxFieldPathLen-1)); err != nil {
+		t.Errorf("ValidateNewFieldPath at cap: unexpected error: %v", err)
+	}
+	if err := ValidateNewFieldPath(longPath); err == nil {
+		t.Error("ValidateNewFieldPath over cap: expected error, got nil")
+	}
+	if err := ValidateFieldPath(longPath); err != nil {
+		t.Errorf("ValidateFieldPath must accept legacy over-cap paths, got: %v", err)
+	}
+
+	// New* still enforce the charset rules on top of the length cap.
+	if err := ValidateNewCatalog("ten:ant"); err == nil {
+		t.Error("ValidateNewCatalog bad charset: expected error, got nil")
+	}
+	if err := ValidateNewFieldPath("no-slash"); err == nil {
+		t.Error("ValidateNewFieldPath bad shape: expected error, got nil")
 	}
 }
