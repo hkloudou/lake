@@ -214,12 +214,30 @@ func New(prefix string, rdb *redis.Client, resolve storage.Resolver, opts ...fun
 
 | Option | Description |
 |--------|-------------|
-| `WithSnapTarget(provider, bucket)` | Where Lake writes auto-generated snapshots. Omit → no auto-snapshotting (reads replay all deltas) |
+| `WithSnapTarget(provider, bucket)` | Where Lake writes auto-generated snapshots. Omit — or pass both empty — → no auto-snapshotting (reads replay all deltas) |
 | `WithSampleCacheURL(url)` / `WithSampleCacheRedis(rdb)` | Route the Sampler memo hash (`<prefix>:m:*`) to a separate Redis. The URL form creates a client Lake owns — `Close` releases it |
+| `WithHandleSecret(secret)` | HMAC-sign every `WriteHandle`; `WriteNotify` then rejects tampered or expired handles (see **Write** below). Every process sharing the prefix needs the same secret |
 | `(*Client) Use(handler EventHandler)` | Register an event handler (safe on a live Client; copy-on-write) |
 | `(*Client) Close()` | Stop the background Redis-clock ticker and release Lake-owned resources. Optional for a process-lifetime Client; call it from tests / multi-tenant hosts that create many Clients |
 
-`New` panics on an empty `prefix`, nil `rdb`, or nil `resolve` (programmer error).
+`New` panics on an empty `prefix`, nil `rdb`, or nil `resolve`; option
+constructors panic on invalid input (`WithSnapTarget` on an ambiguous
+provider/bucket, `WithHandleSecret` on an empty secret, `WithSampleCacheURL` on
+a bad URL) — all programmer errors, caught at construction time.
+
+> **Redis compatibility**: developed and tested against Redis 7.x. The notify
+> script calls `TIME` before writing, which relies on effect-based script
+> replication — the default since Redis 5.0 and the only mode since 7.0.
+> Scripts are dispatched by `EVALSHA` with an automatic full-body `EVAL`
+> fallback (cold script cache, `ERR NOSCRIPT` spellings, or an ACL that
+> denies the `EVALSHA` command itself), so only the `EVAL` permission is
+> strictly required — no `SCRIPT LOAD`. If local SHA-1 is unavailable (Go's
+> `fips140=only` mode) dispatch degrades to plain `EVAL` automatically.
+> **Redis Cluster is not supported** for the index: the scripts operate on
+> multiple keys per catalog (snap hash + delta zset) and derive the seqid
+> counter key inside Lua, which cluster's one-slot-per-script rule rejects.
+> Use a standalone / primary-replica (Sentinel) index Redis; the cache tier
+> (`storage/cached`) has no such constraint.
 
 ### Storage
 
@@ -292,10 +310,29 @@ type WriteHandle struct {
     UploadMethod  string            `json:"uploadMethod"`
     UploadHeaders map[string]string `json:"uploadHeaders"`
     ExpiresAt     int64             `json:"expiresAt"` // unix seconds
+    Signature     string            `json:"signature,omitempty"` // set iff WithHandleSecret; echo back unchanged
 }
 ```
 
 **Begin options**: `WithUploadTTL(d)`, `WithUploadContentType(ct)`.
+
+**Handle integrity**: handles round-trip through clients Lake does not trust,
+so `WriteNotify` always re-derives the object path from the handle's own
+`(Catalog, UUID)` and rejects a URI that doesn't match — a tampered handle can
+never point one catalog's index at another catalog's objects. With
+`WithHandleSecret` configured, WriteBegin additionally stamps `Signature`
+(HMAC-SHA256 over the identity fields) and WriteNotify rejects handles whose
+signature is missing/invalid or whose `ExpiresAt` has passed (no indefinite
+replay of a leaked handle).
+
+`Provider` / `Bucket` must be ASCII `[a-zA-Z0-9][a-zA-Z0-9._-]*`, at most 128
+bytes — Lake's own backend-agnostic sanity bound (both parts are recorded in
+every delta's URI; a bucket is one path component on the file backend). Real
+object stores impose tighter rules of their own (OSS / S3 buckets: 63 chars),
+surfaced by the backend itself. They are embedded in the recorded URI, so `/`
+`:` `|` are rejected at WriteBegin (an ambiguous name would make the URI parse
+back to a different object), and WriteNotify re-checks the parsed parts of the
+handle's URI (the handle is untrusted input).
 
 > **Presign capability**: WriteBegin requires the resolved backend to implement
 > `storage.Presigner`. OSS supports it; file / memory return
@@ -392,6 +429,22 @@ err := client.IterateSnaps(ctx, func(catalog string, snap lake.SnapInfo) bool {
 })
 ```
 
+### Operations
+
+| Function | Description |
+|----------|-------------|
+| `(*Client) RemoveDelta(ctx, catalog, tsSeq) (bool, error)` | Remove one poison delta from the index (the body object stays). The **only** correct way to unblock a catalog wedged by an unappliable body |
+| `(*Client) Compact(ctx, catalog) (int64, error)` | Trim the delta zset up to the current snapshot; index-only, safe anytime, no background reaper |
+| `(*Client) InvalidateSamples(ctx, indicator, catalogs...) (int64, error)` | Drop cached samples (e.g. after a loader code change or catalog deletion); next Sample/Batch recomputes |
+
+`RemoveDelta` takes the `tsSeq` string verbatim from the merge error
+(`merge failed (path=… tsSeq=1700000000_42 …)`). It is destructive — the
+removed write disappears from every future read — and it is coherent with
+derived state: the removal bumps the catalog's **removal generation**, so an
+in-flight read that listed the removed delta can neither persist a snapshot
+nor cache a sample computed from pre-removal state. That barrier is exactly
+what a hand-issued `ZREM` would skip.
+
 ## 📖 Core Concepts
 
 ### Path format (the JSON field path)
@@ -399,6 +452,8 @@ err := client.IterateSnaps(ctx, func(catalog string, snap lake.SnapInfo) bool {
 - Must start with `/`; must not end with `/`
 - Each segment starts with a letter / `_` / `$` (no leading digit)
 - `/` alone means the whole document
+- New writes cap the path at 512 bytes (it is recorded verbatim in every
+  delta's index entry); reads accept longer paths recorded before the cap
 
 ### Storage URI
 
@@ -413,7 +468,13 @@ object path is a Lake convention:
 
 For path safety the catalog is encoded: pure-lowercase `users` → `(users`,
 pure-uppercase `USERS` → `)USERS`, mixed / non-ASCII → lowercased base32.
-Catalog validation forbids `:` `|` `(` `)` so the forms never collide.
+Catalog validation forbids `:` `|` `(` `)` so the forms never collide, and
+**new writes** cap names at 128 bytes so the encoded form always fits one path
+component on every backend (the base32 form of 128 bytes is 208 chars, under
+the 255-byte filesystem limit). Length caps bind only where a name mints new
+state (WriteBegin / WriteNotify / NewSampler); List, RemoveDelta, Compact and
+the read path accept longer pre-existing names, so tightening a cap can never
+strand persisted data. Sample indicators follow the same rules as catalogs.
 
 ### Three-step direct upload
 
@@ -523,6 +584,14 @@ client.Use(func(catalog, event string, attrs map[string]any) {
 | `WriteNotify` | `path`, `uri` |
 | `Sample` / `BatchSample` | `indicator` |
 | `SampleCacheError` | `op`, `err` |
+| `InvalidateSample` | `indicator` |
+| `RemoveDelta` | `tsSeq` |
+| `Compact` | — |
+| `SnapshotError` | `stop`, `err` — the async snapshot save failed (it is otherwise invisible: reads never wait for it) |
+
+Events fire at operation **start** (before validation / Redis I/O), so
+handlers observe every attempt; `SampleCacheError` / `SnapshotError` fire when
+the corresponding failure happens.
 
 > For distributed tracing, instrument the Redis / storage clients in your
 > resolver; Lake intentionally avoids dragging in OpenTelemetry.
@@ -534,12 +603,16 @@ go test ./...
 go test -count=1 -race ./...
 ```
 
-Integration tests need a reachable Redis at `127.0.0.1:6379`; they skip
-gracefully when it is absent, and they are **non-destructive** — each uses a
-unique key prefix and deletes only its own keys on cleanup (never `FLUSHDB`), so
-it is safe to point them at a Redis that holds other data. The notify Lua's
-cjson-encoded member is only exercised end-to-end with Redis present
-(`TestWriteReadRoundTrip_Redis`).
+Integration tests need a reachable Redis at `127.0.0.1:6379` — e.g.
+`docker run --rm -d -p 6379:6379 redis:7-alpine` — or wherever
+`LAKE_TEST_REDIS_ADDR=host:port` points. They skip gracefully when it is
+absent, and they are **non-destructive** — each uses a unique key prefix and
+deletes only its own keys on cleanup (never `FLUSHDB`), so it is safe to point
+them at a Redis that holds other data. The one exception is opt-in: the
+EVALSHA cold-cache test issues a server-wide `SCRIPT FLUSH` and only runs with
+`LAKE_TEST_SCRIPT_FLUSH=1` (CI sets it against its dedicated Redis). The
+notify Lua's cjson-encoded member is only exercised end-to-end with Redis
+present (`TestWriteReadRoundTrip_Redis`).
 
 ## 💡 Design Philosophy
 
@@ -561,9 +634,12 @@ a body that cannot be applied (invalid JSON, an RFC 7396 patch that doesn't
 parse) fails merge, and because the same merge gates snapshotting the failure is
 sticky: every read of that catalog errors until the bad delta is removed. There
 is intentionally no read-time skip/quarantine. The merge error names the
-offending delta (`path`, `tsSeq`, `uri`, `catalog`); recovery is manual (`ZREM`
-the member from `{prefix}:d:{catalog}`). Keeping bodies valid before upload is
-the contract.
+offending delta (`path`, `tsSeq`, `uri`, `catalog`); recovery is
+`client.RemoveDelta(ctx, catalog, tsSeq)` — see **Operations** in the API
+reference above. (Do NOT
+hand-`ZREM` the member: that bypasses the removal-generation barrier, so an
+in-flight read could persist a snapshot that resurrects the removed write.)
+Keeping bodies valid before upload is the contract.
 
 ### Snapshot save failure is not user-visible
 

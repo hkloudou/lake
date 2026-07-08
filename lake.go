@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/hkloudou/lake/v3/internal/index"
+	"github.com/hkloudou/lake/v3/internal/utils"
 	"github.com/hkloudou/lake/v3/internal/xsync"
 	"github.com/hkloudou/lake/v3/storage"
 	"github.com/redis/go-redis/v9"
@@ -120,10 +121,28 @@ func (c *Client) Close() error {
 }
 
 // WithSnapTarget sets where Lake writes the snapshots it auto-generates on the
-// read path (resolved via the client's Resolver). Omit it to disable
-// auto-snapshotting: reads then replay all deltas from "{}" — correct, just
-// slower for long histories.
+// read path (resolved via the client's Resolver). Omit it — or pass both
+// arguments empty — to disable auto-snapshotting: reads then replay all
+// deltas from "{}" — correct, just slower for long histories. (Both-empty
+// stays a valid "disabled" spelling so config-driven callers can pass unset
+// values through.)
+//
+// Panics on an invalid provider/bucket (programmer error at construction
+// time): both are embedded in every snapshot's URI (provider://bucket/path),
+// and a "/" or ":" inside either part would make the recorded locator parse
+// back to a different bucket — every read of a snapshotted catalog would
+// then fail. One-empty-one-set is also a panic: it silently disabled
+// snapshotting before, which can only be a config mistake.
 func WithSnapTarget(provider, bucket string) func(*option) {
+	if provider == "" && bucket == "" {
+		return func(*option) {} // explicit "disabled"
+	}
+	if err := utils.ValidateStorageProvider(provider); err != nil {
+		panic(fmt.Errorf("lake: WithSnapTarget: %w", err))
+	}
+	if err := utils.ValidateStorageBucket(bucket); err != nil {
+		panic(fmt.Errorf("lake: WithSnapTarget: %w", err))
+	}
 	return func(o *option) { o.snapProvider, o.snapBucket = provider, bucket }
 }
 

@@ -89,7 +89,7 @@ func TestInvalidateSamples_BarriersInFlightWrite_Redis(t *testing.T) {
 		t.Fatalf("InvalidateSamples: %v", err)
 	}
 	// …and the in-flight write-back must be discarded.
-	if err := sampleWriteScript.Run(ctx, c.sampleRdb, []string{hashKey, genKey}, inFlightEpoch, "0", "users", staleValue).Err(); err != nil {
+	if err := index.RunScript(ctx, c.sampleRdb, luaSampleWrite, []string{hashKey, genKey}, inFlightEpoch, "0", "users", staleValue).Err(); err != nil {
 		t.Fatalf("stale write eval: %v", err)
 	}
 	if n, err := c.sampleRdb.HExists(ctx, hashKey, "users").Result(); err != nil || n {
@@ -101,7 +101,7 @@ func TestInvalidateSamples_BarriersInFlightWrite_Redis(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read epoch: %v", err)
 	}
-	if err := sampleWriteScript.Run(ctx, c.sampleRdb, []string{hashKey, genKey}, epoch, "0", "users", staleValue).Err(); err != nil {
+	if err := index.RunScript(ctx, c.sampleRdb, luaSampleWrite, []string{hashKey, genKey}, epoch, "0", "users", staleValue).Err(); err != nil {
 		t.Fatalf("fresh write eval: %v", err)
 	}
 	if n, err := c.sampleRdb.HExists(ctx, hashKey, "users").Result(); err != nil || !n {
@@ -156,7 +156,7 @@ func TestRemoveDeltaBlocksUnseenIndicatorWrite_Redis(t *testing.T) {
 
 	// The pre-removal compute's write-back must be discarded even though its
 	// memo hash never existed for the sweep to find.
-	if err := sampleWriteScript.Run(ctx, c.sampleRdb, []string{hashKey, genKey}, "0", "0", "users", staleValue).Err(); err != nil {
+	if err := index.RunScript(ctx, c.sampleRdb, luaSampleWrite, []string{hashKey, genKey}, "0", "0", "users", staleValue).Err(); err != nil {
 		t.Fatalf("stale write eval: %v", err)
 	}
 	if n, err := c.sampleRdb.HExists(ctx, hashKey, "users").Result(); err != nil || n {
@@ -168,7 +168,7 @@ func TestRemoveDeltaBlocksUnseenIndicatorWrite_Redis(t *testing.T) {
 	if err != nil || gen != "1" {
 		t.Fatalf("removal gen = %q err=%v, want \"1\"", gen, err)
 	}
-	if err := sampleWriteScript.Run(ctx, c.sampleRdb, []string{hashKey, genKey}, "0", gen, "users", staleValue).Err(); err != nil {
+	if err := index.RunScript(ctx, c.sampleRdb, luaSampleWrite, []string{hashKey, genKey}, "0", gen, "users", staleValue).Err(); err != nil {
 		t.Fatalf("fresh write eval: %v", err)
 	}
 	if n, err := c.sampleRdb.HExists(ctx, hashKey, "users").Result(); err != nil || !n {

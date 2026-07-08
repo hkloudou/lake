@@ -88,10 +88,12 @@ func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...
 		})
 	}
 
-	if err := utils.ValidateCatalog(req.Catalog); err != nil {
+	// New* variants: WriteBegin mints new index/storage state, so the length
+	// caps apply here (read/ops paths accept longer legacy names).
+	if err := utils.ValidateNewCatalog(req.Catalog); err != nil {
 		return nil, err
 	}
-	if err := utils.ValidateFieldPath(req.Path); err != nil {
+	if err := utils.ValidateNewFieldPath(req.Path); err != nil {
 		return nil, err
 	}
 	if req.MergeType < MergeTypeReplace || req.MergeType > MergeTypeRFC7396 {
@@ -99,6 +101,15 @@ func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...
 	}
 	if req.Provider == "" || req.Bucket == "" {
 		return nil, errors.New("WriteBegin requires Provider and Bucket")
+	}
+	// Provider/Bucket are embedded in the delta URI (provider://bucket/path);
+	// an ambiguous character ("/", ":") would make ParseURI resolve the
+	// recorded locator to a different object than the one presigned here.
+	if err := utils.ValidateStorageProvider(req.Provider); err != nil {
+		return nil, err
+	}
+	if err := utils.ValidateStorageBucket(req.Bucket); err != nil {
+		return nil, err
 	}
 
 	st, err := c.storageFor(storage.Delta, req.Provider, req.Bucket)
@@ -198,10 +209,12 @@ func (c *Client) WriteNotify(ctx context.Context, h *WriteHandle) error {
 		c.emitEvent(h.Catalog, "WriteNotify", map[string]any{"path": h.Path, "uri": h.URI})
 	}
 
-	if err := utils.ValidateCatalog(h.Catalog); err != nil {
+	// New* variants: the handle is untrusted input about to be recorded, so
+	// it is held to the same length caps WriteBegin enforces.
+	if err := utils.ValidateNewCatalog(h.Catalog); err != nil {
 		return err
 	}
-	if err := utils.ValidateFieldPath(h.Path); err != nil {
+	if err := utils.ValidateNewFieldPath(h.Path); err != nil {
 		return err
 	}
 	if h.MergeType < MergeTypeReplace || h.MergeType > MergeTypeRFC7396 {
@@ -213,8 +226,18 @@ func (c *Client) WriteNotify(ctx context.Context, h *WriteHandle) error {
 	if h.URI == "" {
 		return errors.New("empty URI in handle")
 	}
-	_, _, path, err := objkey.ParseURI(h.URI)
+	provider, bucket, path, err := objkey.ParseURI(h.URI)
 	if err != nil {
+		return err
+	}
+	// The URI round-trips through untrusted clients and is recorded verbatim
+	// into the index, where reads feed its provider/bucket to the resolver —
+	// so hold both to the same charset WriteBegin enforces. ParseURI alone
+	// would accept e.g. bucket "da|ta", which WriteBegin can never emit.
+	if err := utils.ValidateStorageProvider(provider); err != nil {
+		return err
+	}
+	if err := utils.ValidateStorageBucket(bucket); err != nil {
 		return err
 	}
 	if want := objkey.DeltaPath(h.Catalog, h.UUID); path != want {

@@ -26,9 +26,9 @@ func NewRedisCache(client *redis.Client, ttl time.Duration) *RedisCache {
 	}
 }
 
-// NewRedisCacheWithURL builds a RedisCache from a URL.
-func NewRedisCacheWithURL(metaUrl string, ttl time.Duration) (*RedisCache, error) {
-	opt, err := redis.ParseURL(metaUrl)
+// NewRedisCacheWithURL builds a RedisCache from a Redis URL.
+func NewRedisCacheWithURL(url string, ttl time.Duration) (*RedisCache, error) {
+	opt, err := redis.ParseURL(url)
 	if err != nil {
 		return nil, err
 	}
@@ -92,6 +92,7 @@ func (c *RedisCache) Set(ctx context.Context, namespace, key string, data []byte
 func (c *RedisCache) write(ctx context.Context, cacheKey string, data []byte) {
 	enc, gerr := gzipCompress(data)
 	if gerr != nil {
+		log.Printf("[lake cache] gzip %s: %v", cacheKey, gerr)
 		return
 	}
 	if err := c.client.Set(ctx, cacheKey, enc, c.ttl).Err(); err != nil {

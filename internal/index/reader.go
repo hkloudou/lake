@@ -83,7 +83,7 @@ type BatchListResult struct {
 	ReadResult *ReadIndexResult
 }
 
-// listLua reads the catalog's snap pointer and the deltas past it in ONE
+// listScript reads the catalog's snap pointer and the deltas past it in ONE
 // atomic step. Atomicity is a correctness requirement, not an optimization:
 // with Compact in the picture, a non-atomic HGET→ZRANGE pair could observe an
 // old snap pointer, then a delta range already compacted up to a newer snap —
@@ -99,7 +99,7 @@ type BatchListResult struct {
 // {snapValue|false, removeGen, flat [member, score, ...]} — scores pass
 // through as Redis reply strings, never via Lua numbers (tostring would
 // mangle the float).
-const listLua = snapScoreLua + `
+const listScript = snapScoreLua + `
 local snap = redis.call("HGET", KEYS[1], ARGV[1])
 local rg = redis.call("HGET", KEYS[1], ARGV[1] .. ":rg") or "0"
 local min = "-inf"
@@ -112,15 +112,14 @@ end
 return {snap or false, rg, redis.call("ZRANGEBYSCORE", KEYS[2], min, "+inf", "WITHSCORES")}
 `
 
-// listScript wraps listLua as EVALSHA-with-fallback: after the first call
-// only the 40-byte digest crosses the wire instead of the ~800-byte source —
-// this script runs on every List and once per catalog in BatchList.
-var listScript = redis.NewScript(listLua)
+// luaList dispatches listScript by SHA (EVALSHA, falling back to EVAL on a
+// cold script cache) so the ~1 KB script body is not re-sent on every List.
+var luaList = NewScript(listScript)
 
 // ListCatalog atomically reads the snap pointer and the deltas past it —
 // the single read primitive behind Client.List / Client.BatchList.
 func (r *Reader) ListCatalog(ctx context.Context, catalog string) (*SnapInfo, *ReadIndexResult) {
-	res, err := listScript.Run(ctx, r.rdb,
+	res, err := RunScript(ctx, r.rdb, luaList,
 		[]string{r.MakeSnapsHashKey(), r.MakeDeltaZsetKey(catalog)},
 		catalog,
 	).Result()
@@ -268,44 +267,28 @@ func (r *Reader) IterateSnaps(ctx context.Context, fn func(catalog string, snap 
 // regardless of catalog count, and each catalog's (snap, deltas) pair is
 // atomic on the server (per-catalog atomicity is all a reader needs; no
 // cross-catalog consistency is promised).
-//
-// Commands are queued as EVALSHA (Script.Run's NOSCRIPT fallback cannot fire
-// inside a pipeline — errors only surface at Exec), so a cold script cache
-// is handled here: catalogs that fail with NOSCRIPT are retried once in a
-// second pipeline carrying the full script body, which also repopulates the
-// server's cache for every later call.
 func (r *Reader) BatchList(ctx context.Context, catalogs []string) map[string]*BatchListResult {
 	out := make(map[string]*BatchListResult, len(catalogs))
 	if len(catalogs) == 0 {
 		return out
 	}
-	snapsKey := r.MakeSnapsHashKey()
 
-	pipe := r.rdb.Pipeline()
-	cmds := make(map[string]*redis.Cmd, len(catalogs))
-	for _, c := range catalogs {
+	cmds := r.evalListPipelined(ctx, catalogs, false)
+	// RunScript's fallback cannot fire inside a pipeline (command errors
+	// surface only at Exec), so it is mirrored here with the same predicate:
+	// re-run the whole pipeline with full-body EVAL, which executes AND
+	// re-caches the script in one step — no SCRIPT LOAD (or even EVALSHA)
+	// permission required. Rare — a cold script cache, or an ACL that denies
+	// EVALSHA; listScript is read-only, so re-running is always safe.
+	for _, cmd := range cmds {
+		if needsEvalFallback(cmd.Err()) {
+			cmds = r.evalListPipelined(ctx, catalogs, true)
+			break
+		}
+	}
+
+	for c, cmd := range cmds {
 		out[c] = &BatchListResult{}
-		cmds[c] = listScript.EvalSha(ctx, pipe,
-			[]string{snapsKey, r.MakeDeltaZsetKey(c)}, c)
-	}
-	pipe.Exec(ctx)
-
-	var retry []string
-	for c, cmd := range cmds {
-		if redis.HasErrorPrefix(cmd.Err(), "NOSCRIPT") {
-			retry = append(retry, c)
-		}
-	}
-	if len(retry) > 0 {
-		pipe2 := r.rdb.Pipeline()
-		for _, c := range retry {
-			cmds[c] = listScript.Eval(ctx, pipe2,
-				[]string{snapsKey, r.MakeDeltaZsetKey(c)}, c)
-		}
-		pipe2.Exec(ctx)
-	}
-
-	for c, cmd := range cmds {
 		res, err := cmd.Result()
 		if err != nil {
 			out[c].ReadResult = &ReadIndexResult{Catalog: c, Err: fmt.Errorf("list eval: %w", err)}
@@ -314,6 +297,30 @@ func (r *Reader) BatchList(ctx context.Context, catalogs []string) map[string]*B
 		out[c].Snap, out[c].ReadResult = r.parseListResult(c, res)
 	}
 	return out
+}
+
+// evalListPipelined queues one listScript call per catalog on a single
+// pipeline and executes it. With fullBody false it uses EVALSHA (only the
+// 40-byte SHA travels per catalog); with fullBody true it uses EVAL — the
+// cold-cache retry path, which also re-caches the script server-side. When
+// SHA-1 is unavailable (fips140=only) it is EVAL-only, mirroring RunScript.
+func (r *Reader) evalListPipelined(ctx context.Context, catalogs []string, fullBody bool) map[string]*redis.Cmd {
+	compiled := luaList.compiled()
+	if compiled == nil {
+		fullBody = true
+	}
+	pipe := r.rdb.Pipeline()
+	cmds := make(map[string]*redis.Cmd, len(catalogs))
+	for _, c := range catalogs {
+		keys := []string{r.MakeSnapsHashKey(), r.MakeDeltaZsetKey(c)}
+		if fullBody {
+			cmds[c] = pipe.Eval(ctx, luaList.src, keys, c)
+		} else {
+			cmds[c] = compiled.EvalSha(ctx, pipe, keys, c)
+		}
+	}
+	pipe.Exec(ctx)
+	return cmds
 }
 
 // processZMembers parses zset entries into deltas. V3 has no pending

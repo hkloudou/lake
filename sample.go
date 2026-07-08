@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hkloudou/lake/v3/internal/index"
 	"github.com/hkloudou/lake/v3/internal/utils"
 	"github.com/redis/go-redis/v9"
 )
@@ -83,7 +84,9 @@ func NewSampler[T any](indicator string, loader func(*ListResult) (T, error), op
 	if indicator == "" {
 		panic("lake: NewSampler indicator must be non-empty")
 	}
-	if err := utils.ValidateCatalog(indicator); err != nil {
+	// ValidateNewCatalog: an indicator mints new memo-hash state, so the
+	// length cap applies (it is code-chosen, so failing fast is cheap).
+	if err := utils.ValidateNewCatalog(indicator); err != nil {
 		panic(fmt.Sprintf("lake: NewSampler invalid indicator: %v", err))
 	}
 	if loader == nil {
@@ -236,11 +239,10 @@ func (s *Sampler[T]) Batch(ctx context.Context, lists map[string]*ListResult) ma
 	_, _ = pipe.Exec(ctx)
 
 	catGens := make(map[string]string, len(probe))
-	if genVals, err := genCmd.Result(); err == nil && len(genVals) == len(probe) {
-		for i, raw := range genVals {
-			if g, ok := raw.(string); ok {
-				catGens[probe[i]] = g
-			}
+	genVals, _ := genCmd.Result()
+	for i, raw := range hmgetRow(genVals, len(probe)) {
+		if g, ok := raw.(string); ok {
+			catGens[probe[i]] = g
 		}
 	}
 	catGen := func(cat string) string {
@@ -257,13 +259,8 @@ func (s *Sampler[T]) Batch(ctx context.Context, lists map[string]*ListResult) ma
 		for _, cat := range probe {
 			c.emitEvent(cat, "SampleCacheError", map[string]any{"op": "hmget", "err": err.Error()})
 		}
-		cached = make([]any, len(fields))
 	}
-	if len(cached) != len(fields) {
-		// redis.Nil (a nil-array HMGET reply) or a short reply from a
-		// redis-compatible proxy: treat as a full miss, never index past it.
-		cached = make([]any, len(fields))
-	}
+	cached = hmgetRow(cached, len(fields))
 	if e, ok := cached[len(probe)].(string); ok {
 		epoch = e
 	}
@@ -324,7 +321,7 @@ func (s *Sampler[T]) Batch(ctx context.Context, lists map[string]*ListResult) ma
 // data version unchanged nothing would ever evict it again.
 const sampleEpochField = ":"
 
-// sampleWriteLua writes a computed sample only if BOTH barriers still
+// sampleWriteScript writes a computed sample only if BOTH barriers still
 // match what the writer observed before running its loader: the indicator's
 // memo epoch (bumped by InvalidateSamples) and the catalog's removal
 // generation in "<prefix>:mrg" (bumped by RemoveDelta — this one exists even
@@ -333,7 +330,7 @@ const sampleEpochField = ":"
 // "0" and land a value derived from the removed delta).
 // KEYS[1] = memo hash, KEYS[2] = removal-gen hash; ARGV[1] = memo epoch,
 // ARGV[2] = catalog removal gen, ARGV[3] = catalog, ARGV[4] = value.
-const sampleWriteLua = `
+const sampleWriteScript = `
 if (redis.call("HGET", KEYS[1], ":") or "0") == ARGV[1]
     and (redis.call("HGET", KEYS[2], ARGV[3]) or "0") == ARGV[2] then
   redis.call("HSET", KEYS[1], ARGV[3], ARGV[4])
@@ -342,14 +339,12 @@ end
 return 0
 `
 
-var sampleWriteScript = redis.NewScript(sampleWriteLua)
-
-// sampleInvalidateLua bumps the epoch and deletes the catalogs' fields in
+// sampleInvalidateScript bumps the epoch and deletes the catalogs' fields in
 // one atomic step. The HDELs iterate rather than unpack(ARGV): unpack is
 // bounded by Lua's stack (~8k), and a large ops sweep must not die after the
 // epoch bump with the fields still in place. KEYS[1] = memo hash;
 // ARGV = catalogs. Returns the number of fields deleted.
-const sampleInvalidateLua = `
+const sampleInvalidateScript = `
 redis.call("HINCRBY", KEYS[1], ":", 1)
 local n = 0
 for i = 1, #ARGV do
@@ -358,7 +353,12 @@ end
 return n
 `
 
-var sampleInvalidateScript = redis.NewScript(sampleInvalidateLua)
+// luaSampleWrite / luaSampleInvalidate dispatch the two sample scripts by SHA
+// (EVALSHA with EVAL fallback on a cold script cache).
+var (
+	luaSampleWrite      = index.NewScript(sampleWriteScript)
+	luaSampleInvalidate = index.NewScript(sampleInvalidateScript)
+)
 
 // InvalidateSamples deletes the cached samples of one indicator for the given
 // catalogs and returns how many entries existed. The next Sample/Batch
@@ -392,7 +392,7 @@ func (c *Client) InvalidateSamples(ctx context.Context, indicator string, catalo
 	for i, cat := range catalogs {
 		args[i] = cat
 	}
-	res, err := sampleInvalidateScript.Run(ctx, c.sampleRdb,
+	res, err := index.RunScript(ctx, c.sampleRdb, luaSampleInvalidate,
 		[]string{c.reader.MakeSampleIndicatorKey(indicator)}, args...).Result()
 	if err != nil {
 		return 0, err
@@ -455,21 +455,17 @@ func (s *Sampler[T]) sampleCore(ctx context.Context, c *Client, list *ListResult
 	if g, err := genCmd.Result(); err == nil {
 		catGen = g
 	}
-	if vals, err := memoCmd.Result(); err != nil || len(vals) != 2 {
-		// An error OR a wrong-shape reply (nil array / short array from a
-		// redis-compatible proxy) reads as a miss — never index past it.
-		if err == nil {
-			err = fmt.Errorf("unexpected HMGET reply length %d", len(vals))
-		}
-		c.emitEvent(list.catalog, "SampleCacheError", map[string]any{"op": "hmget", "err": err.Error()})
-	} else {
-		if e, ok := vals[1].(string); ok {
-			epoch = e
-		}
-		if cached, ok := vals[0].(string); ok {
-			if meta, data, derr := unmarshalSampleCache[T]([]byte(cached)); derr == nil && !s.isStale(meta, list, peers, now) {
-				return data, nil
-			}
+	vals, verr := memoCmd.Result()
+	if verr != nil {
+		c.emitEvent(list.catalog, "SampleCacheError", map[string]any{"op": "hmget", "err": verr.Error()})
+	}
+	vals = hmgetRow(vals, 2)
+	if e, ok := vals[1].(string); ok {
+		epoch = e
+	}
+	if cached, ok := vals[0].(string); ok {
+		if meta, data, derr := unmarshalSampleCache[T]([]byte(cached)); derr == nil && !s.isStale(meta, list, peers, now) {
+			return data, nil
 		}
 	}
 	return s.loadAndCache(ctx, c, list, hashKey, lastUpdated, now, epoch, catGen)
@@ -523,7 +519,7 @@ func (s *Sampler[T]) loadAndCache(ctx context.Context, c *Client, list *ListResu
 			// value the current log may no longer support), keep the result.
 			return string(data), nil
 		}
-		if werr := sampleWriteScript.Run(ctx, c.sampleRdb,
+		if werr := index.RunScript(ctx, c.sampleRdb, luaSampleWrite,
 			[]string{hashKey, c.reader.MakeSampleRemoveGenKey()},
 			epoch, catGen, list.catalog, data).Err(); werr != nil {
 			c.emitEvent(list.catalog, "SampleCacheError", map[string]any{"op": "hset", "err": werr.Error()})
@@ -568,6 +564,19 @@ type loaderError struct{ err error }
 
 func (e *loaderError) Error() string { return e.err.Error() }
 func (e *loaderError) Unwrap() error { return e.err }
+
+// hmgetRow normalizes a pipelined HMGet reply to exactly n entries: an
+// errored, nil, or short reply becomes an all-nil row, so callers can index
+// it unconditionally and absent values read as cache misses. (Redis returns
+// exactly one entry per requested field on success; anything else — a
+// transport error, redis.Nil, a truncating proxy — must degrade to a miss,
+// never an index-out-of-range panic.)
+func hmgetRow(vals []any, n int) []any {
+	if len(vals) != n {
+		return make([]any, n)
+	}
+	return vals
+}
 
 // normalizeGen maps the two spellings of "no removal ever" — a missing/empty
 // generation and the literal "0" — onto one value for comparison.

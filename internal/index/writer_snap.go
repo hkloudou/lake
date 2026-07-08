@@ -36,7 +36,7 @@ func NewWriter(rdb *redis.Client) *Writer {
 // dropped. The next read starts from post-removal state and snapshots fine.
 //
 // Returns 1 when the entry was written, 0 when it was dropped/kept.
-const addSnapLua = snapScoreLua + `
+const addSnapScript = snapScoreLua + `
 local cur = redis.call("HGET", KEYS[1], ARGV[1])
 if cur then
   local score = snap_score(cur)
@@ -51,7 +51,12 @@ redis.call("HSET", KEYS[1], ARGV[1], ARGV[2])
 return 1
 `
 
-var addSnapScript = redis.NewScript(addSnapLua)
+// luaAddSnap / luaCompactDeltas dispatch their scripts by SHA (EVALSHA with
+// EVAL fallback), so the shared snapScoreLua prelude is not re-sent per call.
+var (
+	luaAddSnap       = NewScript(addSnapScript)
+	luaCompactDeltas = NewScript(compactDeltasScript)
+)
 
 // AddSnap upserts the catalog's snap entry in "<prefix>:s" as [tsSeq, uri],
 // but only monotonically, and only when removeGen still matches the
@@ -66,7 +71,7 @@ func (w *Writer) AddSnap(ctx context.Context, catalog string, stopTsSeq TimeSeqI
 	if removeGen == "" {
 		removeGen = "0"
 	}
-	return addSnapScript.Run(ctx, w.rdb,
+	return RunScript(ctx, w.rdb, luaAddSnap,
 		[]string{w.MakeSnapsHashKey()},
 		catalog, val, stopTsSeq.Score(), removeGen,
 	).Err()
@@ -78,7 +83,7 @@ func (w *Writer) AddSnap(ctx context.Context, catalog string, stopTsSeq TimeSeqI
 // absorbed delta can never be read again. Missing or undecodable snap → 0
 // (never trim on a pointer the Go reader would reject). Returns the number
 // of entries removed.
-const compactDeltasLua = snapScoreLua + `
+const compactDeltasScript = snapScoreLua + `
 local cur = redis.call("HGET", KEYS[1], ARGV[1])
 if not cur then
   return 0
@@ -90,13 +95,11 @@ end
 return redis.call("ZREMRANGEBYSCORE", KEYS[2], "-inf", string.format("%.6f", score))
 `
 
-var compactDeltasScript = redis.NewScript(compactDeltasLua)
-
 // CompactDeltas trims the catalog's delta zset up to (and including) the
 // current snap stop, atomically with reading the snap pointer. Only index
 // entries are removed — delta objects in storage are untouched.
 func (w *Writer) CompactDeltas(ctx context.Context, catalog string) (int64, error) {
-	res, err := compactDeltasScript.Run(ctx, w.rdb,
+	res, err := RunScript(ctx, w.rdb, luaCompactDeltas,
 		[]string{w.MakeSnapsHashKey(), w.MakeDeltaZsetKey(catalog)},
 		catalog,
 	).Result()

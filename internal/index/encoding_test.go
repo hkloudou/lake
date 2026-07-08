@@ -2,7 +2,10 @@ package index
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
+
+	"github.com/hkloudou/lake/v3/internal/utils"
 )
 
 const testURI = "oss://my-bucket/4f3a/(users/0123456789abcdef.dat"
@@ -27,6 +30,10 @@ func TestDecodeMember(t *testing.T) {
 	}{
 		{mkMember(1, "/user/name", "1700000000_1", u), 1700000000.000001, "/user/name", MergeTypeReplace, TimeSeqID{1700000000, 1}, u, false},
 		{mkMember(2, "/profile", "1700000000_2", u), 1700000000.000002, "/profile", MergeTypeRFC7396, TimeSeqID{1700000000, 2}, u, false},
+		// A path longer than today's write cap must still decode: it may have
+		// been recorded before the cap existed, and reads never retro-reject.
+		{mkMember(1, "/"+strings.Repeat("a", utils.MaxFieldPathLen+64), "1700000000_3", u), 1700000000.000003,
+			"/" + strings.Repeat("a", utils.MaxFieldPathLen+64), MergeTypeReplace, TimeSeqID{1700000000, 3}, u, false},
 		// Invalid formats
 		{"not json", 0, "", 0, TimeSeqID{}, "", true},
 		{`[1,"/x"]`, 0, "", 0, TimeSeqID{}, "", true},                                            // too few elements

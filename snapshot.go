@@ -20,6 +20,32 @@ func (c *Client) IterateSnaps(ctx context.Context, fn func(catalog string, snap 
 	return c.reader.IterateSnaps(ctx, fn)
 }
 
+// saveSnapshotGuarded is the fire-and-forget form of saveSnapshot for the
+// read path's async goroutine. That goroutine outlives the read and has no
+// caller to recover a panic — from a storage backend, or a user event
+// handler fired on the failure path — so an escaped panic would kill the
+// whole process to save an optimization. Contained, not silent: a panic
+// still emits SnapshotError (saveSnapshot's own error emit cannot fire
+// during unwinding — its named err is nil then), and the emit itself is
+// guarded again in case the panicking party IS a handler. The save context
+// is detached from the read (an aborted Read must not cancel a snapshot that
+// benefits every future reader) but bounded — a stalled backend must not pin
+// the goroutine, its full-document buffer, and the catalog's save slot
+// forever.
+func (c *Client) saveSnapshotGuarded(catalog string, stop index.TimeSeqID, removeGen string, data []byte) {
+	defer func() {
+		if r := recover(); r != nil {
+			defer func() { _ = recover() }() // a panicking handler must not escape either
+			c.emitEvent(catalog, "SnapshotError", map[string]any{
+				"stop": stop.String(), "err": fmt.Sprintf("panic: %v", r),
+			})
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), snapSaveTimeout)
+	defer cancel()
+	_, _ = c.saveSnapshot(ctx, catalog, stop, removeGen, data)
+}
+
 // saveSnapshot uploads the snap object and publishes its pointer —
 // monotonically, and only if removeGen still matches the catalog's removal
 // generation: AddSnap drops the upsert if a newer snap already landed OR a
@@ -27,14 +53,23 @@ func (c *Client) IterateSnaps(ctx context.Context, fn func(catalog string, snap 
 // otherwise resurrect the removed write). No-op when no snap target is
 // configured.
 //
+// The read path calls this fire-and-forget, so a failure is user-invisible by
+// design (the next read just regenerates); a "SnapshotError" event is emitted
+// per failed attempt so operators still see a snap target that never works.
+//
 // Concurrency is the caller's concern: readData serializes saves per catalog
 // via the snapSaving gate. Overlapping saves of the same (stop, gen) — e.g.
 // two processes reading the same catalog — are benign: they write identical
 // bytes to the same object path, and AddSnap is monotonic and gen-guarded.
-func (c *Client) saveSnapshot(ctx context.Context, catalog string, stop index.TimeSeqID, removeGen string, data []byte) (string, error) {
+func (c *Client) saveSnapshot(ctx context.Context, catalog string, stop index.TimeSeqID, removeGen string, data []byte) (uri string, err error) {
 	if c.snapProvider == "" || c.snapBucket == "" {
 		return "", nil
 	}
+	defer func() {
+		if err != nil {
+			c.emitEvent(catalog, "SnapshotError", map[string]any{"stop": stop.String(), "err": err.Error()})
+		}
+	}()
 	// The object path must be unique per (stop, removal generation), not
 	// just per stop: removing a non-latest delta leaves the stop
 	// unchanged, and if both generations shared one path, the stale
@@ -56,7 +91,7 @@ func (c *Client) saveSnapshot(ctx context.Context, catalog string, stop index.Ti
 	if err := st.Put(ctx, catalog, path, data); err != nil {
 		return "", fmt.Errorf("save snapshot: %w", err)
 	}
-	uri := objkey.BuildURI(c.snapProvider, c.snapBucket, path)
+	uri = objkey.BuildURI(c.snapProvider, c.snapBucket, path)
 	if err := c.writer.AddSnap(ctx, catalog, stop, uri, removeGen); err != nil {
 		return "", fmt.Errorf("index snapshot: %w", err)
 	}

@@ -93,11 +93,7 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 				snapData := append([]byte(nil), resultData...)
 				go func() {
 					defer c.snapSaving.Delete(list.catalog)
-					saveCtx, cancel := context.WithTimeout(context.Background(), snapSaveTimeout)
-					defer cancel()
-					if _, err := c.saveSnapshot(saveCtx, list.catalog, next.StopTsSeq, list.removeGen, snapData); err != nil {
-						c.emitEvent(list.catalog, "SnapshotSaveError", map[string]any{"err": err.Error()})
-					}
+					c.saveSnapshotGuarded(list.catalog, next.StopTsSeq, list.removeGen, snapData)
 				}()
 			}
 		}

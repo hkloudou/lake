@@ -1,18 +1,15 @@
 package xsync
 
 import (
-	"errors"
+	"fmt"
 	"sync"
 )
 
-// ErrLeaderPanicked is what waiters observe when the flight leader's fn
-// panicked: a real error, never a silent (zero value, nil) success — a nil
-// []byte with a nil error would read as a legitimate empty result and
-// propagate silently (e.g. an empty snapshot base).
-var ErrLeaderPanicked = errors.New("xsync: singleflight leader panicked")
-
 // SingleFlight dedupes concurrent calls under the same key — only one
-// invocation of fn runs at a time per key; waiters share its result.
+// invocation of fn runs at a time per key; waiters share its result. If fn
+// does not complete normally (it panics, or exits via runtime.Goexit), the
+// abnormal exit keeps propagating in the leader caller and waiters receive
+// an explicit error.
 type SingleFlight[T any] interface {
 	Do(key string, fn func() (T, error)) (T, error)
 }
@@ -44,14 +41,18 @@ func (g *flightGroup[T]) Do(key string, fn func() (T, error)) (T, error) {
 	g.calls[key] = c
 	g.mu.Unlock()
 
-	// Cleanup must run even if fn panics: otherwise the key stays in the map
-	// and every future waiter blocks on wg forever. The panic still propagates
-	// to this (leader) caller; in-flight waiters observe ErrLeaderPanicked —
-	// never a (zero, nil) that would read as success.
-	finished := false
+	// Cleanup must run even if fn never returns (panic, or runtime.Goexit —
+	// e.g. a t.Fatalf inside a loader): otherwise the key stays in the map
+	// and every future waiter blocks on wg forever. In both abnormal cases
+	// waiters get an explicit error — NOT (zero, nil), which would be
+	// indistinguishable from a successful call that produced the zero value
+	// (e.g. an empty cache entry). The completed flag, not recover(), detects
+	// this: recover() cannot see a Goexit, and not recovering lets the panic
+	// keep propagating in this (leader) caller unaltered.
+	completed := false
 	defer func() {
-		if !finished {
-			c.err = ErrLeaderPanicked
+		if !completed {
+			c.err = fmt.Errorf("xsync: singleflight leader did not complete (panic or runtime.Goexit)")
 		}
 		g.mu.Lock()
 		delete(g.calls, key)
@@ -60,6 +61,6 @@ func (g *flightGroup[T]) Do(key string, fn func() (T, error)) (T, error) {
 	}()
 
 	c.val, c.err = fn()
-	finished = true
+	completed = true
 	return c.val, c.err
 }

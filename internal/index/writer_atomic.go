@@ -3,11 +3,9 @@ package index
 import (
 	"context"
 	"fmt"
-
-	"github.com/redis/go-redis/v9"
 )
 
-// notifyLua atomically allocates a TimeSeqID and adds the committed delta
+// notifyScript atomically allocates a TimeSeqID and adds the committed delta
 // member in a single ZADD. tsSeq is allocated only when notify fires (after
 // the client's upload has succeeded), so a slow / aborted upload never appears
 // in the index — no pending phase, no rollback.
@@ -38,7 +36,7 @@ import (
 //
 // KEYS[1] = delta zset, KEYS[2] = snaps hash, KEYS[3] = allocator key;
 // ARGV[1] = fieldPath, ARGV[2] = mergeType, ARGV[3] = uri, ARGV[4] = catalog.
-const notifyLua = `
+const notifyScript = `
 local zsetKey, snapsKey, allocKey = KEYS[1], KEYS[2], KEYS[3]
 local fieldPath, mergeType, uri, catalog = ARGV[1], ARGV[2], ARGV[3], ARGV[4]
 
@@ -116,7 +114,9 @@ redis.call("ZADD", zsetKey, score, member)
 return {ts, seq, member}
 `
 
-var notifyScript = redis.NewScript(notifyLua)
+// luaNotify dispatches notifyScript by SHA (EVALSHA with EVAL fallback on a
+// cold script cache) — this runs on every write.
+var luaNotify = NewScript(notifyScript)
 
 // Notify allocates a TimeSeqID for an already-uploaded delta and commits it to
 // the Redis index. uri is the storage locator (provider://bucket/path) the
@@ -126,7 +126,7 @@ func (w *Writer) Notify(ctx context.Context, catalog, fieldPath string, mergeTyp
 	if w.prefix == "" {
 		return TimeSeqID{}, "", fmt.Errorf("writer prefix not set; call SetPrefix")
 	}
-	res, err := notifyScript.Run(ctx, w.rdb,
+	res, err := RunScript(ctx, w.rdb, luaNotify,
 		[]string{w.MakeDeltaZsetKey(catalog), w.MakeSnapsHashKey(), w.MakeSeqAllocKey(catalog)},
 		fieldPath, int(mergeType), uri, catalog,
 	).Result()
