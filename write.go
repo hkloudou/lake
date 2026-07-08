@@ -148,6 +148,12 @@ func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...
 	if err != nil {
 		return nil, fmt.Errorf("presign put: %w", err)
 	}
+	// Close the startup window before stamping ExpiresAt: until the first
+	// clock sync lands, NowUnix is the LOCAL clock, while the WriteNotify
+	// end (possibly another, long-running host) checks against the Redis
+	// clock — host skew would then shift the effective TTL. One synchronous
+	// sync on the first pre-sync WriteBegin; best-effort, no new failure mode.
+	c.reader.EnsureClock(ctx)
 	h := &WriteHandle{
 		Catalog:       req.Catalog,
 		Path:          req.Path,

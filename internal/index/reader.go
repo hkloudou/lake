@@ -361,6 +361,21 @@ func (r *Reader) syncClock() {
 	}
 }
 
+// EnsureClock performs one synchronous clock sync iff none has landed yet.
+// Callers that are about to STAMP a time other ends will compare against
+// (signed-handle expiry) use it to close the startup window where NowUnix
+// would fall back to the local clock while the checking end is already on
+// the Redis clock. Best-effort: on failure the local-clock fallback stands,
+// exactly as before the call.
+func (r *Reader) EnsureClock(ctx context.Context) {
+	if r.clock.Load() != nil {
+		return
+	}
+	if ts, err := r.serverUnix(ctx); err == nil {
+		r.clock.Store(&clockSync{redisUnix: ts, at: time.Now()})
+	}
+}
+
 // NowUnix returns Lake's notion of the current time in unix seconds: the
 // Redis server clock, re-anchored every 5s and extrapolated with the local
 // MONOTONIC clock in between. It therefore always advances — across sync

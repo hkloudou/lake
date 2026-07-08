@@ -61,34 +61,29 @@ local function parse_tsseq(s)
   return nil
 end
 
-local floored = false
+-- ALL three floors run on every call — the allocator is never trusted alone.
+-- A writer that does not maintain the allocator key (an older binary during
+-- a rolling deploy, an operator hand-editing) may have appended deltas the
+-- allocator has never seen; flooring against the newest delta and the snap
+-- stop keeps this writer from minting at-or-below anything visible. (The
+-- probes are two O(1)/O(log N) calls inside an already-running script —
+-- noise next to the round-trip.)
 local last = redis.call("GET", allocKey)
 if last then
-  local lts, lseq = parse_tsseq(last)
-  if lts then
-    bump(lts, lseq)
-    floored = true
+  bump(parse_tsseq(last))
+end
+local snap = redis.call("HGET", snapsKey, catalog)
+if snap then
+  local ok, arr = pcall(cjson.decode, snap)
+  if ok and type(arr) == "table" and type(arr[1]) == "string" then
+    bump(parse_tsseq(arr[1]))
   end
 end
-if not floored then
-  -- Cold allocator (expired / first write) or an UNPARSEABLE one (corrupt /
-  -- foreign value — it must degrade to the probes, not to bare TIME): every
-  -- snap stop and delta was itself minted here and written back to the
-  -- allocator, so a healthy allocator dominates both and the ~100% warm
-  -- path skips the probes.
-  local snap = redis.call("HGET", snapsKey, catalog)
-  if snap then
-    local ok, arr = pcall(cjson.decode, snap)
-    if ok and type(arr) == "table" and type(arr[1]) == "string" then
-      bump(parse_tsseq(arr[1]))
-    end
-  end
-  local top = redis.call("ZREVRANGE", zsetKey, 0, 0)
-  if top[1] then
-    local ok, arr = pcall(cjson.decode, top[1])
-    if ok and type(arr) == "table" and type(arr[3]) == "string" then
-      bump(parse_tsseq(arr[3]))
-    end
+local top = redis.call("ZREVRANGE", zsetKey, 0, 0)
+if top[1] then
+  local ok, arr = pcall(cjson.decode, top[1])
+  if ok and type(arr) == "table" and type(arr[3]) == "string" then
+    bump(parse_tsseq(arr[3]))
   end
 end
 

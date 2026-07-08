@@ -71,6 +71,26 @@ func TestNotifyMonotonicAcrossClockRegression_Redis(t *testing.T) {
 		t.Fatalf("tsSeq = %s, want %d_42 (continuation after the planted floor)", got, future)
 	}
 
+	// Stale-allocator floor: a writer that does not maintain the allocator
+	// (an older binary in a rolling deploy) may have appended NEWER deltas
+	// than the allocator records. The next allocation must still sort after
+	// the newest visible delta, never after the stale allocator alone.
+	writeDelta(t, c, store, "users", "/", MergeTypeReplace, `{"n":2}`)
+	newest := c.List(ctx, "users").Entries[1].TsSeq
+	stale := index.TimeSeqID{Timestamp: newest.Timestamp - 3600, SeqID: 1}
+	if err := c.rdb.Set(ctx, c.reader.Prefix()+":seq:users", stale.String(), 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+	writeDelta(t, c, store, "users", "/", MergeTypeReplace, `{"n":3}`)
+	list = c.List(ctx, "users")
+	if list.Err != nil || len(list.Entries) != 3 {
+		t.Fatalf("List after stale allocator: err=%v entries=%d", list.Err, len(list.Entries))
+	}
+	got3 := list.Entries[2].TsSeq
+	if !(got3.Timestamp > newest.Timestamp || (got3.Timestamp == newest.Timestamp && got3.SeqID > newest.SeqID)) {
+		t.Fatalf("tsSeq %s does not sort after the newest visible delta %s (stale allocator trusted alone)", got3, newest)
+	}
+
 	// Snap-stop floor: even with the allocator key gone (expired), a write
 	// must sort strictly after the snapshot bound or it is unreadable.
 	stop := index.TimeSeqID{Timestamp: c.reader.NowUnix() + 7200, SeqID: 7}
