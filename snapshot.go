@@ -20,43 +20,56 @@ func (c *Client) IterateSnaps(ctx context.Context, fn func(catalog string, snap 
 	return c.reader.IterateSnaps(ctx, fn)
 }
 
-// saveSnapshot writes snap bytes to the configured snap target and upserts the
-// Redis hash entry (as [tsSeq, uri]) — monotonically, and only if removeGen
-// still matches the catalog's removal generation: AddSnap drops the upsert if
-// a newer snap already landed OR a RemoveDelta interleaved since the read
-// that produced data (which would otherwise resurrect the removed write).
-// No-op when no snap target is configured. SingleFlight on (catalog, stop,
-// gen) dedupes concurrent saves within this process.
+// saveSnapshot writes snap bytes to the configured snap target and upserts
+// the Redis hash entry, deduping concurrent identical saves within this
+// process via SingleFlight on (catalog, stop, gen). readData's async path
+// deliberately does NOT go through the flight: it is already serialized by
+// the per-catalog snapSaving slot, and a slot THIEF (see claimSnapSlot) must
+// run independently rather than park forever behind the wedged leader it is
+// replacing — writeSnapshot overlap is benign (same stop + gen implies
+// identical bytes at the same path; AddSnap is monotonic and gen-guarded).
 func (c *Client) saveSnapshot(ctx context.Context, catalog string, stop index.TimeSeqID, removeGen string, data []byte) (string, error) {
 	if c.snapProvider == "" || c.snapBucket == "" {
 		return "", nil
 	}
 	return c.snapFlight.Do(fmt.Sprintf("%s_%s_%s", catalog, stop, removeGen), func() (string, error) {
-		// The object path must be unique per (stop, removal generation), not
-		// just per stop: removing a non-latest delta leaves the stop
-		// unchanged, and if both generations shared one path, the stale
-		// generation's Put could finish LAST and overwrite the bytes the
-		// already-published pointer references — resurrecting the removed
-		// write behind AddSnap's back. Same stop + same generation implies
-		// identical content, so sharing within a generation stays benign.
-		// Readers fetch the URI recorded in the pointer verbatim, so the
-		// name shape is free to vary; gen 0 keeps the legacy name.
-		name := stop.String()
-		if removeGen != "" && removeGen != "0" {
-			name += "-g" + removeGen
-		}
-		path := objkey.SnapPath(catalog, name)
-		st, err := c.storageFor(storage.Snap, c.snapProvider, c.snapBucket)
-		if err != nil {
-			return "", fmt.Errorf("resolve snap target: %w", err)
-		}
-		if err := st.Put(ctx, catalog, path, data); err != nil {
-			return "", fmt.Errorf("save snapshot: %w", err)
-		}
-		uri := objkey.BuildURI(c.snapProvider, c.snapBucket, path)
-		if err := c.writer.AddSnap(ctx, catalog, stop, uri, removeGen); err != nil {
-			return "", fmt.Errorf("index snapshot: %w", err)
-		}
-		return uri, nil
+		return c.writeSnapshot(ctx, catalog, stop, removeGen, data)
 	})
+}
+
+// writeSnapshot uploads the snap object and publishes its pointer —
+// monotonically, and only if removeGen still matches the catalog's removal
+// generation: AddSnap drops the upsert if a newer snap already landed OR a
+// RemoveDelta interleaved since the read that produced data (which would
+// otherwise resurrect the removed write).
+func (c *Client) writeSnapshot(ctx context.Context, catalog string, stop index.TimeSeqID, removeGen string, data []byte) (string, error) {
+	if c.snapProvider == "" || c.snapBucket == "" {
+		return "", nil
+	}
+	// The object path must be unique per (stop, removal generation), not
+	// just per stop: removing a non-latest delta leaves the stop
+	// unchanged, and if both generations shared one path, the stale
+	// generation's Put could finish LAST and overwrite the bytes the
+	// already-published pointer references — resurrecting the removed
+	// write behind AddSnap's back. Same stop + same generation implies
+	// identical content, so sharing within a generation stays benign.
+	// Readers fetch the URI recorded in the pointer verbatim, so the
+	// name shape is free to vary; gen 0 keeps the legacy name.
+	name := stop.String()
+	if removeGen != "" && removeGen != "0" {
+		name += "-g" + removeGen
+	}
+	path := objkey.SnapPath(catalog, name)
+	st, err := c.storageFor(storage.Snap, c.snapProvider, c.snapBucket)
+	if err != nil {
+		return "", fmt.Errorf("resolve snap target: %w", err)
+	}
+	if err := st.Put(ctx, catalog, path, data); err != nil {
+		return "", fmt.Errorf("save snapshot: %w", err)
+	}
+	uri := objkey.BuildURI(c.snapProvider, c.snapBucket, path)
+	if err := c.writer.AddSnap(ctx, catalog, stop, uri, removeGen); err != nil {
+		return "", fmt.Errorf("index snapshot: %w", err)
+	}
+	return uri, nil
 }

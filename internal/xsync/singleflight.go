@@ -1,6 +1,15 @@
 package xsync
 
-import "sync"
+import (
+	"errors"
+	"sync"
+)
+
+// ErrLeaderPanicked is what waiters observe when the flight leader's fn
+// panicked: a real error, never a silent (zero value, nil) success — a nil
+// []byte with a nil error would read as a legitimate empty result and
+// propagate silently (e.g. an empty snapshot base).
+var ErrLeaderPanicked = errors.New("xsync: singleflight leader panicked")
 
 // SingleFlight dedupes concurrent calls under the same key — only one
 // invocation of fn runs at a time per key; waiters share its result.
@@ -37,8 +46,13 @@ func (g *flightGroup[T]) Do(key string, fn func() (T, error)) (T, error) {
 
 	// Cleanup must run even if fn panics: otherwise the key stays in the map
 	// and every future waiter blocks on wg forever. The panic still propagates
-	// to this (leader) caller; in-flight waiters observe the zero value.
+	// to this (leader) caller; in-flight waiters observe ErrLeaderPanicked —
+	// never a (zero, nil) that would read as success.
+	finished := false
 	defer func() {
+		if !finished {
+			c.err = ErrLeaderPanicked
+		}
 		g.mu.Lock()
 		delete(g.calls, key)
 		g.mu.Unlock()
@@ -46,5 +60,6 @@ func (g *flightGroup[T]) Do(key string, fn func() (T, error)) (T, error) {
 	}()
 
 	c.val, c.err = fn()
+	finished = true
 	return c.val, c.err
 }

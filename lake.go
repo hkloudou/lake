@@ -2,7 +2,9 @@ package lake
 
 import (
 	"fmt"
+	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/hkloudou/lake/v3/internal/index"
 	"github.com/hkloudou/lake/v3/internal/xsync"
@@ -18,10 +20,11 @@ import (
 // never imports a cloud SDK; it only ever calls the Storage the Resolver
 // returns.
 //
-// A Client is intended to live for the process lifetime. Background goroutines
-// (the Redis time updater) tick forever and are reclaimed by the OS at exit;
-// in-flight async snapshot saves are fire-and-forget. Read-path caching, if
-// any, lives in the Storage the Resolver returns (see storage/cached).
+// A Client is intended to live for the process lifetime; embedders that
+// create short-lived Clients (tests, multi-tenant hosts) should Close them to
+// stop the background Redis-clock ticker. In-flight async snapshot saves are
+// fire-and-forget. Read-path caching, if any, lives in the Storage the
+// Resolver returns (see storage/cached).
 type Client struct {
 	rdb       *redis.Client // authoritative: snap hash, delta zset, seqid
 	sampleRdb *redis.Client // sample (memo) hash; defaults to rdb
@@ -32,22 +35,32 @@ type Client struct {
 	snapProvider string // WithSnapTarget; "" disables auto-snapshotting
 	snapBucket   string
 
-	storMu sync.RWMutex // guards stores
-	stores map[string]storage.Storage
+	storMu     sync.RWMutex // guards stores
+	stores     map[string]storage.Storage
+	storFlight xsync.SingleFlight[storage.Storage] // dedupe concurrent resolves per (kind, provider, bucket)
 
-	snapFlight   xsync.SingleFlight[string] // dedupe concurrent snapshot saves on (catalog, stop)
+	// Two layers with distinct jobs: snapSaving is the cheap per-catalog gate
+	// that keeps readData from even COPYING the document while a save is in
+	// flight (claimSnapSlot, read.go); snapFlight dedupes identical
+	// (catalog, stop, gen) saves inside saveSnapshot itself, covering direct
+	// callers and stolen-slot overlaps the gate cannot see.
+	snapFlight   xsync.SingleFlight[string] // dedupe concurrent snapshot saves on (catalog, stop, gen)
+	snapSaving   sync.Map                   // catalog → claim time.Time of the in-flight async save
 	sampleFlight xsync.SingleFlight[string] // dedupe concurrent Sampler[T] loaders on (catalog, indicator, score)
 
 	handleSecret []byte // WithHandleSecret; empty disables handle signing
 
-	eventHandlers []EventHandler
+	eventHandlers atomic.Pointer[[]EventHandler]
+	ownsSampleRdb bool // Close() closes sampleRdb only when Lake created it
+	closeOnce     sync.Once
 }
 
 type option struct {
-	sampleRdb    *redis.Client
-	snapProvider string
-	snapBucket   string
-	handleSecret []byte
+	sampleRdb     *redis.Client
+	ownsSampleRdb bool
+	snapProvider  string
+	snapBucket    string
+	handleSecret  []byte
 }
 
 // New creates a Lake client.
@@ -76,21 +89,40 @@ func New(prefix string, rdb *redis.Client, resolve storage.Resolver, opts ...fun
 		o.sampleRdb = rdb
 	}
 	c := &Client{
-		rdb:          rdb,
-		sampleRdb:    o.sampleRdb,
-		writer:       index.NewWriter(rdb),
-		reader:       index.NewReader(rdb),
-		resolve:      resolve,
-		snapProvider: o.snapProvider,
-		snapBucket:   o.snapBucket,
-		handleSecret: o.handleSecret,
-		stores:       make(map[string]storage.Storage),
-		snapFlight:   xsync.NewSingleFlight[string](),
-		sampleFlight: xsync.NewSingleFlight[string](),
+		rdb:           rdb,
+		sampleRdb:     o.sampleRdb,
+		ownsSampleRdb: o.ownsSampleRdb,
+		writer:        index.NewWriter(rdb),
+		reader:        index.NewReader(rdb),
+		resolve:       resolve,
+		snapProvider:  o.snapProvider,
+		snapBucket:    o.snapBucket,
+		handleSecret:  o.handleSecret,
+		stores:        make(map[string]storage.Storage),
+		storFlight:    xsync.NewSingleFlight[storage.Storage](),
+		snapFlight:    xsync.NewSingleFlight[string](),
+		sampleFlight:  xsync.NewSingleFlight[string](),
 	}
 	c.writer.SetPrefix(prefix)
 	c.reader.SetPrefix(prefix)
 	return c
+}
+
+// Close releases the Client's background resources: it stops the Redis-clock
+// ticker and closes the sample-cache Redis client iff Lake itself created it
+// (WithSampleCacheURL). The rdb and any client passed via WithSampleCacheRedis
+// belong to the caller and are left open. A closed Client keeps serving
+// (the clock falls back to its last synced value, then the local clock), but
+// long-lived processes should treat Close as final. Idempotent.
+func (c *Client) Close() error {
+	var err error
+	c.closeOnce.Do(func() {
+		c.reader.Close()
+		if c.ownsSampleRdb && c.sampleRdb != nil {
+			err = c.sampleRdb.Close()
+		}
+	})
+	return err
 }
 
 // WithSnapTarget sets where Lake writes the snapshots it auto-generates on the
@@ -102,9 +134,22 @@ func WithSnapTarget(provider, bucket string) func(*option) {
 }
 
 // WithSampleCacheRedis routes the Sampler memo hash ("<prefix>:m:*") to a
-// separate Redis instance. Defaults to the authoritative rdb.
+// separate Redis instance. Defaults to the authoritative rdb. The client
+// stays owned by the caller — Close never touches it.
 func WithSampleCacheRedis(rdb *redis.Client) func(*option) {
-	return func(o *option) { o.sampleRdb = rdb }
+	return func(o *option) {
+		o.closeOwnedSampleRdb() // a Lake-created client this overrides must not leak
+		o.sampleRdb = rdb
+		o.ownsSampleRdb = false
+	}
+}
+
+// closeOwnedSampleRdb releases a Lake-created sample client that a later
+// option is about to override — otherwise its pool would leak with no owner.
+func (o *option) closeOwnedSampleRdb() {
+	if o.ownsSampleRdb && o.sampleRdb != nil {
+		_ = o.sampleRdb.Close()
+	}
 }
 
 // WithHandleSecret turns on WriteHandle signing. WriteBegin stamps every
@@ -126,13 +171,18 @@ func WithHandleSecret(secret []byte) func(*option) {
 }
 
 // WithSampleCacheURL is the URL form of WithSampleCacheRedis. Panics on an
-// invalid URL (programmer error at construction time).
+// invalid URL (programmer error at construction time). The Redis client it
+// creates is owned by Lake and closed by Client.Close.
 func WithSampleCacheURL(url string) func(*option) {
 	opt, err := redis.ParseURL(url)
 	if err != nil {
 		panic(fmt.Errorf("lake: invalid sample-cache URL: %w", err))
 	}
-	return WithSampleCacheRedis(redis.NewClient(opt))
+	return func(o *option) {
+		o.closeOwnedSampleRdb()
+		o.sampleRdb = redis.NewClient(opt)
+		o.ownsSampleRdb = true
+	}
 }
 
 // storageFor resolves and memoises a bucket-scoped Storage for (kind, provider,
@@ -144,25 +194,35 @@ func (c *Client) storageFor(kind storage.Kind, provider, bucket string) (storage
 	}
 	// Numeric kind, not kind.String(): the memo key is identity, so it must not
 	// depend on a display string a future Kind could alias.
-	key := fmt.Sprintf("%d|%s|%s", kind, provider, bucket)
+	key := strconv.Itoa(int(kind)) + "|" + provider + "|" + bucket
 	c.storMu.RLock()
 	s := c.stores[key]
 	c.storMu.RUnlock()
 	if s != nil {
 		return s, nil
 	}
-	c.storMu.Lock()
-	defer c.storMu.Unlock()
-	if s = c.stores[key]; s != nil {
+	// Resolve OUTSIDE the map lock: resolve is user code that may do real I/O
+	// (SDK setup, STS credentials). Holding the write lock across it would
+	// stall every concurrent lookup — including already-memoised ones. The
+	// flight dedupes concurrent resolves of the SAME triple; distinct triples
+	// resolve in parallel.
+	return c.storFlight.Do(key, func() (storage.Storage, error) {
+		c.storMu.RLock()
+		s := c.stores[key]
+		c.storMu.RUnlock()
+		if s != nil {
+			return s, nil
+		}
+		s, err := c.resolve(kind, provider, bucket)
+		if err != nil {
+			return nil, fmt.Errorf("lake: resolve %s %s://%s: %w", kind, provider, bucket, err)
+		}
+		if s == nil {
+			return nil, fmt.Errorf("lake: resolver returned nil storage for %s %s://%s", kind, provider, bucket)
+		}
+		c.storMu.Lock()
+		c.stores[key] = s
+		c.storMu.Unlock()
 		return s, nil
-	}
-	s, err := c.resolve(kind, provider, bucket)
-	if err != nil {
-		return nil, fmt.Errorf("lake: resolve %s %s://%s: %w", kind, provider, bucket, err)
-	}
-	if s == nil {
-		return nil, fmt.Errorf("lake: resolver returned nil storage for %s %s://%s", kind, provider, bucket)
-	}
-	c.stores[key] = s
-	return s, nil
+	})
 }

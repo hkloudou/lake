@@ -87,6 +87,15 @@ func (m ListResult) Dump() string {
 	return b.String()
 }
 
+// backlogWarnThreshold is where List starts flagging an unsnapshotted delta
+// tail via the "ListLargeBacklog" event. The list script has no result cap —
+// every read materialises and ships the whole tail — so a catalog that only
+// ever accumulates (no snap target, or List/Sampler-only usage that never
+// triggers the read-path snapshot) degrades silently until Redis stalls.
+// The event gives operators the signal to configure a snap target or run
+// Compact before that point.
+const backlogWarnThreshold = 10_000
+
 // List reads the catalog metadata in one atomic Redis op (a Lua script
 // fetches the snap pointer and the deltas past it together — atomicity is
 // what makes Compact safe to run concurrently with reads).
@@ -98,6 +107,9 @@ func (c *Client) List(ctx context.Context, catalog string) *ListResult {
 	}
 
 	snap, rr := c.reader.ListCatalog(ctx, catalog)
+	if len(rr.Deltas) >= backlogWarnThreshold && c.hasHandlers() {
+		c.emitEvent(catalog, "ListLargeBacklog", map[string]any{"entries": len(rr.Deltas)})
+	}
 	return &ListResult{
 		client:     c,
 		catalog:    catalog,
@@ -135,6 +147,9 @@ func (c *Client) BatchList(ctx context.Context, catalogs []string) map[string]*L
 			if br.ReadResult != nil {
 				lr.Entries = br.ReadResult.Deltas
 				lr.removeGen = br.ReadResult.RemoveGen
+				if len(lr.Entries) >= backlogWarnThreshold && c.hasHandlers() {
+					c.emitEvent(cat, "ListLargeBacklog", map[string]any{"entries": len(lr.Entries)})
+				}
 			}
 		}
 		out[cat] = lr

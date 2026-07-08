@@ -215,8 +215,9 @@ func New(prefix string, rdb *redis.Client, resolve storage.Resolver, opts ...fun
 | Option | Description |
 |--------|-------------|
 | `WithSnapTarget(provider, bucket)` | Where Lake writes auto-generated snapshots. Omit → no auto-snapshotting (reads replay all deltas) |
-| `WithSampleCacheURL(url)` / `WithSampleCacheRedis(rdb)` | Route the Sampler memo hash (`<prefix>:m:*`) to a separate Redis |
-| `(*Client) Use(handler EventHandler)` | Register an event handler |
+| `WithSampleCacheURL(url)` / `WithSampleCacheRedis(rdb)` | Route the Sampler memo hash (`<prefix>:m:*`) to a separate Redis. The URL form creates a client Lake owns — `Close` releases it |
+| `(*Client) Use(handler EventHandler)` | Register an event handler (safe on a live Client; copy-on-write) |
+| `(*Client) Close()` | Stop the background Redis-clock ticker and release Lake-owned resources. Optional for a process-lifetime Client; call it from tests / multi-tenant hosts that create many Clients |
 
 `New` panics on an empty `prefix`, nil `rdb`, or nil `resolve` (programmer error).
 
@@ -419,7 +420,7 @@ Catalog validation forbids `:` `|` `(` `)` so the forms never collide.
 ```
 WriteBegin:  UUID v4 → object path → PresignPut(provider, bucket, path)  (NO Redis op)
 (client uploads bytes directly to handle.UploadURL)
-WriteNotify: Lua → INCR seqid → tsSeq; ZADD [mergeType, path, tsSeq, uri]  (NO storage op)
+WriteNotify: Lua → monotonic tsSeq alloc; ZADD [mergeType, path, tsSeq, uri]  (NO storage op)
 ```
 
 Because tsSeq is allocated only at notify (after the upload), a slow or aborted
@@ -440,7 +441,12 @@ tooling).
   value  = [tsSeq, uri]                 (JSON array; HSCAN drives IterateSnaps)
 
 {prefix}:m:{indicator}  Hash  # sample (memo) — per-indicator, field = catalog
-  value  = [score, updatedAt, data]     (score = data version, updatedAt = compute time)
+  value  = [score, updatedAt, removeGen, data]  (score = data version, updatedAt = compute time)
+
+{prefix}:seq:{catalog}  String  # tsSeq allocator — last issued "ts_seq" (7-day TTL)
+  Notify floors each allocation by this pair, the snap stop, and the newest
+  delta, so a backwards Redis clock step (failover, NTP) can never mint a
+  duplicate tsSeq or a write that sorts below the snapshot bound.
 ```
 
 ### Read flow
@@ -543,7 +549,7 @@ The bodies in object storage are the durable truth; Redis is the hot index that
 makes them fast to read. But the index is **not** a mere cache — it owns the
 *order* of writes (a body is uploaded before its tsSeq is allocated, so object
 storage alone cannot reconstruct the sequence), so the index Redis must persist.
-What *is* pure cache — the `seqid` counter aside — is the sample memo and any
+What *is* pure cache — the tsSeq allocator key aside — is the sample memo and any
 `storage/cached` read-path cache: recomputed on miss, so failing to write them
 never fails a user-visible operation.
 

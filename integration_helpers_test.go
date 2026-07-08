@@ -20,7 +20,7 @@ const testRedisAddr = "127.0.0.1:6379"
 
 // redisTestDB returns a client to the given logical DB, or skips when Redis is
 // unreachable. It registers Close on cleanup but never flushes the DB.
-func redisTestDB(t *testing.T, db int) *redis.Client {
+func redisTestDB(t testing.TB, db int) *redis.Client {
 	t.Helper()
 	rdb := redis.NewClient(&redis.Options{Addr: testRedisAddr, DB: db, DialTimeout: 200 * time.Millisecond})
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
@@ -35,7 +35,7 @@ func redisTestDB(t *testing.T, db int) *redis.Client {
 
 // testPrefix is a Redis key prefix unique to this test and process, so parallel
 // runs and leftover keys from a crashed run never collide.
-func testPrefix(t *testing.T) string {
+func testPrefix(t testing.TB) string {
 	return fmt.Sprintf("laketest_%d_%s", os.Getpid(), strings.ReplaceAll(t.Name(), "/", "_"))
 }
 
@@ -54,7 +54,7 @@ func waitFor(cond func() bool) bool {
 
 // cleanupKeys registers a t.Cleanup that SCAN+DELs every key matching each
 // pattern on rdb — targeted, non-destructive (no FlushDB).
-func cleanupKeys(t *testing.T, rdb *redis.Client, patterns ...string) {
+func cleanupKeys(t testing.TB, rdb *redis.Client, patterns ...string) {
 	t.Cleanup(func() {
 		ctx := context.Background()
 		for _, pat := range patterns {

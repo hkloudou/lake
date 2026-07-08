@@ -4,14 +4,19 @@ import (
 	"strings"
 )
 
-// toGjsonPath converts a field path to gjson path format
-// It splits the path by "/" and escapes each segment for gjson usage
+// ToGjsonPath converts a field path to gjson path format in a single pass:
+// the leading "/" is dropped, segment separators "/" become ".", and any
+// character gjson treats specially (only "." can actually occur — validation
+// pins segments to [a-zA-Z0-9_$.]) is escaped with a backslash.
 // Examples:
 //   - "/" -> ""
 //   - "/user" -> "user"
 //   - "/user/profile" -> "user.profile"
 //   - "/user.info" -> "user\.info" (dots in field names are escaped)
 //   - "/user.info/profile.data" -> "user\.info.profile\.data"
+//
+// Runs once per delta per read, so the no-escape common case returns the
+// input substring without allocating.
 func ToGjsonPath(path string) string {
 	// Remove leading /
 	if len(path) > 0 && path[0] == '/' {
@@ -23,34 +28,31 @@ func ToGjsonPath(path string) string {
 		return ""
 	}
 
-	// Split by / and escape each segment
-	segments := strings.Split(path, "/")
-	for i, seg := range segments {
-		segments[i] = escapeGjsonKey(seg)
-	}
-
-	// Join with .
-	return strings.Join(segments, ".")
-}
-
-// escapeGjsonKey escapes special characters in a gjson key
-// Based on gjson's internal escapeComp and isSafePathKeyChar functions
-func escapeGjsonKey(key string) string {
-	for i := 0; i < len(key); i++ {
-		if !isSafeGjsonChar(key[i]) {
-			// Found a character that needs escaping
-			escaped := make([]byte, 0, len(key)+8) // pre-allocate with some extra space
-			escaped = append(escaped, key[:i]...)
-			for ; i < len(key); i++ {
-				if !isSafeGjsonChar(key[i]) {
-					escaped = append(escaped, '\\')
-				}
-				escaped = append(escaped, key[i])
-			}
-			return string(escaped)
+	rewrite := false
+	for i := 0; i < len(path); i++ {
+		if c := path[i]; c == '/' || !isSafeGjsonChar(c) {
+			rewrite = true
+			break
 		}
 	}
-	return key
+	if !rewrite {
+		return path
+	}
+
+	var b strings.Builder
+	b.Grow(len(path) + 8)
+	for i := 0; i < len(path); i++ {
+		switch c := path[i]; {
+		case c == '/':
+			b.WriteByte('.')
+		case !isSafeGjsonChar(c):
+			b.WriteByte('\\')
+			b.WriteByte(c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
 }
 
 // isSafeGjsonChar returns true if the character is safe for gjson paths
