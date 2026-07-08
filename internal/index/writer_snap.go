@@ -36,7 +36,7 @@ func NewWriter(rdb *redis.Client) *Writer {
 // dropped. The next read starts from post-removal state and snapshots fine.
 //
 // Returns 1 when the entry was written, 0 when it was dropped/kept.
-const addSnapScript = snapScoreLua + `
+const addSnapLua = snapScoreLua + `
 local cur = redis.call("HGET", KEYS[1], ARGV[1])
 if cur then
   local score = snap_score(cur)
@@ -51,6 +51,8 @@ redis.call("HSET", KEYS[1], ARGV[1], ARGV[2])
 return 1
 `
 
+var addSnapScript = redis.NewScript(addSnapLua)
+
 // AddSnap upserts the catalog's snap entry in "<prefix>:s" as [tsSeq, uri],
 // but only monotonically, and only when removeGen still matches the
 // catalog's removal generation (see addSnapScript). Refusals are silent
@@ -64,7 +66,7 @@ func (w *Writer) AddSnap(ctx context.Context, catalog string, stopTsSeq TimeSeqI
 	if removeGen == "" {
 		removeGen = "0"
 	}
-	return w.rdb.Eval(ctx, addSnapScript,
+	return addSnapScript.Run(ctx, w.rdb,
 		[]string{w.MakeSnapsHashKey()},
 		catalog, val, stopTsSeq.Score(), removeGen,
 	).Err()
@@ -76,7 +78,7 @@ func (w *Writer) AddSnap(ctx context.Context, catalog string, stopTsSeq TimeSeqI
 // absorbed delta can never be read again. Missing or undecodable snap → 0
 // (never trim on a pointer the Go reader would reject). Returns the number
 // of entries removed.
-const compactDeltasScript = snapScoreLua + `
+const compactDeltasLua = snapScoreLua + `
 local cur = redis.call("HGET", KEYS[1], ARGV[1])
 if not cur then
   return 0
@@ -88,11 +90,13 @@ end
 return redis.call("ZREMRANGEBYSCORE", KEYS[2], "-inf", string.format("%.6f", score))
 `
 
+var compactDeltasScript = redis.NewScript(compactDeltasLua)
+
 // CompactDeltas trims the catalog's delta zset up to (and including) the
 // current snap stop, atomically with reading the snap pointer. Only index
 // entries are removed — delta objects in storage are untouched.
 func (w *Writer) CompactDeltas(ctx context.Context, catalog string) (int64, error) {
-	res, err := w.rdb.Eval(ctx, compactDeltasScript,
+	res, err := compactDeltasScript.Run(ctx, w.rdb,
 		[]string{w.MakeSnapsHashKey(), w.MakeDeltaZsetKey(catalog)},
 		catalog,
 	).Result()

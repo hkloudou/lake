@@ -4,26 +4,46 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
-// Reader reads Lake's Redis index. Maintains a 5-second-resolution
-// clock (redisTimeUnix) for snapshot freshness checks. The background
-// ticker runs for the process lifetime; Lake is intended to be used
-// with one Client per process, so OS reclaim on exit is sufficient.
+// Reader reads Lake's Redis index. Maintains a Redis-synced clock (see
+// NowUnix) for snapshot freshness and handle-expiry checks. The background
+// ticker runs until Close; a Reader that is never closed is reclaimed
+// by the OS at process exit (the intended single-Client-per-process use).
 type Reader struct {
-	rdb           *redis.Client
-	redisTimeUnix atomic.Int64
+	rdb       *redis.Client
+	clock     atomic.Pointer[clockSync]
+	done      chan struct{}
+	closeOnce sync.Once
 	indexIO
 }
 
+// clockSync is one observation of the Redis server clock, paired with the
+// local monotonic instant it was taken at. NowUnix extrapolates from it, so
+// the clock keeps ADVANCING between syncs, through sync failures, and after
+// Close — a frozen clock would let signed handles outlive their expiry and
+// pin WithMaxAge staleness forever.
+type clockSync struct {
+	redisUnix int64
+	at        time.Time // monotonic anchor
+}
+
 func NewReader(rdb *redis.Client) *Reader {
-	r := &Reader{rdb: rdb}
+	r := &Reader{rdb: rdb, done: make(chan struct{})}
 	go r.timeUpdater()
 	return r
+}
+
+// Close stops the background clock ticker. Idempotent. Reads keep working
+// after Close: NowUnix extrapolates from the last sync with the local
+// monotonic clock (or uses the local clock outright if no sync ever landed).
+func (r *Reader) Close() {
+	r.closeOnce.Do(func() { close(r.done) })
 }
 
 // SnapInfo records that a catalog has been snapshotted up to StopTsSeq.
@@ -63,7 +83,7 @@ type BatchListResult struct {
 	ReadResult *ReadIndexResult
 }
 
-// listScript reads the catalog's snap pointer and the deltas past it in ONE
+// listLua reads the catalog's snap pointer and the deltas past it in ONE
 // atomic step. Atomicity is a correctness requirement, not an optimization:
 // with Compact in the picture, a non-atomic HGET→ZRANGE pair could observe an
 // old snap pointer, then a delta range already compacted up to a newer snap —
@@ -79,7 +99,7 @@ type BatchListResult struct {
 // {snapValue|false, removeGen, flat [member, score, ...]} — scores pass
 // through as Redis reply strings, never via Lua numbers (tostring would
 // mangle the float).
-const listScript = snapScoreLua + `
+const listLua = snapScoreLua + `
 local snap = redis.call("HGET", KEYS[1], ARGV[1])
 local rg = redis.call("HGET", KEYS[1], ARGV[1] .. ":rg") or "0"
 local min = "-inf"
@@ -92,10 +112,15 @@ end
 return {snap or false, rg, redis.call("ZRANGEBYSCORE", KEYS[2], min, "+inf", "WITHSCORES")}
 `
 
+// listScript wraps listLua as EVALSHA-with-fallback: after the first call
+// only the 40-byte digest crosses the wire instead of the ~800-byte source —
+// this script runs on every List and once per catalog in BatchList.
+var listScript = redis.NewScript(listLua)
+
 // ListCatalog atomically reads the snap pointer and the deltas past it —
 // the single read primitive behind Client.List / Client.BatchList.
 func (r *Reader) ListCatalog(ctx context.Context, catalog string) (*SnapInfo, *ReadIndexResult) {
-	res, err := r.rdb.Eval(ctx, listScript,
+	res, err := listScript.Run(ctx, r.rdb,
 		[]string{r.MakeSnapsHashKey(), r.MakeDeltaZsetKey(catalog)},
 		catalog,
 	).Result()
@@ -243,20 +268,43 @@ func (r *Reader) IterateSnaps(ctx context.Context, fn func(catalog string, snap 
 // regardless of catalog count, and each catalog's (snap, deltas) pair is
 // atomic on the server (per-catalog atomicity is all a reader needs; no
 // cross-catalog consistency is promised).
+//
+// Commands are queued as EVALSHA (Script.Run's NOSCRIPT fallback cannot fire
+// inside a pipeline — errors only surface at Exec), so a cold script cache
+// is handled here: catalogs that fail with NOSCRIPT are retried once in a
+// second pipeline carrying the full script body, which also repopulates the
+// server's cache for every later call.
 func (r *Reader) BatchList(ctx context.Context, catalogs []string) map[string]*BatchListResult {
 	out := make(map[string]*BatchListResult, len(catalogs))
 	if len(catalogs) == 0 {
 		return out
 	}
+	snapsKey := r.MakeSnapsHashKey()
 
 	pipe := r.rdb.Pipeline()
 	cmds := make(map[string]*redis.Cmd, len(catalogs))
 	for _, c := range catalogs {
 		out[c] = &BatchListResult{}
-		cmds[c] = pipe.Eval(ctx, listScript,
-			[]string{r.MakeSnapsHashKey(), r.MakeDeltaZsetKey(c)}, c)
+		cmds[c] = listScript.EvalSha(ctx, pipe,
+			[]string{snapsKey, r.MakeDeltaZsetKey(c)}, c)
 	}
 	pipe.Exec(ctx)
+
+	var retry []string
+	for c, cmd := range cmds {
+		if redis.HasErrorPrefix(cmd.Err(), "NOSCRIPT") {
+			retry = append(retry, c)
+		}
+	}
+	if len(retry) > 0 {
+		pipe2 := r.rdb.Pipeline()
+		for _, c := range retry {
+			cmds[c] = listScript.Eval(ctx, pipe2,
+				[]string{snapsKey, r.MakeDeltaZsetKey(c)}, c)
+		}
+		pipe2.Exec(ctx)
+	}
+
 	for c, cmd := range cmds {
 		res, err := cmd.Result()
 		if err != nil {
@@ -271,7 +319,7 @@ func (r *Reader) BatchList(ctx context.Context, catalogs []string) map[string]*B
 // processZMembers parses zset entries into deltas. V3 has no pending
 // state — every member must be a delta member.
 func (r *Reader) processZMembers(catalog string, zs []redis.Z) *ReadIndexResult {
-	var entries []DeltaInfo
+	entries := make([]DeltaInfo, 0, len(zs))
 	for _, z := range zs {
 		member := z.Member.(string)
 		if !IsDeltaMember(member) {
@@ -287,36 +335,41 @@ func (r *Reader) processZMembers(catalog string, zs []redis.Z) *ReadIndexResult 
 }
 
 func (r *Reader) timeUpdater() {
-	if ts, err := r.serverUnix(context.Background()); err == nil {
-		r.redisTimeUnix.Store(ts)
-	}
+	r.syncClock()
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
-	for range ticker.C {
-		if ts, err := r.serverUnix(context.Background()); err == nil {
-			r.redisTimeUnix.Store(ts)
+	for {
+		select {
+		case <-r.done:
+			return
+		case <-ticker.C:
+			r.syncClock()
 		}
 	}
 }
 
-// NowUnix returns Lake's notion of the current time in unix seconds,
-// taken from the Redis server clock (refreshed every 5s). During the
-// brief window before the first sync it falls back to the local clock.
+func (r *Reader) syncClock() {
+	if ts, err := r.serverUnix(context.Background()); err == nil {
+		r.clock.Store(&clockSync{redisUnix: ts, at: time.Now()})
+	}
+}
+
+// NowUnix returns Lake's notion of the current time in unix seconds: the
+// Redis server clock, re-anchored every 5s and extrapolated with the local
+// MONOTONIC clock in between. It therefore always advances — across sync
+// failures and after Close — while staying pinned to the Redis clock's
+// offset. Before the first successful sync it is the local clock.
 func (r *Reader) NowUnix() int64 {
-	if t := r.redisTimeUnix.Load(); t > 0 {
-		return t
+	if c := r.clock.Load(); c != nil {
+		return c.redisUnix + int64(time.Since(c.at)/time.Second)
 	}
 	return time.Now().Unix()
 }
 
 func (r *Reader) serverUnix(ctx context.Context) (int64, error) {
-	res, err := r.rdb.Eval(ctx, `return tonumber(redis.call("TIME")[1])`, nil).Result()
+	t, err := r.rdb.Time(ctx).Result()
 	if err != nil {
 		return 0, err
 	}
-	ts, ok := res.(int64)
-	if !ok {
-		return 0, fmt.Errorf("redis TIME returned %T, want int64", res)
-	}
-	return ts, nil
+	return t.Unix(), nil
 }

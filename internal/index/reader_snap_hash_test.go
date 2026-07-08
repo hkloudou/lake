@@ -176,7 +176,7 @@ func TestSnapHashMonotonic(t *testing.T) {
 		`["9999999999_1"]`,                 // missing uri
 		`["9999999999_1",""]`,              // empty uri
 		`["9999999999_1",42]`,              // non-string uri
-		`["99999999999999_1","oss://x"]`,   // ts past the year-3000 cap
+		`["99999999999999_1","oss://x"]`,   // ts past the MaxTimestamp cap
 		`["09999999999_1","oss://x"]`,      // leading-zero ts
 		`["9999999999_0","oss://x"]`,       // seq 0 outside 1..999999
 		`["9999999999_011","oss://x"]`,     // leading-zero seq

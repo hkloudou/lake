@@ -3,6 +3,8 @@ package index
 import (
 	"context"
 	"fmt"
+
+	"github.com/redis/go-redis/v9"
 )
 
 // removeDeltaScript removes exactly one delta entry, located by its score and
@@ -26,7 +28,7 @@ import (
 //
 // Returns 1 if removed, 0 if no entry at that tsSeq. KEYS[1] = delta zset,
 // KEYS[2] = snaps hash; ARGV[1] = score, ARGV[2] = tsSeq, ARGV[3] = catalog.
-const removeDeltaScript = `
+const removeDeltaLua = `
 local members = redis.call("ZRANGEBYSCORE", KEYS[1], ARGV[1], ARGV[1])
 for _, m in ipairs(members) do
   local ok, arr = pcall(cjson.decode, m)
@@ -39,11 +41,13 @@ end
 return 0
 `
 
+var removeDeltaScript = redis.NewScript(removeDeltaLua)
+
 // RemoveDelta deletes the delta index entry with the given tsSeq and bumps
 // the catalog's removal generation. The body object in storage is untouched.
 // Returns whether an entry was removed.
 func (w *Writer) RemoveDelta(ctx context.Context, catalog string, tsSeq TimeSeqID) (bool, error) {
-	res, err := w.rdb.Eval(ctx, removeDeltaScript,
+	res, err := removeDeltaScript.Run(ctx, w.rdb,
 		[]string{w.MakeDeltaZsetKey(catalog), w.MakeSnapsHashKey()},
 		tsSeq.Score(), tsSeq.String(), catalog,
 	).Result()
