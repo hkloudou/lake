@@ -115,7 +115,7 @@ func DecodeSnapValue(value string) (TimeSeqID, string, error) {
 // scripts (prepend this const to the script body). It is the Lua mirror of
 // DecodeSnapValue + ParseTimeSeqID above and MUST accept exactly what they
 // accept: a 2-string [tsSeq, uri] with non-empty uri; ts with no leading zero
-// within the year-3000 cap; seq 1..999999 with no leading zero. Accepting
+// within the MaxTimestamp cap; seq 1..999999 with no leading zero. Accepting
 // more would let a script trust a value the Go reader rejects (wedging the
 // catalog); accepting less would make it discard a valid snap. The "0_0"
 // sentinel deliberately yields nil: it scores 0, so no caller's comparison
@@ -128,7 +128,7 @@ local function snap_score(raw)
     return nil
   end
   local ts, seq = string.match(arr[1], "^([1-9]%d*)_([1-9]%d?%d?%d?%d?%d?)$")
-  if not ts or tonumber(ts) > 32503680000 then
+  if not ts or tonumber(ts) > 8589934591 then
     return nil
   end
   return tonumber(ts) + tonumber(seq) / 1000000.0

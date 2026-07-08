@@ -31,9 +31,19 @@ func (t TimeSeqID) String() string {
 	return fmt.Sprintf("%d_%d", t.Timestamp, t.SeqID)
 }
 
+// MaxTimestamp is the largest Unix-second timestamp the score encoding can
+// carry without losing seqid distinctness: 2^33-1 (~year 2242). From 2^33
+// upward a float64's ULP exceeds 1e-6, so adjacent seqids within a second
+// would collapse to the SAME double — deltas could share a score with each
+// other (merge order degrades to member-lexicographic) or with the snap stop
+// (listScript's exclusive-min range would then hide them from every read).
+// The bound must stay mirrored in snapScoreLua (encoding.go) and the
+// notify allocator (writer_atomic.go).
+const MaxTimestamp = 1<<33 - 1 // 8589934591
+
 // ParseTimeSeqID parses "{timestamp}_{seqid}".
 //
-// Rules: timestamp ∈ [0, year-3000]; seqid ∈ [1, 999999]; no leading
+// Rules: timestamp ∈ [0, MaxTimestamp]; seqid ∈ [1, 999999]; no leading
 // zeros (except the literal sentinel "0_0", which represents "no prior
 // snap"); no negatives, no scientific notation.
 func ParseTimeSeqID(s string) (TimeSeqID, error) {
@@ -48,8 +58,8 @@ func ParseTimeSeqID(s string) (TimeSeqID, error) {
 	if err != nil {
 		return TimeSeqID{}, err
 	}
-	if ts > 32503680000 { // year 3000
-		return TimeSeqID{}, fmt.Errorf("invalid timestamp: %d (must be ≤ 32503680000)", ts)
+	if ts > MaxTimestamp {
+		return TimeSeqID{}, fmt.Errorf("invalid timestamp: %d (must be ≤ %d)", ts, int64(MaxTimestamp))
 	}
 	seq, err := parseTsSeqPart(seqPart, "seqid")
 	if err != nil {

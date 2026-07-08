@@ -4,26 +4,46 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
-// Reader reads Lake's Redis index. Maintains a 5-second-resolution
-// clock (redisTimeUnix) for snapshot freshness checks. The background
-// ticker runs for the process lifetime; Lake is intended to be used
-// with one Client per process, so OS reclaim on exit is sufficient.
+// Reader reads Lake's Redis index. Maintains a Redis-synced clock (see
+// NowUnix) for snapshot freshness and handle-expiry checks. The background
+// ticker runs until Close; a Reader that is never closed is reclaimed
+// by the OS at process exit (the intended single-Client-per-process use).
 type Reader struct {
-	rdb           *redis.Client
-	redisTimeUnix atomic.Int64
+	rdb       *redis.Client
+	clock     atomic.Pointer[clockSync]
+	done      chan struct{}
+	closeOnce sync.Once
 	indexIO
 }
 
+// clockSync is one observation of the Redis server clock, paired with the
+// local monotonic instant it was taken at. NowUnix extrapolates from it, so
+// the clock keeps ADVANCING between syncs, through sync failures, and after
+// Close — a frozen clock would let signed handles outlive their expiry and
+// pin WithMaxAge staleness forever.
+type clockSync struct {
+	redisUnix int64
+	at        time.Time // monotonic anchor
+}
+
 func NewReader(rdb *redis.Client) *Reader {
-	r := &Reader{rdb: rdb}
+	r := &Reader{rdb: rdb, done: make(chan struct{})}
 	go r.timeUpdater()
 	return r
+}
+
+// Close stops the background clock ticker. Idempotent. Reads keep working
+// after Close: NowUnix extrapolates from the last sync with the local
+// monotonic clock (or uses the local clock outright if no sync ever landed).
+func (r *Reader) Close() {
+	r.closeOnce.Do(func() { close(r.done) })
 }
 
 // SnapInfo records that a catalog has been snapshotted up to StopTsSeq.
@@ -306,7 +326,7 @@ func (r *Reader) evalListPipelined(ctx context.Context, catalogs []string, fullB
 // processZMembers parses zset entries into deltas. V3 has no pending
 // state — every member must be a delta member.
 func (r *Reader) processZMembers(catalog string, zs []redis.Z) *ReadIndexResult {
-	var entries []DeltaInfo
+	entries := make([]DeltaInfo, 0, len(zs))
 	for _, z := range zs {
 		member := z.Member.(string)
 		if !IsDeltaMember(member) {
@@ -322,24 +342,48 @@ func (r *Reader) processZMembers(catalog string, zs []redis.Z) *ReadIndexResult 
 }
 
 func (r *Reader) timeUpdater() {
-	if ts, err := r.serverUnix(context.Background()); err == nil {
-		r.redisTimeUnix.Store(ts)
-	}
+	r.syncClock()
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
-	for range ticker.C {
-		if ts, err := r.serverUnix(context.Background()); err == nil {
-			r.redisTimeUnix.Store(ts)
+	for {
+		select {
+		case <-r.done:
+			return
+		case <-ticker.C:
+			r.syncClock()
 		}
 	}
 }
 
-// NowUnix returns Lake's notion of the current time in unix seconds,
-// taken from the Redis server clock (refreshed every 5s). During the
-// brief window before the first sync it falls back to the local clock.
+func (r *Reader) syncClock() {
+	if ts, err := r.serverUnix(context.Background()); err == nil {
+		r.clock.Store(&clockSync{redisUnix: ts, at: time.Now()})
+	}
+}
+
+// EnsureClock performs one synchronous clock sync iff none has landed yet.
+// Callers that are about to STAMP a time other ends will compare against
+// (signed-handle expiry) use it to close the startup window where NowUnix
+// would fall back to the local clock while the checking end is already on
+// the Redis clock. Best-effort: on failure the local-clock fallback stands,
+// exactly as before the call.
+func (r *Reader) EnsureClock(ctx context.Context) {
+	if r.clock.Load() != nil {
+		return
+	}
+	if ts, err := r.serverUnix(ctx); err == nil {
+		r.clock.Store(&clockSync{redisUnix: ts, at: time.Now()})
+	}
+}
+
+// NowUnix returns Lake's notion of the current time in unix seconds: the
+// Redis server clock, re-anchored every 5s and extrapolated with the local
+// MONOTONIC clock in between. It therefore always advances — across sync
+// failures and after Close — while staying pinned to the Redis clock's
+// offset. Before the first successful sync it is the local clock.
 func (r *Reader) NowUnix() int64 {
-	if t := r.redisTimeUnix.Load(); t > 0 {
-		return t
+	if c := r.clock.Load(); c != nil {
+		return c.redisUnix + int64(time.Since(c.at)/time.Second)
 	}
 	return time.Now().Unix()
 }

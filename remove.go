@@ -2,11 +2,13 @@ package lake
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/hkloudou/lake/v3/internal/index"
 	"github.com/hkloudou/lake/v3/internal/utils"
+	"github.com/redis/go-redis/v9"
 )
 
 // RemoveDelta is the operator's escape hatch for a poison delta — one whose
@@ -80,27 +82,47 @@ func (c *Client) RemoveDelta(ctx context.Context, catalog, tsSeq string) (bool, 
 // whose memo hash does not exist yet, which no key scan could reach — and
 // the per-entry generation check rejects unswept entries at read time; this
 // sweep just reclaims their memory eagerly.
+//
+// Each SCAN page's HDELs go out in one pipeline (one round-trip per 256
+// indicators instead of one per indicator), and a failing HDEL does not
+// abandon the rest of the sweep — errors are collected and joined, so as
+// much memory as possible is reclaimed in one pass.
 func (c *Client) sweepSamples(ctx context.Context, catalog string) error {
 	// The prefix is user-supplied and MATCH treats *?[]\ as glob syntax —
 	// unescaped, a prefix like "app[1]" would silently match the wrong keys
 	// (missing this deployment's memo hashes, or sweeping another's).
 	pattern := globEscape(c.reader.Prefix()) + ":m:*"
-	var cursor uint64
+	var (
+		cursor uint64
+		errs   []error
+	)
 	for {
 		keys, next, err := c.sampleRdb.Scan(ctx, cursor, pattern, 256).Result()
 		if err != nil {
-			return err
+			// The cursor is gone with the failed SCAN; report what happened
+			// so the operator can retry via InvalidateSamples.
+			errs = append(errs, fmt.Errorf("scan %q: %w", pattern, err))
+			break
 		}
-		for _, key := range keys {
-			if err := c.sampleRdb.HDel(ctx, key, catalog).Err(); err != nil {
-				return fmt.Errorf("invalidate %s: %w", key, err)
+		if len(keys) > 0 {
+			pipe := c.sampleRdb.Pipeline()
+			cmds := make([]*redis.IntCmd, len(keys))
+			for i, key := range keys {
+				cmds[i] = pipe.HDel(ctx, key, catalog)
+			}
+			_, _ = pipe.Exec(ctx)
+			for i, cmd := range cmds {
+				if err := cmd.Err(); err != nil {
+					errs = append(errs, fmt.Errorf("invalidate %s: %w", keys[i], err))
+				}
 			}
 		}
 		if next == 0 {
-			return nil
+			break
 		}
 		cursor = next
 	}
+	return errors.Join(errs...)
 }
 
 // globEscape backslash-escapes Redis MATCH metacharacters so s matches only

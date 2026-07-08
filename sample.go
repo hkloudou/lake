@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -158,7 +159,9 @@ func (s *Sampler[T]) Sample(ctx context.Context, list *ListResult) (T, error) {
 		return zero, errors.New("lake: Sample requires a ListResult from List/BatchList")
 	}
 	c := list.client
-	c.emitEvent(list.catalog, "Sample", map[string]any{"indicator": s.indicator})
+	if c.hasHandlers() {
+		c.emitEvent(list.catalog, "Sample", map[string]any{"indicator": s.indicator})
+	}
 
 	if list.Err != nil {
 		return zero, list.Err
@@ -198,8 +201,10 @@ func (s *Sampler[T]) Batch(ctx context.Context, lists map[string]*ListResult) ma
 		return out
 	}
 
-	for cat := range lists {
-		c.emitEvent(cat, "BatchSample", map[string]any{"indicator": s.indicator})
+	if c.hasHandlers() {
+		for cat := range lists {
+			c.emitEvent(cat, "BatchSample", map[string]any{"indicator": s.indicator})
+		}
 	}
 
 	// Partition: drop catalogs that already have list-level errors; the
@@ -402,9 +407,15 @@ func (c *Client) InvalidateSamples(ctx context.Context, indicator string, catalo
 // one the mandatory checks require).
 func (s *Sampler[T]) isStale(meta SampleMeta, list *ListResult, peers map[string]*ListResult, now int64) bool {
 	lastUpdated := list.LastUpdated()
-	if !(meta.Score >= lastUpdated && meta.Score > 0) {
-		return true // data advanced past the cached version (or none) → refresh
+	if meta.Score < lastUpdated {
+		return true // data advanced past the cached version → refresh
 	}
+	// Score==0 with lastUpdated==0 is a VALID hit: the sample of a still-empty
+	// catalog. (Serving it matters at fleet scale — pre-provisioned tenants
+	// with no data yet would otherwise run the loader and re-write the memo
+	// entry on every single call.) The first real write raises lastUpdated
+	// above 0 and correctly invalidates; a removal that empties the catalog
+	// bumps the generation and is caught below.
 	// A removal can lower or preserve LastUpdated, so the floor above cannot
 	// see it: an entry computed under a different removal generation than
 	// the caller's ListResult must not be served (e.g. the post-removal
@@ -492,7 +503,8 @@ func (s *Sampler[T]) loadAndCache(ctx context.Context, c *Client, list *ListResu
 	if listGen == "" {
 		listGen = "0"
 	}
-	flightKey := fmt.Sprintf("%s:%s:%.6f:%s:%s:%s", list.catalog, s.indicator, lastUpdated, epoch, catGen, listGen)
+	flightKey := list.catalog + ":" + s.indicator + ":" +
+		strconv.FormatFloat(lastUpdated, 'f', 6, 64) + ":" + epoch + ":" + catGen + ":" + listGen
 	raw, err := c.sampleFlight.Do(flightKey, func() (string, error) {
 		result, lerr := s.loader(list)
 		if lerr != nil {
@@ -517,6 +529,10 @@ func (s *Sampler[T]) loadAndCache(ctx context.Context, c *Client, list *ListResu
 	if err != nil {
 		return zero, err
 	}
+	// Every caller — flight leader included — decodes the marshalled string:
+	// callers must all see the same JSON-round-tripped shape of T (a leader
+	// handed the loader's raw value would see map values as int where a
+	// waiter sees float64, and would alias state the loader retained).
 	_, value, derr := unmarshalSampleCache[T]([]byte(raw))
 	return value, derr
 }
@@ -593,6 +609,13 @@ func unmarshalSampleCache[T any](raw []byte) (SampleMeta, T, error) {
 	}
 	if err := json.Unmarshal(arr[1], &meta.UpdatedAt); err != nil {
 		return meta, zero, err
+	}
+	// Every entry Lake writes stamps UpdatedAt from a positive clock; a zero
+	// here means a foreign/corrupt value (e.g. JSON nulls, which unmarshal as
+	// silent no-ops into the zero SampleMeta). Reading it as a miss matters
+	// for empty catalogs, where a Score of 0 is otherwise a legitimate hit.
+	if meta.UpdatedAt <= 0 {
+		return meta, zero, fmt.Errorf("sample cache entry missing updatedAt")
 	}
 	if err := json.Unmarshal(arr[2], &meta.RemoveGen); err != nil {
 		return meta, zero, err

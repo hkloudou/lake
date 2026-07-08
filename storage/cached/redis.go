@@ -39,29 +39,44 @@ func (c *RedisCache) cacheKey(namespace, key string) string {
 	return "lake_cache:" + encode.EncodeRedisCatalogName(namespace+":"+key)
 }
 
+// Take is read-through. Hits are served OUTSIDE the single-flight —
+// concurrent readers of a hot key each pay their own GetEx (parallel, no
+// head-of-line blocking) and gunzip already hands each of them a private
+// buffer. Everything that must call the loader — a miss, an undecodable
+// value, and a cache-Redis ERROR alike — funnels through the flight, so a
+// cold or cache-degraded hot object hits the backend once per cohort, not
+// once per caller (an outage must not turn into a backend stampede).
 func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader func() ([]byte, error)) ([]byte, error) {
 	cacheKey := c.cacheKey(namespace, key)
-	return c.flight.Do(cacheKey, func() ([]byte, error) {
-		raw, err := c.client.GetEx(ctx, cacheKey, c.ttl).Bytes()
-		switch err {
-		case nil:
-			// A value that fails to decompress (foreign / legacy format) is
-			// treated as a miss and recomputed below.
-			if data, derr := gunzip(raw); derr == nil {
-				return data, nil
-			}
-		case redis.Nil:
-			// miss → fall through to loader
-		default:
-			// Redis error → serve from loader without caching.
-			return loader()
+	raw, err := c.client.GetEx(ctx, cacheKey, c.ttl).Bytes()
+	if err == nil {
+		// A value that fails to decompress (foreign / legacy format) is
+		// treated as a miss and recomputed below.
+		if data, derr := gunzip(raw); derr == nil {
+			return data, nil
 		}
+	}
+	cacheDown := err != nil && err != redis.Nil
 
-		data, err := loader()
-		if err != nil {
-			return nil, err
+	return takeWithRetry(ctx, c.flight, cacheKey, func(retry bool) ([]byte, error) {
+		// Re-check only on the retry pass: this caller just observed the
+		// miss itself, but a retry follows someone else's flight and the
+		// value may have landed meanwhile. Skipped when the cache Redis is
+		// erroring — the loader result is then served WITHOUT caching.
+		if retry && !cacheDown {
+			if raw, gerr := c.client.GetEx(ctx, cacheKey, c.ttl).Bytes(); gerr == nil {
+				if data, derr := gunzip(raw); derr == nil {
+					return data, nil
+				}
+			}
 		}
-		c.write(ctx, cacheKey, data)
+		data, lerr := loader()
+		if lerr != nil {
+			return nil, lerr
+		}
+		if !cacheDown {
+			c.write(ctx, cacheKey, data)
+		}
 		return data, nil
 	})
 }

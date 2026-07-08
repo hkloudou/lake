@@ -83,9 +83,20 @@ func TestSamplerIsStale(t *testing.T) {
 	if !base.isStale(SampleMeta{Score: 100}, listAt(200), noPeers, 0) {
 		t.Error("advanced data version must be stale")
 	}
-	// Sentinel score 0 is never a valid hit (matches the score>0 rule).
-	if !base.isStale(SampleMeta{Score: 0}, listAt(0), noPeers, 0) {
-		t.Error("zero score must be stale")
+	// Empty catalog: a sample computed at version 0 for a catalog still at
+	// version 0 is a valid hit — otherwise every pre-provisioned empty
+	// catalog would re-run its loader (and re-write the memo) on every call.
+	// The removal-generation check still guards a catalog emptied by
+	// RemoveDelta, and the first real write (version > 0) invalidates.
+	if base.isStale(SampleMeta{Score: 0}, listAt(0), noPeers, 0) {
+		t.Error("zero score for a still-empty catalog must be a hit")
+	}
+	// But a zero/garbage score never serves once the catalog has data.
+	if !base.isStale(SampleMeta{Score: 0}, listAt(100), noPeers, 0) {
+		t.Error("zero score with data present must be stale")
+	}
+	if !base.isStale(SampleMeta{Score: -1}, listAt(0), noPeers, 0) {
+		t.Error("negative (corrupt) score must be stale")
 	}
 	// Removal-generation mismatch is mandatory staleness in BOTH directions:
 	// the entry was not computed from the caller's view of the log.

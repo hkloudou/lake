@@ -31,7 +31,7 @@ func testRedisAddrFromEnv() string {
 // MaxRetries -1 / DialerRetries 1 disable go-redis's command and dial retry
 // loops so the skip probe fails fast when Redis is absent (with defaults,
 // every probe would burn its full 500ms context across ~19 call sites).
-func redisTestDB(t *testing.T, db int) *redis.Client {
+func redisTestDB(t testing.TB, db int) *redis.Client {
 	t.Helper()
 	rdb := redis.NewClient(&redis.Options{Addr: testRedisAddr, DB: db, DialTimeout: 200 * time.Millisecond, MaxRetries: -1, DialerRetries: 1})
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
@@ -46,7 +46,7 @@ func redisTestDB(t *testing.T, db int) *redis.Client {
 
 // testPrefix is a Redis key prefix unique to this test and process, so parallel
 // runs and leftover keys from a crashed run never collide.
-func testPrefix(t *testing.T) string {
+func testPrefix(t testing.TB) string {
 	return fmt.Sprintf("laketest_%d_%s", os.Getpid(), strings.ReplaceAll(t.Name(), "/", "_"))
 }
 
@@ -65,7 +65,7 @@ func waitFor(cond func() bool) bool {
 
 // cleanupKeys registers a t.Cleanup that SCAN+DELs every key matching each
 // pattern on rdb — targeted, non-destructive (no FlushDB).
-func cleanupKeys(t *testing.T, rdb *redis.Client, patterns ...string) {
+func cleanupKeys(t testing.TB, rdb *redis.Client, patterns ...string) {
 	t.Cleanup(func() {
 		ctx := context.Background()
 		for _, pat := range patterns {

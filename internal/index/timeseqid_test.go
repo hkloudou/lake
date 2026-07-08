@@ -114,8 +114,20 @@ func TestTimeSeqIDParsing(t *testing.T) {
 			wantErr:   false,
 		},
 		{
-			name:    "timestamp too large - beyond year 3000",
+			name:    "timestamp too large - beyond score-safe cap",
 			input:   "99999999999_1",
+			wantErr: true,
+		},
+		{
+			name:      "timestamp at MaxTimestamp is accepted",
+			input:     "8589934591_999999",
+			expectTS:  8589934591,
+			expectSeq: 999999,
+			wantErr:   false,
+		},
+		{
+			name:    "timestamp just past MaxTimestamp rejected (float64 ULP would merge seqids)",
+			input:   "8589934592_1",
 			wantErr: true,
 		},
 		{

@@ -82,9 +82,11 @@ func WithUploadContentType(ct string) WriteBeginOption {
 // resulting URI (provider://bucket/path) is returned in the handle and
 // recorded by WriteNotify.
 func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...WriteBeginOption) (*WriteHandle, error) {
-	c.emitEvent(req.Catalog, "WriteBegin", map[string]any{
-		"path": req.Path, "mergeType": int(req.MergeType), "provider": req.Provider, "bucket": req.Bucket,
-	})
+	if c.hasHandlers() {
+		c.emitEvent(req.Catalog, "WriteBegin", map[string]any{
+			"path": req.Path, "mergeType": int(req.MergeType), "provider": req.Provider, "bucket": req.Bucket,
+		})
+	}
 
 	// New* variants: WriteBegin mints new index/storage state, so the length
 	// caps apply here (read/ops paths accept longer legacy names).
@@ -146,6 +148,12 @@ func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...
 	if err != nil {
 		return nil, fmt.Errorf("presign put: %w", err)
 	}
+	// Close the startup window before stamping ExpiresAt: until the first
+	// clock sync lands, NowUnix is the LOCAL clock, while the WriteNotify
+	// end (possibly another, long-running host) checks against the Redis
+	// clock — host skew would then shift the effective TTL. One synchronous
+	// sync on the first pre-sync WriteBegin; best-effort, no new failure mode.
+	c.reader.EnsureClock(ctx)
 	h := &WriteHandle{
 		Catalog:       req.Catalog,
 		Path:          req.Path,
@@ -158,7 +166,11 @@ func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...
 		UploadURL:     upload.URL,
 		UploadMethod:  upload.Method,
 		UploadHeaders: upload.Headers,
-		ExpiresAt:     time.Now().Add(o.ttl).Unix(),
+		// Stamped from the Redis-synced clock, not the local one: handles
+		// round-trip across machines, and WriteNotify may run on a different
+		// host — both ends must measure expiry against the same clock (the
+		// ~5s sync resolution is noise next to the minutes-scale TTL).
+		ExpiresAt: c.reader.NowUnix() + int64(o.ttl/time.Second),
 	}
 	if len(c.handleSecret) > 0 {
 		h.Signature = c.signHandle(h)
@@ -199,7 +211,9 @@ func (c *Client) WriteNotify(ctx context.Context, h *WriteHandle) error {
 	if h == nil {
 		return errors.New("nil WriteHandle")
 	}
-	c.emitEvent(h.Catalog, "WriteNotify", map[string]any{"path": h.Path, "uri": h.URI})
+	if c.hasHandlers() {
+		c.emitEvent(h.Catalog, "WriteNotify", map[string]any{"path": h.Path, "uri": h.URI})
+	}
 
 	// New* variants: the handle is untrusted input about to be recorded, so
 	// it is held to the same length caps WriteBegin enforces.
@@ -245,8 +259,10 @@ func (c *Client) WriteNotify(ctx context.Context, h *WriteHandle) error {
 		// The signature authenticates ExpiresAt, so enforce it too: a leaked
 		// signed handle must not be replayable indefinitely. (Without a
 		// secret the field is client-editable, so checking it there would
-		// only be theater.)
-		if now := time.Now().Unix(); now > h.ExpiresAt {
+		// only be theater.) Compared against the Redis-synced clock — the
+		// same one WriteBegin stamped from — so cross-host clock skew cannot
+		// shift the effective TTL.
+		if now := c.reader.NowUnix(); now > h.ExpiresAt {
 			return fmt.Errorf("handle expired at %d (now %d)", h.ExpiresAt, now)
 		}
 	}
