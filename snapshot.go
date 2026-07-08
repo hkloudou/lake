@@ -20,29 +20,18 @@ func (c *Client) IterateSnaps(ctx context.Context, fn func(catalog string, snap 
 	return c.reader.IterateSnaps(ctx, fn)
 }
 
-// saveSnapshot writes snap bytes to the configured snap target and upserts
-// the Redis hash entry, deduping concurrent identical saves within this
-// process via SingleFlight on (catalog, stop, gen). readData's async path
-// deliberately does NOT go through the flight: it is already serialized by
-// the per-catalog snapSaving slot, and a slot THIEF (see claimSnapSlot) must
-// run independently rather than park forever behind the wedged leader it is
-// replacing — writeSnapshot overlap is benign (same stop + gen implies
-// identical bytes at the same path; AddSnap is monotonic and gen-guarded).
-func (c *Client) saveSnapshot(ctx context.Context, catalog string, stop index.TimeSeqID, removeGen string, data []byte) (string, error) {
-	if c.snapProvider == "" || c.snapBucket == "" {
-		return "", nil
-	}
-	return c.snapFlight.Do(fmt.Sprintf("%s_%s_%s", catalog, stop, removeGen), func() (string, error) {
-		return c.writeSnapshot(ctx, catalog, stop, removeGen, data)
-	})
-}
-
-// writeSnapshot uploads the snap object and publishes its pointer —
+// saveSnapshot uploads the snap object and publishes its pointer —
 // monotonically, and only if removeGen still matches the catalog's removal
 // generation: AddSnap drops the upsert if a newer snap already landed OR a
 // RemoveDelta interleaved since the read that produced data (which would
-// otherwise resurrect the removed write).
-func (c *Client) writeSnapshot(ctx context.Context, catalog string, stop index.TimeSeqID, removeGen string, data []byte) (string, error) {
+// otherwise resurrect the removed write). No-op when no snap target is
+// configured.
+//
+// Concurrency is the caller's concern: readData serializes saves per catalog
+// via the snapSaving gate. Overlapping saves of the same (stop, gen) — e.g.
+// two processes reading the same catalog — are benign: they write identical
+// bytes to the same object path, and AddSnap is monotonic and gen-guarded.
+func (c *Client) saveSnapshot(ctx context.Context, catalog string, stop index.TimeSeqID, removeGen string, data []byte) (string, error) {
 	if c.snapProvider == "" || c.snapBucket == "" {
 		return "", nil
 	}

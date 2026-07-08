@@ -39,19 +39,14 @@ type Client struct {
 	stores     map[string]storage.Storage
 	storFlight xsync.SingleFlight[storage.Storage] // dedupe concurrent resolves per (kind, provider, bucket)
 
-	// Two layers with distinct jobs: snapSaving is the cheap per-catalog gate
-	// that keeps readData from even COPYING the document while a save is in
-	// flight (claimSnapSlot, read.go); snapFlight dedupes identical
-	// (catalog, stop, gen) saves inside saveSnapshot itself, covering direct
-	// callers and stolen-slot overlaps the gate cannot see.
-	snapFlight   xsync.SingleFlight[string] // dedupe concurrent snapshot saves on (catalog, stop, gen)
-	snapSaving   sync.Map                   // catalog → claim time.Time of the in-flight async save
+	snapSaving   sync.Map                   // per-catalog gate: one async snapshot save in flight at a time
 	sampleFlight xsync.SingleFlight[string] // dedupe concurrent Sampler[T] loaders on (catalog, indicator, score)
 
 	handleSecret []byte // WithHandleSecret; empty disables handle signing
 
 	eventHandlers atomic.Pointer[[]EventHandler]
-	ownsSampleRdb bool // Close() closes sampleRdb only when Lake created it
+	useMu         sync.Mutex // serializes Use's copy-on-write swap
+	ownsSampleRdb bool       // Close() closes sampleRdb only when Lake created it
 	closeOnce     sync.Once
 }
 
@@ -100,7 +95,6 @@ func New(prefix string, rdb *redis.Client, resolve storage.Resolver, opts ...fun
 		handleSecret:  o.handleSecret,
 		stores:        make(map[string]storage.Storage),
 		storFlight:    xsync.NewSingleFlight[storage.Storage](),
-		snapFlight:    xsync.NewSingleFlight[string](),
 		sampleFlight:  xsync.NewSingleFlight[string](),
 	}
 	c.writer.SetPrefix(prefix)

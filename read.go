@@ -81,25 +81,21 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 	// are simply skipped; the next read after the slot frees starts the next
 	// save, so the snap pointer converges as long as the catalog is read (the
 	// steady-state cost of the lag is one longer replay on that next read).
-	// A slot older than the save timeout is treated as abandoned and stolen —
-	// a Storage.Put that ignores ctx must not disable snapshotting forever.
+	// The save context's timeout is what frees a slot wedged on a slow
+	// backend; a Put that ignores ctx entirely parks snapshotting for the
+	// catalog — deliberately not defended against beyond the timeout.
 	// The goroutine gets a private copy of resultData: the caller is free to
 	// mutate its slice while the save is still reading — and a mutated
 	// snapshot would poison every later read of the catalog.
 	if c.snapProvider != "" {
 		if next := list.NextSnap(); next != nil {
-			if token, ok := c.claimSnapSlot(list.catalog); ok {
+			if _, busy := c.snapSaving.LoadOrStore(list.catalog, struct{}{}); !busy {
 				snapData := append([]byte(nil), resultData...)
 				go func() {
-					// Release only OUR claim: a stolen slot belongs to the
-					// thief, and the abandoned owner must not free it.
-					defer c.snapSaving.CompareAndDelete(list.catalog, token)
+					defer c.snapSaving.Delete(list.catalog)
 					saveCtx, cancel := context.WithTimeout(context.Background(), snapSaveTimeout)
 					defer cancel()
-					// writeSnapshot, not saveSnapshot: the slot already
-					// serializes this path, and a slot thief must not park
-					// on the wedged leader's identical flight key.
-					if _, err := c.writeSnapshot(saveCtx, list.catalog, next.StopTsSeq, list.removeGen, snapData); err != nil {
+					if _, err := c.saveSnapshot(saveCtx, list.catalog, next.StopTsSeq, list.removeGen, snapData); err != nil {
 						c.emitEvent(list.catalog, "SnapshotSaveError", map[string]any{"err": err.Error()})
 					}
 				}()
@@ -107,24 +103,6 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 		}
 	}
 	return resultData, nil
-}
-
-// claimSnapSlot takes the catalog's async-save slot, returning the claim
-// token to release it with. A slot whose owner has been running past the
-// save timeout (plus slack for the cancellation to unwind) is presumed stuck
-// on a ctx-ignoring backend and is stolen.
-func (c *Client) claimSnapSlot(catalog string) (time.Time, bool) {
-	now := time.Now()
-	prev, busy := c.snapSaving.LoadOrStore(catalog, now)
-	if !busy {
-		return now, true
-	}
-	if started, ok := prev.(time.Time); ok && now.Sub(started) > snapSaveTimeout+30*time.Second {
-		if c.snapSaving.CompareAndSwap(catalog, prev, now) {
-			return now, true
-		}
-	}
-	return time.Time{}, false
 }
 
 // fetchURI resolves a storage URI (provider://bucket/path) to a backend for the

@@ -8,17 +8,14 @@ type EventHandler func(catalog, event string, attrs map[string]any)
 // call at any time — including on a live Client — and emitEvent stays a
 // single atomic load on the hot path.
 func (c *Client) Use(h EventHandler) {
-	for {
-		old := c.eventHandlers.Load()
-		var next []EventHandler
-		if old != nil {
-			next = append(next, *old...)
-		}
-		next = append(next, h)
-		if c.eventHandlers.CompareAndSwap(old, &next) {
-			return
-		}
+	c.useMu.Lock()
+	defer c.useMu.Unlock()
+	var next []EventHandler
+	if old := c.eventHandlers.Load(); old != nil {
+		next = append(next, *old...)
 	}
+	next = append(next, h)
+	c.eventHandlers.Store(&next)
 }
 
 // hasHandlers is the hot-path guard call sites use to skip building the
