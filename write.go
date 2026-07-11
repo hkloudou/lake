@@ -127,6 +127,11 @@ func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...
 	}
 	if o.ttl <= 0 {
 		o.ttl = defaultUploadTTL
+	} else if o.ttl < time.Second {
+		// Presign APIs take whole seconds and ExpiresAt is unix seconds; a
+		// sub-second TTL (e.g. an untyped WithUploadTTL(30) — 30ns) would
+		// otherwise round to an already-expired handle.
+		o.ttl = time.Second
 	}
 
 	uuid, err := newUUID()
@@ -261,7 +266,10 @@ func (c *Client) WriteNotify(ctx context.Context, h *WriteHandle) error {
 		// secret the field is client-editable, so checking it there would
 		// only be theater.) Compared against the Redis-synced clock — the
 		// same one WriteBegin stamped from — so cross-host clock skew cannot
-		// shift the effective TTL.
+		// shift the effective TTL. EnsureClock mirrors WriteBegin's: a
+		// notify-only host must not judge expiry on its local clock during
+		// its own pre-first-sync window.
+		c.reader.EnsureClock(ctx)
 		if now := c.reader.NowUnix(); now > h.ExpiresAt {
 			return fmt.Errorf("handle expired at %d (now %d)", h.ExpiresAt, now)
 		}

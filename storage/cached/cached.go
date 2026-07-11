@@ -60,9 +60,14 @@ func Wrap(namespace string, base storage.Storage, cache Cache) storage.Storage {
 
 // Resolver wraps every Storage that inner returns with the cache chosen by
 // policy(kind, provider, bucket); a nil policy result leaves that backend
-// uncached. Keys are namespaced by "provider|bucket". Because Lake passes the
-// object Kind, one bucket can cache snapshots and skip deltas with no path
-// inspection and no bucket split:
+// uncached. Keys are namespaced by "provider|bucket" — NOT by deployment:
+// two Lake deployments sharing one cache Redis whose resolvers map the same
+// (provider, bucket) pair to DIFFERENT physical buckets (e.g. staging and
+// prod both calling it "oss"/"data" against separate accounts) would collide
+// on cache keys and could serve each other's bytes. Give such deployments
+// separate cache instances/DBs, or distinct provider/bucket naming. Because
+// Lake passes the object Kind, one bucket can cache snapshots and skip
+// deltas with no path inspection and no bucket split:
 //
 //	resolve := cached.Resolver(backends, func(kind storage.Kind, provider, bucket string) cached.Cache {
 //	    if kind == storage.Snap {

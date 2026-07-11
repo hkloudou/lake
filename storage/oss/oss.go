@@ -38,16 +38,36 @@ type Client struct {
 }
 
 // New builds an OSS client. It returns an error only on malformed config; the
-// connection is lazy. Resolve the endpoint shorthand the same way the v3
-// config layer used to.
+// connection is lazy.
+//
+// Endpoint forms: a region shorthand ("oss-cn-hangzhou" — Internal and
+// FC_REGION handling apply, ".aliyuncs.com" is appended), a full host
+// ("oss-cn-hangzhou-internal.aliyuncs.com"), or a full URL. Internal=true is
+// only meaningful with the shorthand — combined with a host/URL it would
+// have to rewrite an address the caller already spelled out, so that
+// combination is rejected loudly instead of minting a host that fails DNS
+// on the first request.
 func New(cfg Config) (*Client, error) {
 	endpoint := cfg.Endpoint
-	if cfg.Internal {
-		endpoint += "-internal"
-	}
-	if !strings.HasPrefix(endpoint, "http") {
-		if r := os.Getenv("FC_REGION"); r != "" && strings.Contains(endpoint, r) && !strings.Contains(endpoint, "-internal") {
-			endpoint += "-internal"
+	switch {
+	case strings.HasPrefix(endpoint, "http://"), strings.HasPrefix(endpoint, "https://"):
+		if cfg.Internal && !strings.Contains(endpoint, "-internal") {
+			return nil, fmt.Errorf("oss: Internal requires the region-shorthand Endpoint (e.g. %q); bake \"-internal\" into the full URL %q instead", "oss-cn-hangzhou", cfg.Endpoint)
+		}
+	case strings.Contains(endpoint, "."):
+		// Full host without a scheme — never re-suffix ".aliyuncs.com".
+		if cfg.Internal && !strings.Contains(endpoint, "-internal") {
+			return nil, fmt.Errorf("oss: Internal requires the region-shorthand Endpoint (e.g. %q); bake \"-internal\" into the host %q instead", "oss-cn-hangzhou", cfg.Endpoint)
+		}
+		endpoint = "https://" + endpoint
+	default:
+		// Region shorthand.
+		if !strings.Contains(endpoint, "-internal") {
+			if cfg.Internal {
+				endpoint += "-internal"
+			} else if r := os.Getenv("FC_REGION"); r != "" && strings.Contains(endpoint, r) {
+				endpoint += "-internal"
+			}
 		}
 		endpoint = "https://" + endpoint + ".aliyuncs.com"
 	}
@@ -114,6 +134,12 @@ func (b *bucket) PresignPut(_ context.Context, _ /*catalog*/, path string, opts 
 	if ttl <= 0 {
 		ttl = 15 * time.Minute
 	}
+	// SignURL takes whole seconds; a sub-second TTL would truncate to 0 and
+	// sign a URL that is already expired when returned.
+	expireSecs := int64(ttl / time.Second)
+	if expireSecs < 1 {
+		expireSecs = 1
+	}
 	signOpts := []alioss.Option{}
 	headers := map[string]string{}
 	if opts.ContentType != "" {
@@ -124,7 +150,7 @@ func (b *bucket) PresignPut(_ context.Context, _ /*catalog*/, path string, opts 
 		signOpts = append(signOpts, alioss.Meta(k, v))
 		headers["x-oss-meta-"+strings.ToLower(k)] = v
 	}
-	url, err := h.SignURL(path, alioss.HTTPPut, int64(ttl.Seconds()), signOpts...)
+	url, err := h.SignURL(path, alioss.HTTPPut, expireSecs, signOpts...)
 	if err != nil {
 		return storage.PresignedUpload{}, fmt.Errorf("oss: sign url: %w", err)
 	}
