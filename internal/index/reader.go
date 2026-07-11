@@ -2,6 +2,7 @@ package index
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"sync"
@@ -189,6 +190,31 @@ func parseListReply(res any) (string, string, []redis.Z, error) {
 	return rawSnap, removeGen, zs, nil
 }
 
+// HasDelta reports whether a delta with the given tsSeq currently exists in
+// the catalog's zset — the same score-range + embedded-tsSeq match the
+// removal script performs, read-only. RemoveDelta probes with it before
+// installing barriers, so a mistyped catalog or tsSeq mints no state.
+func (r *Reader) HasDelta(ctx context.Context, catalog string, tsSeq TimeSeqID) (bool, error) {
+	score := strconv.FormatFloat(tsSeq.Score(), 'f', -1, 64)
+	members, err := r.rdb.ZRangeByScore(ctx, r.MakeDeltaZsetKey(catalog),
+		&redis.ZRangeBy{Min: score, Max: score}).Result()
+	if err != nil {
+		return false, err
+	}
+	want := tsSeq.String()
+	for _, m := range members {
+		var arr []json.RawMessage
+		if json.Unmarshal([]byte(m), &arr) != nil || len(arr) != 4 {
+			continue
+		}
+		var got string
+		if json.Unmarshal(arr[2], &got) == nil && got == want {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // RemoveGen returns the catalog's current removal generation ("0" if no
 // delta was ever removed). Sample write-backs recheck it against the
 // generation captured with their ListResult: a loader computing from a list
@@ -276,14 +302,22 @@ func (r *Reader) BatchList(ctx context.Context, catalogs []string) map[string]*B
 	cmds := r.evalListPipelined(ctx, catalogs, false)
 	// RunScript's fallback cannot fire inside a pipeline (command errors
 	// surface only at Exec), so it is mirrored here with the same predicate:
-	// re-run the whole pipeline with full-body EVAL, which executes AND
-	// re-caches the script in one step — no SCRIPT LOAD (or even EVALSHA)
-	// permission required. Rare — a cold script cache, or an ACL that denies
-	// EVALSHA; listScript is read-only, so re-running is always safe.
-	for _, cmd := range cmds {
-		if needsEvalFallback(cmd.Err()) {
-			cmds = r.evalListPipelined(ctx, catalogs, true)
-			break
+	// re-run with full-body EVAL, which executes AND re-caches the script in
+	// one step — no SCRIPT LOAD (or even EVALSHA) permission required. Rare —
+	// a cold script cache, or an ACL that denies EVALSHA; listScript is
+	// read-only, so re-running is always safe. Only the catalogs that
+	// actually failed are retried: first-pass successes keep their results
+	// (a transient blip in the retry must not erase them), and the retry
+	// pipeline stays proportional to the failure, not the fleet.
+	var retry []string
+	for _, cat := range catalogs {
+		if needsEvalFallback(cmds[cat].Err()) {
+			retry = append(retry, cat)
+		}
+	}
+	if len(retry) > 0 {
+		for cat, cmd := range r.evalListPipelined(ctx, retry, true) {
+			cmds[cat] = cmd
 		}
 	}
 

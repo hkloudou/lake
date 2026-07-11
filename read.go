@@ -17,10 +17,20 @@ import (
 // and the per-catalog save slot forever.
 const snapSaveTimeout = 5 * time.Minute
 
+// panicToErr converts a panic on a Lake-owned goroutine into an error via
+// the deferred pattern `defer panicToErr(&err)`. It deliberately does NOT
+// run on normal returns (recover() is nil then).
+func panicToErr(dst *error) {
+	if r := recover(); r != nil {
+		*dst = fmt.Errorf("lake: user-provided code panicked: %v", r)
+	}
+}
+
 // readData loads the snapshot bytes and delta bodies in parallel, merges them
 // into the resulting document, and (when a snap target is configured)
 // asynchronously persists a new snapshot if there are deltas past the snap.
 func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error) {
+	c.emitEvent(list.catalog, "Read", nil)
 	if list.Err != nil {
 		return nil, list.Err
 	}
@@ -38,7 +48,12 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 		baseDataErr, deltaErr error
 		wg                    sync.WaitGroup
 	)
+	// Both goroutines run user-provided code (storage backends via the
+	// Resolver). They are Lake-owned goroutines with no caller stack to
+	// recover on, so a backend panic here would kill the whole process —
+	// contain it as a read error instead (same policy as saveSnapshotGuarded).
 	wg.Go(func() {
+		defer panicToErr(&baseDataErr)
 		if list.LatestSnap == nil {
 			baseData = []byte("{}")
 			return
@@ -46,6 +61,7 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 		baseData, baseDataErr = c.fetchURI(ctx, storage.Snap, list.catalog, list.LatestSnap.URI)
 	})
 	wg.Go(func() {
+		defer panicToErr(&deltaErr)
 		deltaErr = c.fillDeltasBody(ctx, list.catalog, entries)
 	})
 	wg.Wait()
@@ -176,6 +192,19 @@ func (c *Client) fillDeltasBody(ctx context.Context, catalog string, deltas []in
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wg.Go(func() {
+			// Pool workers call user storage backends; a panic in one must
+			// surface as this read's error, not kill the process.
+			var panicErr error
+			defer func() {
+				if panicErr != nil {
+					select {
+					case errCh <- panicErr:
+					default:
+					}
+					cancel()
+				}
+			}()
+			defer panicToErr(&panicErr)
 			for d := range jobs {
 				if err := workerCtx.Err(); err != nil {
 					return

@@ -297,7 +297,20 @@ func (s *Sampler[T]) Batch(ctx context.Context, lists map[string]*ListResult) ma
 				// Re-read the clock per loader run: with many misses ahead in
 				// the queue, the batch-start `now` could stamp an UpdatedAt
 				// already a whole maxAge in the past.
-				v, e := s.finalize(s.loadAndCache(ctx, c, l, hashKey, l.LastUpdated(), c.reader.NowUnix(), epoch, catGen(cat)))
+				//
+				// The loader is user code running on a Lake-owned worker
+				// goroutine — a panic here has no caller stack to recover on
+				// and would kill the process (unlike Sample, where it
+				// surfaces in the caller). Contain it as this catalog's
+				// error.
+				v, e := func() (v T, e error) {
+					defer func() {
+						if r := recover(); r != nil {
+							e = fmt.Errorf("lake: sampler loader panicked: %v", r)
+						}
+					}()
+					return s.finalize(s.loadAndCache(ctx, c, l, hashKey, l.LastUpdated(), c.reader.NowUnix(), epoch, catGen(cat)))
+				}()
 				mu.Lock()
 				out[cat] = &SampleResult[T]{Value: v, Err: e}
 				mu.Unlock()
@@ -377,7 +390,12 @@ func (c *Client) InvalidateSamples(ctx context.Context, indicator string, catalo
 	for _, cat := range catalogs {
 		c.emitEvent(cat, "InvalidateSample", map[string]any{"indicator": indicator})
 	}
-	if err := utils.ValidateCatalog(indicator); err != nil {
+	// ValidateNewCatalog, not the read-side form: the epoch bump below
+	// CREATES the memo hash when it does not exist (that is what lets it
+	// barrier an indicator that has never cached anything), so an oversized
+	// indicator here would mint a permanent Redis key. Indicators are
+	// code-chosen and NewSampler enforces the same cap.
+	if err := utils.ValidateNewCatalog(indicator); err != nil {
 		return 0, fmt.Errorf("invalid indicator: %w", err)
 	}
 	for _, cat := range catalogs {

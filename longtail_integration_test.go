@@ -110,6 +110,37 @@ func TestNotifyMonotonicAcrossClockRegression_Redis(t *testing.T) {
 	}
 }
 
+// TestRemoveDeltaNoStateForMissingTarget_Redis: RemoveDelta on a nonexistent
+// catalog/tsSeq must be a pure no-op — the pre-removal barrier bump must not
+// mint a permanent "<prefix>:mrg" field for a name that holds nothing (a
+// mistyped ops call, or an arbitrarily long legacy-format name this path
+// accepts, must not grow Redis state per attempt).
+func TestRemoveDeltaNoStateForMissingTarget_Redis(t *testing.T) {
+	c, store, ctx := newMemClient(t)
+
+	if removed, err := c.RemoveDelta(ctx, "no-such-catalog", "1700000000_1"); err != nil || removed {
+		t.Fatalf("RemoveDelta(missing) = %v, %v; want false, nil", removed, err)
+	}
+	if n, err := c.sampleRdb.HExists(ctx, c.reader.MakeSampleRemoveGenKey(), "no-such-catalog").Result(); err != nil || n {
+		t.Fatalf("mrg field minted for a nonexistent catalog (exists=%v err=%v)", n, err)
+	}
+
+	// A real catalog with the WRONG tsSeq must also stay state-free.
+	writeDelta(t, c, store, "users", "/", MergeTypeReplace, `{"a":1}`)
+	if removed, err := c.RemoveDelta(ctx, "users", "1600000000_1"); err != nil || removed {
+		t.Fatalf("RemoveDelta(wrong tsSeq) = %v, %v; want false, nil", removed, err)
+	}
+	if n, _ := c.sampleRdb.HExists(ctx, c.reader.MakeSampleRemoveGenKey(), "users").Result(); n {
+		t.Fatal("mrg field minted for a wrong-tsSeq removal attempt")
+	}
+
+	// And the real removal still works end to end.
+	list := c.List(ctx, "users")
+	if removed, err := c.RemoveDelta(ctx, "users", list.Entries[0].TsSeq.String()); err != nil || !removed {
+		t.Fatalf("real RemoveDelta = %v, %v; want true, nil", removed, err)
+	}
+}
+
 // TestSampleEmptyCatalogCachesOnce: the sample of a still-empty catalog is a
 // legitimate cacheable value — the loader must run once, not on every call.
 func TestSampleEmptyCatalogCachesOnce_Redis(t *testing.T) {

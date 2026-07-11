@@ -52,6 +52,19 @@ func (c *Client) RemoveDelta(ctx context.Context, catalog, tsSeq string) (bool, 
 	if err != nil {
 		return false, err
 	}
+	// Probe existence BEFORE installing any barrier: the bumps below mint
+	// permanent hash fields keyed by the caller-supplied catalog, and an
+	// operator retrying with a mistyped (or arbitrarily long — this path
+	// accepts legacy names the write-side caps reject) catalog/tsSeq must
+	// not grow Redis state on every attempt. The probe-then-remove gap is
+	// benign: tsSeq allocation is monotonic, so a delta can only DISAPPEAR
+	// between the two (removed=false with a harmless extra bump), never
+	// appear.
+	if exists, err := c.reader.HasDelta(ctx, catalog, id); err != nil {
+		return false, fmt.Errorf("probe delta: %w", err)
+	} else if !exists {
+		return false, nil
+	}
 	// Install the sample write barrier BEFORE removing anything: if the bump
 	// failed after the ZREM (e.g. a separate sample-cache Redis briefly
 	// down), the delta would be gone with the barrier at the old generation,
