@@ -190,8 +190,8 @@ so the policy decides per class: snapshot `Get`s are read-through and snapshot
 - **Skip deltas (return `nil`).** A delta is read only until the next snapshot
   absorbs it, then never again — rarely worth a Redis round-trip. (They're also
   client-uploaded via presign, so they could only ever be read-through cached,
-  never write-through warmed.) For genuinely hot re-reads, hand `storage.Delta` a
-  cheap in-process `cached.NewMemoryCache(time.Minute)` instead.
+  never write-through warmed.) For genuinely hot re-reads, hand `storage.Delta`
+  a short-TTL `cached.NewRedisCache` instead.
 
 Because routing is by Kind, **snapshots and deltas may share one bucket** — no path
 inspection, no bucket split. Separate buckets stay tidier for independent
@@ -552,13 +552,12 @@ backed by an ephemeral, LRU-evictable **cache Redis**:
 
 ```go
 // Build the cache tiers ONCE and share the instances — don't construct a cache
-// inside the policy, or you get one (with its own cleanup goroutine) per call.
-// `backends` is the bare resolver from Quick Start; `resolve` is what you pass to
-// lake.New. A snapshot Put warms the cache (write-through), so the next read
-// skips a cold object-store GET. Routing is by Kind, not bucket.
+// inside the policy. `backends` is the bare resolver from Quick Start; `resolve`
+// is what you pass to lake.New. A snapshot Put warms the cache (write-through),
+// so the next read skips a cold object-store GET. Routing is by Kind, not bucket.
 cacheRDB := redis.NewClient(&redis.Options{Addr: "cache-redis:6379"}) // ephemeral, LRU
 snapCache := cached.NewRedisCache(cacheRDB, 2*time.Hour) // snapshots: shared, long TTL
-deltaCache := cached.NewMemoryCache(time.Minute)         // deltas (optional): process-local
+deltaCache := cached.NewRedisCache(cacheRDB, time.Minute) // deltas (optional): short TTL
 
 resolve := cached.Resolver(backends, func(kind storage.Kind, provider, bucket string) cached.Cache {
     switch kind {
