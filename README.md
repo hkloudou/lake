@@ -221,24 +221,21 @@ func New(prefix string, rdb *redis.Client, resolve storage.Resolver, opts ...fun
 |--------|-------------|
 | `WithSnapTarget(provider, bucket)` | Where Lake writes auto-generated snapshots. Omit — or pass both empty — → no auto-snapshotting (reads replay all deltas) |
 | `WithSnapMinDeltas(n)` | Snapshot only once `n` deltas have accumulated past the current snap (default 1). Each snapshot uploads the whole document, so on a large, frequently written catalog the default turns every write into a full-document upload; `n` trades that for replaying up to `n-1` deltas per read |
-| `WithSampleCacheURL(url)` / `WithSampleCacheRedis(rdb)` | Route the Sampler memo hash (`<prefix>:m:*`) to a separate Redis. The URL form creates a client Lake owns — `Close` releases it |
+| `WithSampleCacheRedis(rdb)` | Route the Sampler memo hash (`<prefix>:m:*`) to a separate, evictable Redis |
 | `WithHandleSecret(secret)` | HMAC-sign every `WriteHandle`; `WriteNotify` then rejects tampered or expired handles (see **Write** below). Every process sharing the prefix needs the same secret |
 | `(*Client) Use(handler EventHandler)` | Register an event handler (safe on a live Client; copy-on-write) |
-| `(*Client) Close()` | Stop the background Redis-clock ticker and release Lake-owned resources. Optional for a process-lifetime Client; call it from tests / multi-tenant hosts that create many Clients |
 
-`New` panics on an empty `prefix`, nil `rdb`, or nil `resolve`; option
-constructors panic on invalid input (`WithSnapTarget` on an ambiguous
-provider/bucket, `WithHandleSecret` on an empty secret, `WithSampleCacheURL` on
-a bad URL) — all programmer errors, caught at construction time.
+A Client has no background goroutines and nothing to close. `New` panics on an
+empty `prefix`, nil `rdb`, or nil `resolve`; option constructors panic on
+invalid input (`WithSnapTarget` on an ambiguous provider/bucket,
+`WithSnapMinDeltas(0)`, `WithHandleSecret` on an empty secret) — all programmer
+errors, caught at construction time.
 
 > **Redis compatibility**: developed and tested against Redis 7.x. The notify
 > script calls `TIME` before writing, which relies on effect-based script
 > replication — the default since Redis 5.0 and the only mode since 7.0.
-> Scripts are dispatched by `EVALSHA` with an automatic full-body `EVAL`
-> fallback (cold script cache, `ERR NOSCRIPT` spellings, or an ACL that
-> denies the `EVALSHA` command itself), so only the `EVAL` permission is
-> strictly required — no `SCRIPT LOAD`. If local SHA-1 is unavailable (Go's
-> `fips140=only` mode) dispatch degrades to plain `EVAL` automatically.
+> Scripts are dispatched by `EVALSHA` with a full-body `EVAL` fallback on a
+> cold script cache, so only the `EVAL` permission is strictly required.
 > **Redis Cluster is not supported** for the index: the scripts operate on
 > keys that hash to different slots (the deployment-wide snap hash plus the
 > per-catalog delta zset and allocator), which cluster's one-slot-per-script
@@ -422,7 +419,10 @@ catalog advanced past the cached version; `WithMaxAge(d)` and a custom
 their `WithLoaderErrorDefault` / `WithLoaderErrorFallback` substitutes) are
 per-call and never written back, so a transient blip can't freeze a degraded
 value into the cache. The memo hash may live on a dedicated cache-tier Redis
-(`WithSampleCacheURL`); it's a derived cache — flush/restart merely recomputes.
+(`WithSampleCacheRedis`); it's a derived cache — flush/restart merely
+recomputes. There is no explicit invalidation call: when a loader's logic
+changes, change the indicator name (`"daily"` → `"daily-v2"`), and
+`DeleteCatalog` sweeps a deleted catalog's entries.
 
 ### Backup
 
@@ -449,7 +449,6 @@ err := client.IterateSnaps(ctx, func(catalog string, snap lake.SnapInfo) bool {
 | `(*Client) RemoveDelta(ctx, catalog, tsSeq) (bool, error)` | Remove one poison delta from the index (the body object stays). The **only** correct way to unblock a catalog wedged by an unappliable body |
 | `(*Client) Compact(ctx, catalog) (int64, error)` | Trim the delta zset up to the current snapshot; index-only, safe anytime, no background reaper |
 | `(*Client) DeleteCatalog(ctx, catalog) (bool, error)` | Drop a catalog from the index — delta log, snap pointer, allocator and cached samples; objects in storage stay. Returns whether it existed |
-| `(*Client) InvalidateSamples(ctx, indicator, catalogs...) (int64, error)` | Drop cached samples (e.g. after a loader code change or catalog deletion); next Sample/Batch recomputes |
 
 `RemoveDelta` takes the `tsSeq` string verbatim from the merge error
 (`merge failed (path=… tsSeq=1700000000_42 …)`). It is destructive — the
@@ -488,12 +487,10 @@ object path is a Lake convention:
 For path safety the catalog is encoded: pure-lowercase `users` → `(users`,
 pure-uppercase `USERS` → `)USERS`, mixed / non-ASCII → lowercased base32.
 Catalog validation forbids `:` `|` `(` `)` so the forms never collide, and
-**new writes** cap names at 128 bytes so the encoded form always fits one path
+names are capped at 128 bytes so the encoded form always fits one path
 component on every backend (the base32 form of 128 bytes is 208 chars, under
-the 255-byte filesystem limit). Length caps bind only where a name mints new
-state (WriteBegin / WriteNotify / NewSampler); List, RemoveDelta, Compact and
-the read path accept longer pre-existing names, so tightening a cap can never
-strand persisted data. Sample indicators follow the same rules as catalogs.
+the 255-byte filesystem limit). Sample indicators follow the same rules as
+catalogs.
 
 ### Three-step direct upload
 
@@ -609,13 +606,11 @@ client.Use(func(catalog, event string, attrs map[string]any) {
 | Event | Attrs |
 |-------|-------|
 | `List` / `BatchList` | — |
-| `ListLargeBacklog` | `entries` — a list returned ≥ 10,000 unsnapshotted deltas; configure a snap target or run `Compact` |
 | `Read` | — (every `Read*` call, before bodies are fetched) |
 | `WriteBegin` | `path`, `mergeType`, `provider`, `bucket` |
 | `WriteNotify` | `path`, `uri` |
 | `Sample` / `BatchSample` | `indicator` |
 | `SampleCacheError` | `op`, `err` |
-| `InvalidateSample` | `indicator` |
 | `RemoveDelta` | `tsSeq` |
 | `DeleteCatalog` | — |
 | `Compact` | — |

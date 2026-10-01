@@ -79,7 +79,7 @@ func TestWriteReadRoundTrip_Redis(t *testing.T) {
 	// ReadString triggered an async snapshot save (WithSnapTarget). Wait for it to
 	// be indexed, both to exercise that path and so its <prefix>:s write lands
 	// before cleanup (a fire-and-forget goroutine otherwise writes after Cleanup).
-	if !waitFor(func() bool { s, _ := c.reader.GetLatestSnap(ctx, "users"); return s != nil }) {
+	if !waitFor(func() bool { s, _ := c.idx.GetLatestSnap(ctx, "users"); return s != nil }) {
 		t.Fatal("snapshot was not indexed within timeout")
 	}
 }
@@ -131,7 +131,7 @@ func TestReadBytesMutationDoesNotCorruptSnapshot(t *testing.T) {
 	}
 
 	var snap *SnapInfo
-	if !waitFor(func() bool { snap, _ = c.reader.GetLatestSnap(ctx, "users"); return snap != nil }) {
+	if !waitFor(func() bool { snap, _ = c.idx.GetLatestSnap(ctx, "users"); return snap != nil }) {
 		t.Fatal("snapshot was not indexed within timeout")
 	}
 	_, _, path, err := objkey.ParseURI(snap.URI)

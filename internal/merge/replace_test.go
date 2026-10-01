@@ -71,11 +71,9 @@ func TestReplaceMerger(t *testing.T) {
 		},
 	}
 
-	merger := NewReplaceMerger()
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := merger.Merge([]byte(tt.original), []byte(tt.data), tt.field)
+			result, err := replace([]byte(tt.original), []byte(tt.data), tt.field)
 			if err != nil {
 				t.Fatalf("Merge failed: %v", err)
 			}
@@ -96,8 +94,7 @@ func TestReplaceMerger(t *testing.T) {
 }
 
 func TestReplaceMerger_RejectsInvalidRootJSON(t *testing.T) {
-	merger := NewReplaceMerger()
-	if _, err := merger.Merge([]byte(`{"old":"data"}`), []byte(`not json`), ""); err == nil {
+	if _, err := replace([]byte(`{"old":"data"}`), []byte(`not json`), ""); err == nil {
 		t.Fatal("root replace must reject invalid JSON")
 	}
 }
@@ -108,9 +105,8 @@ func TestReplaceMerger_RejectsInvalidRootJSON(t *testing.T) {
 // invalid body silently corrupts the merged document (err == nil, doc no
 // longer JSON) instead of failing with the offending delta identified.
 func TestReplaceMerger_RejectsInvalidFieldJSON(t *testing.T) {
-	merger := NewReplaceMerger()
 	for _, bad := range []string{`{invalid`, `not json`, ``, `{"a":1}garbage`} {
-		res, err := merger.Merge([]byte(`{"x":1}`), []byte(bad), "f")
+		res, err := replace([]byte(`{"x":1}`), []byte(bad), "f")
 		if err == nil {
 			t.Fatalf("field replace accepted invalid body %q → %q", bad, res)
 		}

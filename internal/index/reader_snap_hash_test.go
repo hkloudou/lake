@@ -58,20 +58,17 @@ func indexTestRedis(t *testing.T) (*redis.Client, string) {
 // field, value = "{stopTsSeq}".
 func TestSnapHashRoundTrip(t *testing.T) {
 	rdb, prefix := indexTestRedis(t)
-	w := NewWriter(rdb)
-	r := NewReader(rdb)
-	w.SetPrefix(prefix)
-	r.SetPrefix(prefix)
+	x := New(rdb, prefix)
 
 	ctx := context.Background()
 	stop := TimeSeqID{Timestamp: 1700000100, SeqID: 500}
 	uri := "oss://my-bucket/4f3a/(users/1700000100_500.snap"
 
-	if err := w.AddSnap(ctx, "users", stop, uri, ""); err != nil {
+	if err := x.AddSnap(ctx, "users", stop, uri, ""); err != nil {
 		t.Fatalf("AddSnap: %v", err)
 	}
 
-	val, err := rdb.HGet(ctx, r.MakeSnapsHashKey(), "users").Result()
+	val, err := rdb.HGet(ctx, x.snapsKey(), "users").Result()
 	if err != nil {
 		t.Fatalf("HGet: %v", err)
 	}
@@ -80,7 +77,7 @@ func TestSnapHashRoundTrip(t *testing.T) {
 		t.Fatalf("hash value: got %q, want %q", val, want)
 	}
 
-	got, err := r.GetLatestSnap(ctx, "users")
+	got, err := x.GetLatestSnap(ctx, "users")
 	if err != nil {
 		t.Fatalf("GetLatestSnap: %v", err)
 	}
@@ -102,23 +99,20 @@ func TestSnapHashRoundTrip(t *testing.T) {
 // stop overwrites the catalog's previous entry (still one field per catalog).
 func TestSnapHashOverwrite(t *testing.T) {
 	rdb, prefix := indexTestRedis(t)
-	w := NewWriter(rdb)
-	r := NewReader(rdb)
-	w.SetPrefix(prefix)
-	r.SetPrefix(prefix)
+	x := New(rdb, prefix)
 
 	ctx := context.Background()
 	stop1 := TimeSeqID{Timestamp: 1700000100, SeqID: 500}
 	stop2 := TimeSeqID{Timestamp: 1700000200, SeqID: 999}
 
-	if err := w.AddSnap(ctx, "users", stop1, "oss://b/"+stop1.String()+".snap", ""); err != nil {
+	if err := x.AddSnap(ctx, "users", stop1, "oss://b/"+stop1.String()+".snap", ""); err != nil {
 		t.Fatalf("first AddSnap: %v", err)
 	}
-	if err := w.AddSnap(ctx, "users", stop2, "oss://b/"+stop2.String()+".snap", ""); err != nil {
+	if err := x.AddSnap(ctx, "users", stop2, "oss://b/"+stop2.String()+".snap", ""); err != nil {
 		t.Fatalf("second AddSnap: %v", err)
 	}
 
-	got, err := r.GetLatestSnap(ctx, "users")
+	got, err := x.GetLatestSnap(ctx, "users")
 	if err != nil {
 		t.Fatalf("GetLatestSnap: %v", err)
 	}
@@ -126,7 +120,7 @@ func TestSnapHashOverwrite(t *testing.T) {
 		t.Fatalf("after overwrite: got %+v, want stop=%v", got, stop2)
 	}
 
-	cnt, err := rdb.HLen(ctx, r.MakeSnapsHashKey()).Result()
+	cnt, err := rdb.HLen(ctx, x.snapsKey()).Result()
 	if err != nil {
 		t.Fatalf("HLen: %v", err)
 	}
@@ -142,28 +136,25 @@ func TestSnapHashOverwrite(t *testing.T) {
 // the guard lives in Lua.
 func TestSnapHashMonotonic(t *testing.T) {
 	rdb, prefix := indexTestRedis(t)
-	w := NewWriter(rdb)
-	r := NewReader(rdb)
-	w.SetPrefix(prefix)
-	r.SetPrefix(prefix)
+	x := New(rdb, prefix)
 
 	ctx := context.Background()
 	older := TimeSeqID{Timestamp: 1700000100, SeqID: 500}
 	newer := TimeSeqID{Timestamp: 1700000200, SeqID: 1}
 
-	if err := w.AddSnap(ctx, "users", newer, "oss://b/"+newer.String()+".snap", ""); err != nil {
+	if err := x.AddSnap(ctx, "users", newer, "oss://b/"+newer.String()+".snap", ""); err != nil {
 		t.Fatalf("AddSnap newer: %v", err)
 	}
 	// A late save at an older stop is silently dropped.
-	if err := w.AddSnap(ctx, "users", older, "oss://b/"+older.String()+".snap", ""); err != nil {
+	if err := x.AddSnap(ctx, "users", older, "oss://b/"+older.String()+".snap", ""); err != nil {
 		t.Fatalf("AddSnap older: %v", err)
 	}
 	// Same stop, different uri: stored entry wins.
-	if err := w.AddSnap(ctx, "users", newer, "oss://elsewhere/"+newer.String()+".snap", ""); err != nil {
+	if err := x.AddSnap(ctx, "users", newer, "oss://elsewhere/"+newer.String()+".snap", ""); err != nil {
 		t.Fatalf("AddSnap equal: %v", err)
 	}
 
-	got, err := r.GetLatestSnap(ctx, "users")
+	got, err := x.GetLatestSnap(ctx, "users")
 	if err != nil {
 		t.Fatalf("GetLatestSnap: %v", err)
 	}
@@ -190,13 +181,13 @@ func TestSnapHashMonotonic(t *testing.T) {
 		`["9999999999_011","oss://x"]`,     // leading-zero seq
 		`["9999999999_1000000","oss://x"]`, // seq past 999999
 	} {
-		if err := rdb.HSet(ctx, r.MakeSnapsHashKey(), "users", corrupt).Err(); err != nil {
+		if err := rdb.HSet(ctx, x.snapsKey(), "users", corrupt).Err(); err != nil {
 			t.Fatalf("HSet corrupt %q: %v", corrupt, err)
 		}
-		if err := w.AddSnap(ctx, "users", older, "oss://b/"+older.String()+".snap", ""); err != nil {
+		if err := x.AddSnap(ctx, "users", older, "oss://b/"+older.String()+".snap", ""); err != nil {
 			t.Fatalf("AddSnap over corrupt %q: %v", corrupt, err)
 		}
-		got, err = r.GetLatestSnap(ctx, "users")
+		got, err = x.GetLatestSnap(ctx, "users")
 		if err != nil {
 			t.Fatalf("GetLatestSnap after healing %q: %v", corrupt, err)
 		}
@@ -211,10 +202,7 @@ func TestSnapHashMonotonic(t *testing.T) {
 // can enumerate the full set of OSS snap keys without an OSS LIST.
 func TestIterateSnapsBatchBackup(t *testing.T) {
 	rdb, prefix := indexTestRedis(t)
-	w := NewWriter(rdb)
-	r := NewReader(rdb)
-	w.SetPrefix(prefix)
-	r.SetPrefix(prefix)
+	x := New(rdb, prefix)
 
 	ctx := context.Background()
 	stops := map[string]TimeSeqID{
@@ -224,13 +212,13 @@ func TestIterateSnapsBatchBackup(t *testing.T) {
 	}
 
 	for catalog, stop := range stops {
-		if err := w.AddSnap(ctx, catalog, stop, "oss://b/"+stop.String()+".snap", ""); err != nil {
+		if err := x.AddSnap(ctx, catalog, stop, "oss://b/"+stop.String()+".snap", ""); err != nil {
 			t.Fatalf("AddSnap %s: %v", catalog, err)
 		}
 	}
 
 	all := make(map[string]SnapInfo)
-	if err := r.IterateSnaps(ctx, func(catalog string, snap SnapInfo) bool {
+	if err := x.IterateSnaps(ctx, func(catalog string, snap SnapInfo) bool {
 		all[catalog] = snap
 		return true
 	}); err != nil {
@@ -254,11 +242,10 @@ func TestIterateSnapsBatchBackup(t *testing.T) {
 // TestGetLatestSnapMissingReturnsNilNil covers the "no snap yet" path.
 func TestGetLatestSnapMissingReturnsNilNil(t *testing.T) {
 	rdb, prefix := indexTestRedis(t)
-	r := NewReader(rdb)
-	r.SetPrefix(prefix)
+	x := New(rdb, prefix)
 
 	ctx := context.Background()
-	got, err := r.GetLatestSnap(ctx, "never-written")
+	got, err := x.GetLatestSnap(ctx, "never-written")
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -272,22 +259,19 @@ func TestGetLatestSnapMissingReturnsNilNil(t *testing.T) {
 // hash — the property backup tools rely on for budgeted scans.
 func TestIterateSnapsEarlyStop(t *testing.T) {
 	rdb, prefix := indexTestRedis(t)
-	w := NewWriter(rdb)
-	r := NewReader(rdb)
-	w.SetPrefix(prefix)
-	r.SetPrefix(prefix)
+	x := New(rdb, prefix)
 
 	ctx := context.Background()
 	for i := 0; i < 50; i++ {
 		cat := fmt.Sprintf("c%02d", i)
 		ts := TimeSeqID{Timestamp: 1700000000 + int64(i), SeqID: 1}
-		if err := w.AddSnap(ctx, cat, ts, "oss://b/"+ts.String()+".snap", ""); err != nil {
+		if err := x.AddSnap(ctx, cat, ts, "oss://b/"+ts.String()+".snap", ""); err != nil {
 			t.Fatalf("AddSnap %s: %v", cat, err)
 		}
 	}
 
 	var seen int
-	err := r.IterateSnaps(ctx, func(string, SnapInfo) bool {
+	err := x.IterateSnaps(ctx, func(string, SnapInfo) bool {
 		seen++
 		return seen < 3 // request stop after the 3rd item
 	})

@@ -50,7 +50,7 @@ func TestDeleteCatalog_Redis(t *testing.T) {
 	if v, err := sampler.Sample(ctx, c.List(ctx, "users")); err != nil || v != 1 {
 		t.Fatalf("sample = %d/%v, want 1", v, err)
 	}
-	if !waitFor(func() bool { s, _ := c.reader.GetLatestSnap(ctx, "users"); return s != nil }) {
+	if !waitFor(func() bool { s, _ := c.idx.GetLatestSnap(ctx, "users"); return s != nil }) {
 		t.Fatal("snapshot not persisted")
 	}
 
@@ -62,7 +62,7 @@ func TestDeleteCatalog_Redis(t *testing.T) {
 	if existed, err := c.DeleteCatalog(ctx, "users"); err != nil || !existed {
 		t.Fatalf("DeleteCatalog: existed=%v err=%v, want true/nil", existed, err)
 	}
-	if _, err := c.saveSnapshot(ctx, "users", stale2.NextSnap().StopTsSeq, stale2.removeGen, []byte(`{"a":2}`)); err != nil {
+	if _, err := c.saveSnapshot(ctx, "users", stale2.Entries[len(stale2.Entries)-1].TsSeq, stale2.removeGen, []byte(`{"a":2}`)); err != nil {
 		t.Fatalf("stale saveSnapshot: %v", err)
 	}
 	_ = stale

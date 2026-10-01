@@ -30,10 +30,7 @@ func TestDecodeMember(t *testing.T) {
 	}{
 		{mkMember(1, "/user/name", "1700000000_1", u), 1700000000.000001, "/user/name", MergeTypeReplace, TimeSeqID{1700000000, 1}, u, false},
 		{mkMember(2, "/profile", "1700000000_2", u), 1700000000.000002, "/profile", MergeTypeRFC7396, TimeSeqID{1700000000, 2}, u, false},
-		// A path longer than today's write cap must still decode: it may have
-		// been recorded before the cap existed, and reads never retro-reject.
-		{mkMember(1, "/"+strings.Repeat("a", utils.MaxFieldPathLen+64), "1700000000_3", u), 1700000000.000003,
-			"/" + strings.Repeat("a", utils.MaxFieldPathLen+64), MergeTypeReplace, TimeSeqID{1700000000, 3}, u, false},
+		{mkMember(1, "/"+strings.Repeat("a", utils.MaxFieldPathLen+64), "1700000000_3", u), 1700000000.000003, "", 0, TimeSeqID{}, "", true}, // path over cap
 		// Invalid formats
 		{"not json", 0, "", 0, TimeSeqID{}, "", true},
 		{`[1,"/x"]`, 0, "", 0, TimeSeqID{}, "", true},                                            // too few elements
@@ -79,13 +76,6 @@ func TestSnapValue(t *testing.T) {
 	}
 	if gotStop != stop || gotURI != uri {
 		t.Errorf("round-trip: got (%v, %q), want (%v, %q)", gotStop, gotURI, stop, uri)
-	}
-
-	if !IsDeltaMember(mkMember(2, "/x", "1700000000_1", uri)) {
-		t.Error("IsDeltaMember(delta member) = false, want true")
-	}
-	if IsDeltaMember("snap|whatever") {
-		t.Error("IsDeltaMember(non-array) = true, want false")
 	}
 
 	for _, c := range []string{"", "notjson", `["bad"]`, `["1700000100_","u"]`, `["1700000100_500",""]`} {

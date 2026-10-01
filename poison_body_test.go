@@ -58,7 +58,7 @@ func TestPoisonBodyFailsLoudly_Redis(t *testing.T) {
 	}
 
 	// The failed read must not have snapshotted anything.
-	if snap, _ := c.reader.GetLatestSnap(ctx, "users"); snap != nil {
+	if snap, _ := c.idx.GetLatestSnap(ctx, "users"); snap != nil {
 		t.Fatalf("a failed read must not persist a snapshot, got %+v", snap)
 	}
 

@@ -1,12 +1,22 @@
 package lake
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/hkloudou/lake/v3/internal/index"
 )
+
+// marshalSampleCache builds a memo entry exactly as loadAndCache stores it
+// (tests plant entries with it); an empty generation is normalised to "0".
+func marshalSampleCache(meta SampleMeta, data any) ([]byte, error) {
+	if meta.RemoveGen == "" {
+		meta.RemoveGen = "0"
+	}
+	return json.Marshal([4]any{meta.Score, meta.UpdatedAt, meta.RemoveGen, data})
+}
 
 // listAt builds a ListResult whose LastUpdated() == score.
 func listAt(score float64) *ListResult {
@@ -76,11 +86,11 @@ func TestSamplerIsStale(t *testing.T) {
 	noPeers := map[string]*ListResult(nil) // tests don't exercise peers here
 
 	// Floor satisfied: cached version >= current, positive → fresh.
-	if base.isStale(SampleMeta{Score: 100}, listAt(100), noPeers, 0) {
+	if base.isStale(SampleMeta{Score: 100, RemoveGen: "0"}, listAt(100), noPeers) {
 		t.Error("equal version should be fresh")
 	}
 	// Data advanced → stale regardless of anything else.
-	if !base.isStale(SampleMeta{Score: 100}, listAt(200), noPeers, 0) {
+	if !base.isStale(SampleMeta{Score: 100, RemoveGen: "0"}, listAt(200), noPeers) {
 		t.Error("advanced data version must be stale")
 	}
 	// Empty catalog: a sample computed at version 0 for a catalog still at
@@ -88,60 +98,61 @@ func TestSamplerIsStale(t *testing.T) {
 	// catalog would re-run its loader (and re-write the memo) on every call.
 	// The removal-generation check still guards a catalog emptied by
 	// RemoveDelta, and the first real write (version > 0) invalidates.
-	if base.isStale(SampleMeta{Score: 0}, listAt(0), noPeers, 0) {
+	if base.isStale(SampleMeta{Score: 0, RemoveGen: "0"}, listAt(0), noPeers) {
 		t.Error("zero score for a still-empty catalog must be a hit")
 	}
 	// But a zero/garbage score never serves once the catalog has data.
-	if !base.isStale(SampleMeta{Score: 0}, listAt(100), noPeers, 0) {
+	if !base.isStale(SampleMeta{Score: 0, RemoveGen: "0"}, listAt(100), noPeers) {
 		t.Error("zero score with data present must be stale")
 	}
-	if !base.isStale(SampleMeta{Score: -1}, listAt(0), noPeers, 0) {
+	if !base.isStale(SampleMeta{Score: -1, RemoveGen: "0"}, listAt(0), noPeers) {
 		t.Error("negative (corrupt) score must be stale")
 	}
 	// Removal-generation mismatch is mandatory staleness in BOTH directions:
 	// the entry was not computed from the caller's view of the log.
-	if !base.isStale(SampleMeta{Score: 100, RemoveGen: "1"}, listAt(100), noPeers, 0) {
-		t.Error("entry from an older list generation must be stale")
+	if !base.isStale(SampleMeta{Score: 100, RemoveGen: "1"}, listAt(100), noPeers) {
+		t.Error("entry from a different generation must be stale")
 	}
 	genList := listAt(100)
 	genList.removeGen = "2"
-	if !base.isStale(SampleMeta{Score: 100, RemoveGen: "1"}, genList, noPeers, 0) {
+	if !base.isStale(SampleMeta{Score: 100, RemoveGen: "1"}, genList, noPeers) {
 		t.Error("generation mismatch must be stale")
 	}
 	genList.removeGen = "1"
-	if base.isStale(SampleMeta{Score: 100, RemoveGen: "1"}, genList, noPeers, 0) {
+	if base.isStale(SampleMeta{Score: 100, RemoveGen: "1"}, genList, noPeers) {
 		t.Error("matching generations must be fresh")
 	}
 
 	// maxAge: fresh within the window, stale past it.
+	now := time.Now().Unix()
 	aged := NewSampler[int]("x", base.loader, WithMaxAge[int](10*time.Second))
-	if aged.isStale(SampleMeta{Score: 100, UpdatedAt: 1000}, listAt(100), noPeers, 1005) {
+	if aged.isStale(SampleMeta{Score: 100, RemoveGen: "0", UpdatedAt: now - 5}, listAt(100), noPeers) {
 		t.Error("within maxAge should be fresh")
 	}
-	if !aged.isStale(SampleMeta{Score: 100, UpdatedAt: 1000}, listAt(100), noPeers, 1015) {
+	if !aged.isStale(SampleMeta{Score: 100, RemoveGen: "0", UpdatedAt: now - 15}, listAt(100), noPeers) {
 		t.Error("past maxAge should be stale")
 	}
 
-	// Sub-second maxAge must not truncate to "always stale": with the clock at
-	// the same second as the compute, the entry is younger than maxAge → fresh.
+	// Sub-second maxAge must not truncate to "always stale": an entry
+	// computed this very second is younger than maxAge → fresh.
 	subSec := NewSampler[int]("x", base.loader, WithMaxAge[int](500*time.Millisecond))
-	if subSec.isStale(SampleMeta{Score: 100, UpdatedAt: 1000}, listAt(100), noPeers, 1000) {
+	if subSec.isStale(SampleMeta{Score: 100, RemoveGen: "0", UpdatedAt: now + 1}, listAt(100), noPeers) {
 		t.Error("sub-second maxAge with zero elapsed must be fresh")
 	}
-	if !subSec.isStale(SampleMeta{Score: 100, UpdatedAt: 1000}, listAt(100), noPeers, 1001) {
+	if !subSec.isStale(SampleMeta{Score: 100, RemoveGen: "0", UpdatedAt: now - 1}, listAt(100), noPeers) {
 		t.Error("sub-second maxAge past one elapsed second must be stale")
 	}
 
 	// shouldRefresh is additive: true forces a refresh even when fresh...
 	force := NewSampler[int]("x", base.loader, WithShouldRefresh[int](
 		func(SampleMeta, *ListResult, map[string]*ListResult) bool { return true }))
-	if !force.isStale(SampleMeta{Score: 100}, listAt(100), noPeers, 0) {
+	if !force.isStale(SampleMeta{Score: 100, RemoveGen: "0"}, listAt(100), noPeers) {
 		t.Error("shouldRefresh=true must force a refresh")
 	}
 	// ...and false cannot suppress the data-version floor.
 	keep := NewSampler[int]("x", base.loader, WithShouldRefresh[int](
 		func(SampleMeta, *ListResult, map[string]*ListResult) bool { return false }))
-	if !keep.isStale(SampleMeta{Score: 100}, listAt(200), noPeers, 0) {
+	if !keep.isStale(SampleMeta{Score: 100, RemoveGen: "0"}, listAt(200), noPeers) {
 		t.Error("shouldRefresh=false must not override the data-version floor")
 	}
 }
@@ -160,17 +171,17 @@ func TestSamplerCrossCatalogRefresh(t *testing.T) {
 			return b != nil && b.LastUpdated() > baselineB
 		}),
 	)
-	meta := SampleMeta{Score: 100} // self's data version unchanged
+	meta := SampleMeta{Score: 100, RemoveGen: "0"} // self's data version unchanged
 
 	// Peer B still at baseline → fresh.
 	peers := map[string]*ListResult{"A": listAt(100), "B": listAt(baselineB)}
-	if sampler.isStale(meta, peers["A"], peers, 0) {
+	if sampler.isStale(meta, peers["A"], peers) {
 		t.Error("peer at baseline must NOT trigger refresh")
 	}
 
 	// Peer B advanced → predicate fires, refresh required.
 	peers["B"] = listAt(baselineB + 1)
-	if !sampler.isStale(meta, peers["A"], peers, 0) {
+	if !sampler.isStale(meta, peers["A"], peers) {
 		t.Error("peer past baseline MUST trigger refresh")
 	}
 
@@ -178,7 +189,7 @@ func TestSamplerCrossCatalogRefresh(t *testing.T) {
 	// Caller is responsible for including B in BatchList if they want
 	// this dependency evaluated.
 	peers = map[string]*ListResult{"A": listAt(100)}
-	if sampler.isStale(meta, peers["A"], peers, 0) {
+	if sampler.isStale(meta, peers["A"], peers) {
 		t.Error("absent peer must not trigger refresh (predicate sees nil)")
 	}
 }

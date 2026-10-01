@@ -44,7 +44,7 @@ func TestSaveSnapshotGuarded_PanicIsContainedAndObservable(t *testing.T) {
 	c.Use(spy.handler())
 
 	// Must not panic the caller (stands in for the detached goroutine).
-	c.saveSnapshotGuarded("users", TimeSeqID{Timestamp: 1700000000, SeqID: 1}, "0", []byte("{}"))
+	c.saveSnapshotAsync("users", TimeSeqID{Timestamp: 1700000000, SeqID: 1}, "0", []byte("{}"))
 
 	if !spy.seen("SnapshotError") {
 		t.Fatal("SnapshotError event must be emitted when the snapshot save panics")

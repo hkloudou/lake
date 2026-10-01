@@ -106,12 +106,10 @@ func TestRFC7396Examples(t *testing.T) {
 		},
 	}
 
-	merger := NewRFC7396Merger()
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Use RFC7396Merger.Merge with empty field (root document)
-			result, err := merger.Merge([]byte(tt.original), []byte(tt.patch), "")
+			result, err := mergePatch([]byte(tt.original), []byte(tt.patch), "")
 			if err != nil {
 				t.Fatalf("MergePatch failed: %v", err)
 			}
@@ -170,11 +168,9 @@ func TestRFC7396FieldScoping(t *testing.T) {
 		},
 	}
 
-	merger := NewRFC7396Merger()
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := merger.Merge([]byte(tt.original), []byte(tt.patch), tt.field)
+			result, err := mergePatch([]byte(tt.original), []byte(tt.patch), tt.field)
 			if err != nil {
 				t.Fatalf("MergePatch failed: %v", err)
 			}

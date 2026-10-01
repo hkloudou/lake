@@ -57,7 +57,7 @@ func TestCompactRoundTrip_Redis(t *testing.T) {
 	}
 	// The read fired an async snapshot save; compaction has nothing to trim
 	// until the snap pointer lands.
-	if !waitFor(func() bool { s, _ := c.reader.GetLatestSnap(ctx, "users"); return s != nil }) {
+	if !waitFor(func() bool { s, _ := c.idx.GetLatestSnap(ctx, "users"); return s != nil }) {
 		t.Fatal("snapshot was not indexed within timeout")
 	}
 
@@ -108,7 +108,7 @@ func TestCompactRoundTrip_Redis(t *testing.T) {
 	// write lands before cleanup.
 	stop3 := list.Entries[0].TsSeq
 	if !waitFor(func() bool {
-		s, _ := c.reader.GetLatestSnap(ctx, "users")
+		s, _ := c.idx.GetLatestSnap(ctx, "users")
 		return s != nil && s.StopTsSeq == stop3
 	}) {
 		t.Fatal("post-write snapshot was not indexed within timeout")

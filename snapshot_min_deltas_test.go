@@ -60,7 +60,7 @@ func TestWithSnapMinDeltas_Redis(t *testing.T) {
 		t.Fatalf("snapshot uploaded below the threshold (%d puts)", snapPuts.Load())
 	}
 	writeAndRead()
-	if !waitFor(func() bool { s, _ := c.reader.GetLatestSnap(ctx, "doc"); return s != nil }) {
+	if !waitFor(func() bool { s, _ := c.idx.GetLatestSnap(ctx, "doc"); return s != nil }) {
 		t.Fatal("third delta must trigger a snapshot")
 	}
 	if snapPuts.Load() != 1 {
