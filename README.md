@@ -497,7 +497,7 @@ catalogs.
 ```
 WriteBegin:  UUID v4 → object path → PresignPut(provider, bucket, path)  (NO Redis op)
 (client uploads bytes directly to handle.UploadURL)
-WriteNotify: Lua → monotonic tsSeq alloc; ZADD [mergeType, path, tsSeq, uri]  (NO storage op)
+WriteNotify: Lua → dedup by uri (a replay returns the original entry) → monotonic tsSeq alloc; ZADD [mergeType, path, tsSeq, uri]  (NO storage op)
 ```
 
 Because tsSeq is allocated only at notify (after the upload), a slow or aborted
