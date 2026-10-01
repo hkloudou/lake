@@ -289,6 +289,7 @@ bucket) is chosen **per write** and recorded in the delta.
 | Function | Description |
 |----------|-------------|
 | `(*Client) WriteBegin(ctx, WriteBeginRequest, opts...) (*WriteHandle, error)` | Reserve a UUID, derive the object path, presign a PUT against `(Provider, Bucket)`. **No Redis op.** |
+| `NewWriteHandle(ctx, WriteBeginRequest, presigner, secret, opts...) (*WriteHandle, error)` | The same without a Client: pure local computation plus one presign call. Lets a gateway, a batch job or a client SDK that holds the storage credentials mint handles offline and hand them to `WriteNotify` |
 | (HTTP PUT to `handle.UploadURL`) | The client uploads bytes directly using the signed URL + `handle.UploadHeaders`. |
 | `(*Client) WriteNotify(ctx, *WriteHandle) error` | Allocate the tsSeq and atomically record the delta (carrying `handle.URI`). **No storage op.** Idempotent per handle for an hour — safe to retry |
 
