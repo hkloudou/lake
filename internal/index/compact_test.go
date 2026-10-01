@@ -2,6 +2,7 @@ package index
 
 import (
 	"context"
+	"fmt"
 	"testing"
 )
 
@@ -31,7 +32,7 @@ func TestCompactDeltas(t *testing.T) {
 
 	var stops []TimeSeqID
 	for i := 0; i < 3; i++ {
-		ts, _, err := w.Notify(ctx, catalog, "/", MergeTypeReplace, uri)
+		ts, _, err := w.Notify(ctx, catalog, "/", MergeTypeReplace, fmt.Sprintf("%s%d", uri, i))
 		if err != nil {
 			t.Fatalf("Notify #%d: %v", i, err)
 		}

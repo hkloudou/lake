@@ -89,7 +89,8 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 
 	// Async snapshot save: fire-and-forget on a detached context so an aborted
 	// Read does not cancel a snapshot that benefits everyone else. Skipped
-	// entirely when no snap target is configured. At most ONE save per catalog
+	// entirely when no snap target is configured or fewer than snapMinDeltas
+	// deltas have accumulated past the snap. At most ONE save per catalog
 	// is in flight at a time (snapSaving): under a read storm — or a hot-write
 	// catalog whose stop advances every read — the extra saves would all be
 	// either duplicates or immediately superseded, yet each would copy the
@@ -103,15 +104,14 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 	// The goroutine gets a private copy of resultData: the caller is free to
 	// mutate its slice while the save is still reading — and a mutated
 	// snapshot would poison every later read of the catalog.
-	if c.snapProvider != "" {
-		if next := list.NextSnap(); next != nil {
-			if _, busy := c.snapSaving.LoadOrStore(list.catalog, struct{}{}); !busy {
-				snapData := append([]byte(nil), resultData...)
-				go func() {
-					defer c.snapSaving.Delete(list.catalog)
-					c.saveSnapshotGuarded(list.catalog, next.StopTsSeq, list.removeGen, snapData)
-				}()
-			}
+	if c.snapProvider != "" && len(list.Entries) >= c.snapMinDeltas {
+		next := list.NextSnap()
+		if _, busy := c.snapSaving.LoadOrStore(list.catalog, struct{}{}); !busy {
+			snapData := append([]byte(nil), resultData...)
+			go func() {
+				defer c.snapSaving.Delete(list.catalog)
+				c.saveSnapshotGuarded(list.catalog, next.StopTsSeq, list.removeGen, snapData)
+			}()
 		}
 	}
 	return resultData, nil

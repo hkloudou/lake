@@ -3,6 +3,7 @@ package index
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 // notifyScript atomically allocates a TimeSeqID and adds the committed delta
@@ -29,16 +30,25 @@ import (
 // a backwards clock) allocation spills into the next second instead of
 // failing — order is preserved and the wall clock catches up.
 //
+// Notify is IDEMPOTENT per uri for notifyDedupTTL: the member it committed is
+// remembered under KEYS[4], and a repeat call returns that same entry without
+// allocating again. Handles travel through clients that retry on timeouts; a
+// naive re-append would give the retried body a NEWER tsSeq than writes that
+// landed in between and silently overwrite them (a lost update). The dedup
+// record is kept even after RemoveDelta drops the entry: a retry of a write an
+// operator removed must not resurrect it.
+//
 // The member is the JSON array [mergeType, fieldPath, tsSeq, uri], assembled
 // here via cjson — this script is the single authoritative encoder. The uri
 // (provider://bucket/path) fully locates the body, so reads need no
 // key-derivation knowledge.
 //
-// KEYS[1] = delta zset, KEYS[2] = snaps hash, KEYS[3] = allocator key;
-// ARGV[1] = fieldPath, ARGV[2] = mergeType, ARGV[3] = uri, ARGV[4] = catalog.
+// KEYS[1] = delta zset, KEYS[2] = snaps hash, KEYS[3] = allocator key,
+// KEYS[4] = dedup key; ARGV[1] = fieldPath, ARGV[2] = mergeType, ARGV[3] = uri,
+// ARGV[4] = catalog, ARGV[5] = dedup TTL in seconds.
 const notifyScript = `
-local zsetKey, snapsKey, allocKey = KEYS[1], KEYS[2], KEYS[3]
-local fieldPath, mergeType, uri, catalog = ARGV[1], ARGV[2], ARGV[3], ARGV[4]
+local zsetKey, snapsKey, allocKey, dedupKey = KEYS[1], KEYS[2], KEYS[3], KEYS[4]
+local fieldPath, mergeType, uri, catalog, dedupTTL = ARGV[1], ARGV[2], ARGV[3], ARGV[4], ARGV[5]
 
 -- (ts, seq) floor: the pair the new allocation must sort strictly after.
 local ts = tonumber(redis.call("TIME")[1])
@@ -59,6 +69,13 @@ local function parse_tsseq(s)
     return tonumber(a), tonumber(b)
   end
   return nil
+end
+
+-- Replay: this uri was already committed — return the original entry.
+local prev = redis.call("GET", dedupKey)
+if prev then
+  local pts, pseq = parse_tsseq(cjson.decode(prev)[3])
+  return {pts, pseq, prev}
 end
 
 -- ALL three floors run on every call — the allocator is never trusted alone.
@@ -106,8 +123,15 @@ local member = cjson.encode({tonumber(mergeType), fieldPath, tsSeq, uri})
 local score = ts + (seq / 1000000.0)
 
 redis.call("ZADD", zsetKey, score, member)
+redis.call("SET", dedupKey, member, "EX", dedupTTL)
 return {ts, seq, member}
 `
+
+// notifyDedupTTL bounds how long a Notify stays idempotent for its uri. It
+// covers every realistic retry loop (and, with WithHandleSecret, the whole
+// window in which a handle is still accepted at all); a later repeat is a
+// new write. One small key per write for this long is the memory cost.
+const notifyDedupTTL = time.Hour
 
 // luaNotify dispatches notifyScript by SHA (EVALSHA with EVAL fallback on a
 // cold script cache) — this runs on every write.
@@ -116,14 +140,15 @@ var luaNotify = NewScript(notifyScript)
 // Notify allocates a TimeSeqID for an already-uploaded delta and commits it to
 // the Redis index. uri is the storage locator (provider://bucket/path) the
 // client uploaded to; it is embedded in the member so reads resolve the body
-// without any storage-key knowledge.
+// without any storage-key knowledge. A repeat call with the same uri within
+// notifyDedupTTL returns the entry the first call committed (see notifyScript).
 func (w *Writer) Notify(ctx context.Context, catalog, fieldPath string, mergeType MergeType, uri string) (TimeSeqID, string, error) {
 	if w.prefix == "" {
 		return TimeSeqID{}, "", fmt.Errorf("writer prefix not set; call SetPrefix")
 	}
 	res, err := RunScript(ctx, w.rdb, luaNotify,
-		[]string{w.MakeDeltaZsetKey(catalog), w.MakeSnapsHashKey(), w.MakeSeqAllocKey(catalog)},
-		fieldPath, int(mergeType), uri, catalog,
+		[]string{w.MakeDeltaZsetKey(catalog), w.MakeSnapsHashKey(), w.MakeSeqAllocKey(catalog), w.MakeNotifyDedupKey(uri)},
+		fieldPath, int(mergeType), uri, catalog, int64(notifyDedupTTL/time.Second),
 	).Result()
 	if err != nil {
 		return TimeSeqID{}, "", fmt.Errorf("notify eval: %w", err)

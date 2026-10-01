@@ -32,9 +32,10 @@ type Client struct {
 	writer    *index.Writer
 	reader    *index.Reader
 
-	resolve      storage.Resolver
-	snapProvider string // WithSnapTarget; "" disables auto-snapshotting
-	snapBucket   string
+	resolve       storage.Resolver
+	snapProvider  string // WithSnapTarget; "" disables auto-snapshotting
+	snapBucket    string
+	snapMinDeltas int // WithSnapMinDeltas; a read snapshots only past this many deltas
 
 	storMu     sync.RWMutex // guards stores
 	stores     map[string]storage.Storage
@@ -56,6 +57,7 @@ type option struct {
 	ownsSampleRdb bool
 	snapProvider  string
 	snapBucket    string
+	snapMinDeltas int
 	handleSecret  []byte
 }
 
@@ -77,7 +79,7 @@ func New(prefix string, rdb *redis.Client, resolve storage.Resolver, opts ...fun
 	if resolve == nil {
 		panic("lake: New requires a storage.Resolver")
 	}
-	o := &option{}
+	o := &option{snapMinDeltas: 1}
 	for _, fn := range opts {
 		fn(o)
 	}
@@ -93,6 +95,7 @@ func New(prefix string, rdb *redis.Client, resolve storage.Resolver, opts ...fun
 		resolve:       resolve,
 		snapProvider:  o.snapProvider,
 		snapBucket:    o.snapBucket,
+		snapMinDeltas: o.snapMinDeltas,
 		handleSecret:  o.handleSecret,
 		stores:        make(map[string]storage.Storage),
 		storFlight:    xsync.NewSingleFlight[storage.Storage](),
@@ -144,6 +147,19 @@ func WithSnapTarget(provider, bucket string) func(*option) {
 		panic(fmt.Errorf("lake: WithSnapTarget: %w", err))
 	}
 	return func(o *option) { o.snapProvider, o.snapBucket = provider, bucket }
+}
+
+// WithSnapMinDeltas sets how many deltas must have accumulated past the
+// current snapshot before a read persists a new one (default 1: every read
+// that sees a new delta snapshots). Each snapshot uploads the WHOLE document,
+// so on a large, frequently written catalog the default amplifies every
+// write into a full-document upload; a higher n trades that for replaying up
+// to n-1 deltas per read. Panics on n < 1.
+func WithSnapMinDeltas(n int) func(*option) {
+	if n < 1 {
+		panic(fmt.Sprintf("lake: WithSnapMinDeltas requires n >= 1, got %d", n))
+	}
+	return func(o *option) { o.snapMinDeltas = n }
 }
 
 // WithSampleCacheRedis routes the Sampler memo hash ("<prefix>:m:*") to a

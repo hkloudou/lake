@@ -29,7 +29,7 @@ func TestNotifyMemberConsistency_Redis(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Notify #1: %v", err)
 	}
-	if _, _, err := w.Notify(ctx, catalog, "/", MergeTypeReplace, uri); err != nil {
+	if _, _, err := w.Notify(ctx, catalog, "/", MergeTypeReplace, uri+"2"); err != nil {
 		t.Fatalf("Notify #2: %v", err)
 	}
 	if ts1.SeqID < 1 {

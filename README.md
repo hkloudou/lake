@@ -16,7 +16,8 @@
 
 - **🔒 Atomic Writes** — direct-upload then notify; the index entry (and its
   tsSeq) is allocated only after the upload succeeds, so a slow / aborted upload
-  never appears in the index — no pending phase, nothing to roll back
+  never appears in the index — no pending phase, nothing to roll back. Notify is
+  idempotent, so a client retry after a lost response never duplicates a write
 - **📜 RFC Standard** — Full RFC 7396 (JSON Merge Patch), plus simple field Replace
 - **⚡ High Throughput** — Up to 999,999 writes/sec per catalog (Lua-bound seqid)
 - **🧩 Storage-agnostic** — Lake core imports no cloud SDK. You inject one
@@ -62,14 +63,18 @@ WriteNotify → append the delta to the Redis log      (no storage write)
 
 The index entry is created only at `WriteNotify`, *after* the upload succeeded —
 so a slow or aborted upload never appears in the index, and there is no pending
-state to roll back.
+state to roll back. `WriteNotify` is idempotent per handle (for an hour): a retry
+after a lost response returns success without appending a second delta, so a
+retried body can never overtake writes that landed in between.
 
 **A read** fetches the snapshot pointer + delta log (1 atomic Redis op — a Lua
 script returns both together, so a read can never pair a stale pointer with a
 compacted log), loads the bodies through the resolver, and merges them. With a
 snapshot target configured a fresh snapshot is written back asynchronously, off
-the read's critical path; wrap the resolver in the recommended `storage/cached`
-decorator and bodies come from cache, not a cold fetch.
+the read's critical path (every read with new deltas by default; raise
+`WithSnapMinDeltas` on large, hot catalogs — each snapshot uploads the whole
+document); wrap the resolver in the recommended `storage/cached` decorator and
+bodies come from cache, not a cold fetch.
 
 ## 🚀 Quick Start
 
@@ -215,6 +220,7 @@ func New(prefix string, rdb *redis.Client, resolve storage.Resolver, opts ...fun
 | Option | Description |
 |--------|-------------|
 | `WithSnapTarget(provider, bucket)` | Where Lake writes auto-generated snapshots. Omit — or pass both empty — → no auto-snapshotting (reads replay all deltas) |
+| `WithSnapMinDeltas(n)` | Snapshot only once `n` deltas have accumulated past the current snap (default 1). Each snapshot uploads the whole document, so on a large, frequently written catalog the default turns every write into a full-document upload; `n` trades that for replaying up to `n-1` deltas per read |
 | `WithSampleCacheURL(url)` / `WithSampleCacheRedis(rdb)` | Route the Sampler memo hash (`<prefix>:m:*`) to a separate Redis. The URL form creates a client Lake owns — `Close` releases it |
 | `WithHandleSecret(secret)` | HMAC-sign every `WriteHandle`; `WriteNotify` then rejects tampered or expired handles (see **Write** below). Every process sharing the prefix needs the same secret |
 | `(*Client) Use(handler EventHandler)` | Register an event handler (safe on a live Client; copy-on-write) |
@@ -234,8 +240,9 @@ a bad URL) — all programmer errors, caught at construction time.
 > strictly required — no `SCRIPT LOAD`. If local SHA-1 is unavailable (Go's
 > `fips140=only` mode) dispatch degrades to plain `EVAL` automatically.
 > **Redis Cluster is not supported** for the index: the scripts operate on
-> multiple keys per catalog (snap hash + delta zset) and derive the seqid
-> counter key inside Lua, which cluster's one-slot-per-script rule rejects.
+> keys that hash to different slots (the deployment-wide snap hash plus the
+> per-catalog delta zset and allocator), which cluster's one-slot-per-script
+> rule rejects.
 > Use a standalone / primary-replica (Sentinel) index Redis; the cache tier
 > (`storage/cached`) has no such constraint.
 
@@ -286,7 +293,7 @@ bucket) is chosen **per write** and recorded in the delta.
 |----------|-------------|
 | `(*Client) WriteBegin(ctx, WriteBeginRequest, opts...) (*WriteHandle, error)` | Reserve a UUID, derive the object path, presign a PUT against `(Provider, Bucket)`. **No Redis op.** |
 | (HTTP PUT to `handle.UploadURL`) | The client uploads bytes directly using the signed URL + `handle.UploadHeaders`. |
-| `(*Client) WriteNotify(ctx, *WriteHandle) error` | Allocate the tsSeq and atomically record the delta (carrying `handle.URI`). **No storage op.** |
+| `(*Client) WriteNotify(ctx, *WriteHandle) error` | Allocate the tsSeq and atomically record the delta (carrying `handle.URI`). **No storage op.** Idempotent per handle for an hour — safe to retry |
 
 ```go
 type WriteBeginRequest struct {
@@ -338,6 +345,12 @@ handle's URI (the handle is untrusted input).
 > `storage.Presigner`. OSS supports it; file / memory return
 > `lake.ErrPresignNotSupported`.
 >
+> **Create-once uploads**: the OSS URL is signed with `x-oss-forbid-overwrite`,
+> so the object can be created exactly once — a second PUT during the URL's
+> lifetime cannot rewrite the body of a delta the index already references. A
+> client whose upload *retry* gets `409 FileAlreadyExists` should treat it as
+> success and proceed to `WriteNotify`.
+>
 > **Bodies are stored RAW** — for at-rest encryption use OSS SSE; compress
 > client-side if you want it.
 >
@@ -356,8 +369,8 @@ lake.MergeTypeRFC7396  // = 2: RFC 7396 JSON Merge Patch (null removes)
 
 | Function | Description |
 |----------|-------------|
-| `(*Client) List(ctx, catalog) *ListResult` | Snapshot info + delta index (1 HGet + 1 ZRange) |
-| `(*Client) BatchList(ctx, catalogs) map[string]*ListResult` | Batched list across N catalogs in 2 round-trips |
+| `(*Client) List(ctx, catalog) *ListResult` | Snapshot info + delta index, read atomically in 1 Lua call |
+| `(*Client) BatchList(ctx, catalogs) map[string]*ListResult` | The same for N catalogs in 1 pipelined round-trip |
 | `ReadBytes / ReadString / ReadMap(ctx, *ListResult)` | Merged document as bytes / string / map |
 | `Read[T any](ctx, *ListResult) (*T, error)` | Generic typed read |
 
@@ -435,6 +448,7 @@ err := client.IterateSnaps(ctx, func(catalog string, snap lake.SnapInfo) bool {
 |----------|-------------|
 | `(*Client) RemoveDelta(ctx, catalog, tsSeq) (bool, error)` | Remove one poison delta from the index (the body object stays). The **only** correct way to unblock a catalog wedged by an unappliable body |
 | `(*Client) Compact(ctx, catalog) (int64, error)` | Trim the delta zset up to the current snapshot; index-only, safe anytime, no background reaper |
+| `(*Client) DeleteCatalog(ctx, catalog) (bool, error)` | Drop a catalog from the index — delta log, snap pointer, allocator and cached samples; objects in storage stay. Returns whether it existed |
 | `(*Client) InvalidateSamples(ctx, indicator, catalogs...) (int64, error)` | Drop cached samples (e.g. after a loader code change or catalog deletion); next Sample/Batch recomputes |
 
 `RemoveDelta` takes the `tsSeq` string verbatim from the merge error
@@ -444,6 +458,11 @@ derived state: the removal bumps the catalog's **removal generation**, so an
 in-flight read that listed the removed delta can neither persist a snapshot
 nor cache a sample computed from pre-removal state. That barrier is exactly
 what a hand-issued `ZREM` would skip.
+
+`DeleteCatalog` applies the same barrier to a whole catalog: the index step is
+one atomic script that bumps the removal generation before dropping the log,
+so an in-flight read cannot resurrect the catalog through a late snapshot save,
+and the catalog may be written again immediately from an empty document.
 
 ## 📖 Core Concepts
 
@@ -508,18 +527,23 @@ tooling).
   Notify floors each allocation by this pair, the snap stop, and the newest
   delta, so a backwards Redis clock step (failover, NTP) can never mint a
   duplicate tsSeq or a write that sorts below the snapshot bound.
+
+{prefix}:n:{uri}        String  # notify dedup — the member committed for this write (1-hour TTL)
+  A repeat WriteNotify for the same handle returns this entry instead of
+  allocating again, so a retried write never overtakes later ones.
 ```
 
 ### Read flow
 
 ```
-List          ── 1× pipeline (snap HGet + delta ZRange)
+List          ── 1× Lua call (snap pointer + deltas after it, atomically)
+   ├── prune deltas a later Replace fully overwrites (never fetched)
    ├── load snapshot   (resolve(Snap, …).Get — cached when the policy caches Snap)
    ├── load deltas × N (resolve(Delta, …).Get, 10 workers)
    ↓
 merge.Merge   (CPU-bound, in-process)
    ├── return merged document
-   └── async (if WithSnapTarget): Put new snapshot to the snap target
+   └── async (if WithSnapTarget and ≥ WithSnapMinDeltas new deltas): Put new snapshot
 ```
 
 ## ⚙️ Configuration
@@ -556,6 +580,11 @@ client := lake.New("my-lake",
 )
 ```
 
+Cache keys are namespaced by `provider|bucket`, **not** by Lake prefix: two
+deployments sharing one cache Redis whose resolvers map the same logical
+`(provider, bucket)` to *different* physical buckets would read each other's
+bytes. Give such deployments separate cache instances / DBs, or distinct names.
+
 Everything in the cache Redis — snapshot bytes *and* the sample memo
 (`WithSampleCacheRedis`) — is rebuildable, so `maxmemory-policy allkeys-lru` plus
 per-key TTL evicts it safely; only the index Redis must persist. (Snapshot bytes
@@ -580,12 +609,15 @@ client.Use(func(catalog, event string, attrs map[string]any) {
 | Event | Attrs |
 |-------|-------|
 | `List` / `BatchList` | — |
+| `ListLargeBacklog` | `entries` — a list returned ≥ 10,000 unsnapshotted deltas; configure a snap target or run `Compact` |
+| `Read` | — (every `Read*` call, before bodies are fetched) |
 | `WriteBegin` | `path`, `mergeType`, `provider`, `bucket` |
 | `WriteNotify` | `path`, `uri` |
 | `Sample` / `BatchSample` | `indicator` |
 | `SampleCacheError` | `op`, `err` |
 | `InvalidateSample` | `indicator` |
 | `RemoveDelta` | `tsSeq` |
+| `DeleteCatalog` | — |
 | `Compact` | — |
 | `SnapshotError` | `stop`, `err` — the async snapshot save failed (it is otherwise invisible: reads never wait for it) |
 
@@ -646,6 +678,11 @@ Keeping bodies valid before upload is the contract.
 A snapshot is an optimization. If the async save fails, the next read
 regenerates it. Reads never wait for a snapshot to be persisted. With no
 `WithSnapTarget`, snapshotting is simply off — reads replay all deltas.
+
+A snapshot is the *whole* document, so its cost scales with document size,
+not with the number of new deltas. The default (`WithSnapMinDeltas(1)`) keeps
+replay at zero for read-heavy catalogs; for a large document that is written
+and read continuously, raise it so each upload absorbs several writes.
 
 ### Compaction is explicit — and index-only
 

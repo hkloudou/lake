@@ -69,3 +69,11 @@ func (w *indexIO) MakeSeqAllocKey(catalog string) string {
 	w.requirePrefix()
 	return w.prefix + ":seq:" + encode.EncodeRedisCatalogName(catalog)
 }
+
+// MakeNotifyDedupKey: per-write notify dedup record "<prefix>:n:<uri>",
+// holding the committed member for notifyDedupTTL (see notifyScript). The uri
+// is unique per write (it embeds the catalog and the handle's UUID).
+func (w *indexIO) MakeNotifyDedupKey(uri string) string {
+	w.requirePrefix()
+	return w.prefix + ":n:" + uri
+}

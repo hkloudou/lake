@@ -208,10 +208,10 @@ func (c *Client) signHandle(h *WriteHandle) string {
 // HMAC signature over the identity fields, pinning Path / MergeType /
 // ExpiresAt to what WriteBegin issued.
 //
-// Notify is NOT idempotent — duplicate calls produce duplicate deltas (each
-// with its own tsSeq, all referencing the same URI). For Replace / RFC7396,
-// applying the same body twice is benign; nevertheless, callers should retry
-// only after the previous Notify definitively errored.
+// Notify is idempotent per handle for an hour: a retry after a lost response
+// returns success without appending a second delta, so a retried body can
+// never overtake writes that landed in between. (A repeat after that window
+// is treated as a new write.)
 func (c *Client) WriteNotify(ctx context.Context, h *WriteHandle) error {
 	if h == nil {
 		return errors.New("nil WriteHandle")
