@@ -7,66 +7,56 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// TestNotifyMemberConsistency_Redis pins the Lua↔Go contract that nothing else
-// fully exercises. The notify script (writer_atomic.go) is the *sole* encoder of
-// a delta: it builds the member [mergeType, path, tsSeq, uri] via cjson and the
-// score via `ts + seqid/1e6`, all server-side. DecodeDeltaMember + TimeSeqID.Score
-// are the Go *decoders*. The two live in different languages and must agree
-// byte-for-byte (member shape, number formatting) and bit-for-bit (score). The
-// unit tests build members with Go's json.Marshal, so only a real Redis catches a
-// drift. Skips when Redis is unreachable.
+// TestNotifyMemberConsistency_Redis pins the Lua↔Go contract: the notify
+// script is the sole encoder of a delta (member via cjson, score via
+// ts + seq/1e6) and DecodeDeltaMember + TimeSeqID.Score are the decoders.
+// Only a real Redis catches a drift between the two. It also pins notify's
+// idempotency: a repeat call for the same uri returns the original tsSeq and
+// appends nothing.
 func TestNotifyMemberConsistency_Redis(t *testing.T) {
 	rdb, prefix := indexTestRedis(t)
-	w := NewWriter(rdb)
-	w.SetPrefix(prefix)
+	x := New(rdb, prefix)
 	ctx := context.Background()
-
 	const catalog = "users"
-	const uri = "oss://bucket/4f3a/(users/abc.dat"
 
-	// Drive the real notify Lua twice (distinct merge types / paths).
-	ts1, member1, err := w.Notify(ctx, catalog, "/profile", MergeTypeRFC7396, uri)
+	ts1, err := x.Notify(ctx, catalog, "/profile", MergeTypeRFC7396, "oss://bucket/4f3a/(users/a.dat")
 	if err != nil {
 		t.Fatalf("Notify #1: %v", err)
 	}
-	if _, _, err := w.Notify(ctx, catalog, "/", MergeTypeReplace, uri); err != nil {
+	if _, err := x.Notify(ctx, catalog, "/", MergeTypeReplace, "oss://bucket/4f3a/(users/b.dat"); err != nil {
 		t.Fatalf("Notify #2: %v", err)
 	}
-	if ts1.SeqID < 1 {
-		t.Fatalf("seqid must be >= 1, got %d", ts1.SeqID)
+	again, err := x.Notify(ctx, catalog, "/profile", MergeTypeRFC7396, "oss://bucket/4f3a/(users/a.dat")
+	if err != nil || again != ts1 {
+		t.Fatalf("repeat Notify = %v/%v, want the original %v (idempotent)", again, err, ts1)
 	}
 
-	// Read the zset back exactly as the read path does.
-	zs, err := rdb.ZRangeByScoreWithScores(ctx, w.MakeDeltaZsetKey(catalog),
-		&redis.ZRangeBy{Min: "-inf", Max: "+inf"}).Result()
+	zs, err := rdb.ZRangeByScoreWithScores(ctx, x.deltaKey(catalog), &redis.ZRangeBy{Min: "-inf", Max: "+inf"}).Result()
 	if err != nil {
 		t.Fatalf("zrange: %v", err)
 	}
 	if len(zs) != 2 {
-		t.Fatalf("zset entries = %d, want 2", len(zs))
+		t.Fatalf("zset entries = %d, want 2 (the repeat must not append)", len(zs))
 	}
-
-	var sawMember1 bool
 	for _, z := range zs {
-		member := z.Member.(string)
-		if member == member1 {
-			sawMember1 = true
-		}
-		// (1) The cjson-encoded member must decode through the Go reader — this
-		// is what catches a Lua/cjson shape or number-format drift that the
-		// json.Marshal-based unit tests cannot see.
-		d, derr := DecodeDeltaMember(member, z.Score)
+		d, derr := DecodeDeltaMember(z.Member.(string), z.Score)
 		if derr != nil {
-			t.Fatalf("DecodeDeltaMember(%q, %.6f): %v — Lua member drifted from the Go decoder", member, z.Score, derr)
+			t.Fatalf("DecodeDeltaMember(%q, %.6f): %v — Lua member drifted from the Go decoder", z.Member, z.Score, derr)
 		}
-		// (2) Explicit score lockstep: the score Go recomputes from the decoded
-		// tsSeq must bit-match the score Lua computed and Redis stored. (Decode
-		// already enforces this; re-assert so weakening that guard fails here.)
 		if d.TsSeq.Score() != z.Score {
 			t.Fatalf("score lockstep broken for %s: Go=%v, Redis=%v", d.TsSeq, d.TsSeq.Score(), z.Score)
 		}
 	}
-	if !sawMember1 {
-		t.Fatalf("Notify returned member %q but it is not the one stored in the zset", member1)
+	if zs[0].Member.(string) == zs[1].Member.(string) || DecodeOrFatal(t, zs[0]).TsSeq != ts1 {
+		t.Fatalf("first stored member %q is not the one Notify #1 returned (%v)", zs[0].Member, ts1)
 	}
+}
+
+func DecodeOrFatal(t *testing.T, z redis.Z) *DeltaInfo {
+	t.Helper()
+	d, err := DecodeDeltaMember(z.Member.(string), z.Score)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
 }

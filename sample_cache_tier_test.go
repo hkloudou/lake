@@ -53,7 +53,7 @@ func TestCacheTier_Redis(t *testing.T) {
 	}
 
 	snapKey := "lake_cache:" + snapNS + ":" + snapPath
-	memoKey := c.reader.MakeSampleIndicatorKey("daily")
+	memoKey := c.idx.SampleKey("daily")
 
 	// Both land on the cache tier (DB 14)...
 	if n, _ := cache.Exists(ctx, snapKey).Result(); n != 1 {

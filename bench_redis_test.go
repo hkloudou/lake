@@ -88,7 +88,7 @@ func BenchmarkNotify(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, _, err := c.writer.Notify(ctx, "bench", "/", MergeTypeReplace, h.URI); err != nil {
+		if _, err := c.idx.Notify(ctx, "bench", "/", MergeTypeReplace, fmt.Sprintf("%s.%d", h.URI, i)); err != nil {
 			b.Fatal(err)
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/hkloudou/lake/v3/internal/index"
 	"github.com/hkloudou/lake/v3/storage"
@@ -22,7 +23,6 @@ func newMemClient(t *testing.T, opts ...func(*option)) (*Client, *mem.Store, con
 		return presignBucket{store.Bucket(bucket)}, nil
 	}
 	c := New(prefix, rdb, resolve, opts...)
-	t.Cleanup(func() { _ = c.Close() })
 	return c, store, context.Background()
 }
 
@@ -55,8 +55,8 @@ func TestNotifyMonotonicAcrossClockRegression_Redis(t *testing.T) {
 
 	// Simulate "the clock used to be 1h ahead": plant an allocator value in
 	// the future, as if issued before a 1-hour backwards step.
-	future := c.reader.NowUnix() + 3600
-	if err := c.rdb.Set(ctx, c.reader.Prefix()+":seq:users",
+	future := time.Now().Unix() + 3600
+	if err := c.rdb.Set(ctx, c.idx.Prefix()+":seq:users",
 		index.TimeSeqID{Timestamp: future, SeqID: 41}.String(), 0).Err(); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestNotifyMonotonicAcrossClockRegression_Redis(t *testing.T) {
 	writeDelta(t, c, store, "users", "/", MergeTypeReplace, `{"n":2}`)
 	newest := c.List(ctx, "users").Entries[1].TsSeq
 	stale := index.TimeSeqID{Timestamp: newest.Timestamp - 3600, SeqID: 1}
-	if err := c.rdb.Set(ctx, c.reader.Prefix()+":seq:users", stale.String(), 0).Err(); err != nil {
+	if err := c.rdb.Set(ctx, c.idx.Prefix()+":seq:users", stale.String(), 0).Err(); err != nil {
 		t.Fatal(err)
 	}
 	writeDelta(t, c, store, "users", "/", MergeTypeReplace, `{"n":3}`)
@@ -93,8 +93,8 @@ func TestNotifyMonotonicAcrossClockRegression_Redis(t *testing.T) {
 
 	// Snap-stop floor: even with the allocator key gone (expired), a write
 	// must sort strictly after the snapshot bound or it is unreadable.
-	stop := index.TimeSeqID{Timestamp: c.reader.NowUnix() + 7200, SeqID: 7}
-	if err := c.writer.AddSnap(ctx, "users2", stop, "mem://snaps/x", "0"); err != nil {
+	stop := index.TimeSeqID{Timestamp: time.Now().Unix() + 7200, SeqID: 7}
+	if err := c.idx.AddSnap(ctx, "users2", stop, "mem://snaps/x", "0"); err != nil {
 		t.Fatal(err)
 	}
 	writeDelta(t, c, store, "users2", "/", MergeTypeReplace, `{"n":2}`)
@@ -111,8 +111,8 @@ func TestNotifyMonotonicAcrossClockRegression_Redis(t *testing.T) {
 }
 
 // TestRemoveDeltaNoStateForMissingTarget_Redis: RemoveDelta on a nonexistent
-// catalog/tsSeq must be a pure no-op — the pre-removal barrier bump must not
-// mint a permanent "<prefix>:mrg" field for a name that holds nothing (a
+// catalog/tsSeq must be a pure no-op — a failed attempt must not
+// mint a permanent removal-generation field for a name that holds nothing (a
 // mistyped ops call, or an arbitrarily long legacy-format name this path
 // accepts, must not grow Redis state per attempt).
 func TestRemoveDeltaNoStateForMissingTarget_Redis(t *testing.T) {
@@ -121,8 +121,8 @@ func TestRemoveDeltaNoStateForMissingTarget_Redis(t *testing.T) {
 	if removed, err := c.RemoveDelta(ctx, "no-such-catalog", "1700000000_1"); err != nil || removed {
 		t.Fatalf("RemoveDelta(missing) = %v, %v; want false, nil", removed, err)
 	}
-	if n, err := c.sampleRdb.HExists(ctx, c.reader.MakeSampleRemoveGenKey(), "no-such-catalog").Result(); err != nil || n {
-		t.Fatalf("mrg field minted for a nonexistent catalog (exists=%v err=%v)", n, err)
+	if n, err := c.rdb.HExists(ctx, c.idx.Prefix()+":s", "no-such-catalog:rg").Result(); err != nil || n {
+		t.Fatalf("removal generation minted for a nonexistent catalog (exists=%v err=%v)", n, err)
 	}
 
 	// A real catalog with the WRONG tsSeq must also stay state-free.
@@ -130,8 +130,8 @@ func TestRemoveDeltaNoStateForMissingTarget_Redis(t *testing.T) {
 	if removed, err := c.RemoveDelta(ctx, "users", "1600000000_1"); err != nil || removed {
 		t.Fatalf("RemoveDelta(wrong tsSeq) = %v, %v; want false, nil", removed, err)
 	}
-	if n, _ := c.sampleRdb.HExists(ctx, c.reader.MakeSampleRemoveGenKey(), "users").Result(); n {
-		t.Fatal("mrg field minted for a wrong-tsSeq removal attempt")
+	if n, _ := c.rdb.HExists(ctx, c.idx.Prefix()+":s", "users:rg").Result(); n {
+		t.Fatal("removal generation minted for a wrong-tsSeq removal attempt")
 	}
 
 	// And the real removal still works end to end.
@@ -164,28 +164,6 @@ func TestSampleEmptyCatalogCachesOnce_Redis(t *testing.T) {
 	}
 	if n := runs.Load(); n != 1 {
 		t.Fatalf("loader ran %d times for an unchanged empty catalog, want 1", n)
-	}
-}
-
-// TestClientCloseStopsTickerAndIsIdempotent is a smoke test for the new
-// lifecycle hook: Close twice, then keep using the client.
-func TestClientClose_Redis(t *testing.T) {
-	c, store, ctx := newMemClient(t)
-	writeDelta(t, c, store, "users", "/", MergeTypeReplace, `{"a":1}`)
-
-	if err := c.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if err := c.Close(); err != nil {
-		t.Fatalf("second Close: %v", err)
-	}
-	// A closed client still serves reads (clock falls back).
-	list := c.List(ctx, "users")
-	if list.Err != nil {
-		t.Fatal(list.Err)
-	}
-	if got, err := ReadString(ctx, list); err != nil || got != `{"a":1}` {
-		t.Fatalf("read after Close: %q err=%v", got, err)
 	}
 }
 

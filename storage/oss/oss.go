@@ -125,6 +125,12 @@ func (b *bucket) Put(ctx context.Context, _ /*catalog*/, path string, data []byt
 // PresignPut signs a PUT URL. UserMetadata is baked into the signature, so the
 // client MUST send the listed headers verbatim — this keeps the OSS object
 // self-describing.
+//
+// The URL is signed with x-oss-forbid-overwrite, so the object can be created
+// exactly once: the URL stays valid for its TTL, and without this a second
+// PUT could rewrite the body of a delta the index already references. A
+// client whose upload retry gets 409 FileAlreadyExists should treat it as
+// success (an earlier attempt landed) and proceed to WriteNotify.
 func (b *bucket) PresignPut(_ context.Context, _ /*catalog*/, path string, opts storage.PresignOptions) (storage.PresignedUpload, error) {
 	h, err := b.c.handle(b.name)
 	if err != nil {
@@ -140,8 +146,8 @@ func (b *bucket) PresignPut(_ context.Context, _ /*catalog*/, path string, opts 
 	if expireSecs < 1 {
 		expireSecs = 1
 	}
-	signOpts := []alioss.Option{}
-	headers := map[string]string{}
+	signOpts := []alioss.Option{alioss.ForbidOverWrite(true)}
+	headers := map[string]string{"x-oss-forbid-overwrite": "true"}
 	if opts.ContentType != "" {
 		signOpts = append(signOpts, alioss.ContentType(opts.ContentType))
 		headers["Content-Type"] = opts.ContentType

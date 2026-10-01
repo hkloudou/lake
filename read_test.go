@@ -16,7 +16,7 @@ func TestFillDeltasBody_CanceledContextDoesNotHang(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- c.fillDeltasBody(ctx, "users", []index.DeltaInfo{{
+		done <- c.fillBodies(ctx, "users", []index.DeltaInfo{{
 			TsSeq: index.TimeSeqID{Timestamp: 1700000000, SeqID: 1},
 			URI:   "mem://data/missing.dat",
 		}})
@@ -28,6 +28,6 @@ func TestFillDeltasBody_CanceledContextDoesNotHang(t *testing.T) {
 			t.Fatalf("err = %v, want context.Canceled", err)
 		}
 	case <-time.After(200 * time.Millisecond):
-		t.Fatal("fillDeltasBody hung after context cancellation")
+		t.Fatal("fillBodies hung after context cancellation")
 	}
 }

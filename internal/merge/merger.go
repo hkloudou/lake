@@ -1,11 +1,4 @@
+// Package merge replays a catalog's delta log onto a base document. Two
+// strategies exist: Replace (set a subtree verbatim) and RFC 7396 JSON Merge
+// Patch. PruneDead drops entries a later Replace makes unobservable.
 package merge
-
-// Merger defines the interface for all merge strategies
-type Merger interface {
-	// Merge applies the merge operation
-	// original: the original JSON document
-	// data: the patch/value data to merge
-	// field: optional field scope (empty "" means root document)
-	// Returns: the merged result
-	Merge(original, data []byte, field string) ([]byte, error)
-}

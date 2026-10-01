@@ -17,29 +17,25 @@ import (
 	"github.com/hkloudou/lake/v3/storage"
 )
 
-// ErrPresignNotSupported is returned by WriteBegin when the resolved storage
-// backend cannot mint presigned URLs (e.g. file / memory).
+// ErrPresignNotSupported is returned by WriteBegin when the resolved backend
+// cannot mint presigned URLs (file / memory).
 var ErrPresignNotSupported = storage.ErrPresignNotSupported
 
-// defaultUploadTTL is the signed-URL validity; override via WithUploadTTL.
 const defaultUploadTTL = 15 * time.Minute
 
-// WriteBeginRequest describes a write that is about to happen. The caller picks
-// where the body lands per-write via Provider + Bucket; that location is
-// recorded in the delta (as provider://bucket/path), so a catalog's deltas may
-// live across different buckets or clouds.
+// WriteBeginRequest describes a write about to happen. Provider + Bucket pick
+// where the body lands, per write; the delta records it as provider://bucket/path.
 type WriteBeginRequest struct {
 	Catalog   string    `json:"catalog"`
 	Path      string    `json:"path"`      // JSON path; "/" means root
 	MergeType MergeType `json:"mergeType"` // Replace or RFC7396
-	Provider  string    `json:"provider"`  // storage provider, e.g. "oss", "cos"
-	Bucket    string    `json:"bucket"`    // target bucket
+	Provider  string    `json:"provider"`
+	Bucket    string    `json:"bucket"`
 }
 
-// WriteHandle is what WriteBegin returns and WriteNotify consumes. It carries
-// enough state for a stateless HTTP transport: serialise to JSON, ship to a
-// non-Go client, that client uploads to UploadURL, then ships the handle back
-// to Lake's notify endpoint.
+// WriteHandle is what WriteBegin returns and WriteNotify consumes. It is
+// JSON-serialisable so a non-Go client can upload to UploadURL and ship the
+// handle back to a notify endpoint.
 type WriteHandle struct {
 	Catalog       string            `json:"catalog"`
 	Path          string            `json:"path"`
@@ -52,11 +48,8 @@ type WriteHandle struct {
 	UploadURL     string            `json:"uploadURL"`
 	UploadMethod  string            `json:"uploadMethod"`
 	UploadHeaders map[string]string `json:"uploadHeaders"`
-	ExpiresAt     int64             `json:"expiresAt"` // unix seconds
-	// Signature authenticates the handle's identity fields when the Client
-	// was built WithHandleSecret; empty otherwise. Clients must echo it back
-	// unchanged.
-	Signature string `json:"signature,omitempty"`
+	ExpiresAt     int64             `json:"expiresAt"`           // unix seconds
+	Signature     string            `json:"signature,omitempty"` // set iff WithHandleSecret; echo back unchanged
 }
 
 // WriteBeginOption tunes the presign call.
@@ -77,41 +70,17 @@ func WithUploadContentType(ct string) WriteBeginOption {
 	return func(o *writeBeginOpts) { o.contentType = ct }
 }
 
-// WriteBegin reserves a UUID, derives the object path, and signs a PUT URL
-// against the requested (Provider, Bucket) for direct client upload. The
-// resulting URI (provider://bucket/path) is returned in the handle and
-// recorded by WriteNotify.
+// WriteBegin reserves a UUID, derives the object path and signs a PUT URL
+// against (Provider, Bucket) for direct client upload. No Redis op.
 func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...WriteBeginOption) (*WriteHandle, error) {
 	if c.hasHandlers() {
 		c.emitEvent(req.Catalog, "WriteBegin", map[string]any{
 			"path": req.Path, "mergeType": int(req.MergeType), "provider": req.Provider, "bucket": req.Bucket,
 		})
 	}
-
-	// New* variants: WriteBegin mints new index/storage state, so the length
-	// caps apply here (read/ops paths accept longer legacy names).
-	if err := utils.ValidateNewCatalog(req.Catalog); err != nil {
+	if err := validateWrite(req.Catalog, req.Path, req.MergeType, req.Provider, req.Bucket); err != nil {
 		return nil, err
 	}
-	if err := utils.ValidateNewFieldPath(req.Path); err != nil {
-		return nil, err
-	}
-	if req.MergeType < MergeTypeReplace || req.MergeType > MergeTypeRFC7396 {
-		return nil, fmt.Errorf("invalid mergeType: %d", req.MergeType)
-	}
-	if req.Provider == "" || req.Bucket == "" {
-		return nil, errors.New("WriteBegin requires Provider and Bucket")
-	}
-	// Provider/Bucket are embedded in the delta URI (provider://bucket/path);
-	// an ambiguous character ("/", ":") would make ParseURI resolve the
-	// recorded locator to a different object than the one presigned here.
-	if err := utils.ValidateStorageProvider(req.Provider); err != nil {
-		return nil, err
-	}
-	if err := utils.ValidateStorageBucket(req.Bucket); err != nil {
-		return nil, err
-	}
-
 	st, err := c.storageFor(storage.Delta, req.Provider, req.Bucket)
 	if err != nil {
 		return nil, err
@@ -128,10 +97,7 @@ func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...
 	if o.ttl <= 0 {
 		o.ttl = defaultUploadTTL
 	} else if o.ttl < time.Second {
-		// Presign APIs take whole seconds and ExpiresAt is unix seconds; a
-		// sub-second TTL (e.g. an untyped WithUploadTTL(30) — 30ns) would
-		// otherwise round to an already-expired handle.
-		o.ttl = time.Second
+		o.ttl = time.Second // presign APIs and ExpiresAt work in whole seconds
 	}
 
 	uuid, err := newUUID()
@@ -139,43 +105,22 @@ func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...
 		return nil, fmt.Errorf("generate uuid: %w", err)
 	}
 	key := objkey.DeltaPath(req.Catalog, uuid)
-	uri := objkey.BuildURI(req.Provider, req.Bucket, key)
-
 	upload, err := presigner.PresignPut(ctx, req.Catalog, key, storage.PresignOptions{
 		TTL:         o.ttl,
 		ContentType: o.contentType,
 		UserMetadata: map[string]string{
-			"catalog":    req.Catalog,
-			"path":       req.Path,
-			"merge-type": strconv.Itoa(int(req.MergeType)),
+			"catalog": req.Catalog, "path": req.Path, "merge-type": strconv.Itoa(int(req.MergeType)),
 		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("presign put: %w", err)
 	}
-	// Close the startup window before stamping ExpiresAt: until the first
-	// clock sync lands, NowUnix is the LOCAL clock, while the WriteNotify
-	// end (possibly another, long-running host) checks against the Redis
-	// clock — host skew would then shift the effective TTL. One synchronous
-	// sync on the first pre-sync WriteBegin; best-effort, no new failure mode.
-	c.reader.EnsureClock(ctx)
 	h := &WriteHandle{
-		Catalog:       req.Catalog,
-		Path:          req.Path,
-		MergeType:     req.MergeType,
-		UUID:          uuid,
-		Provider:      req.Provider,
-		Bucket:        req.Bucket,
-		Key:           key,
-		URI:           uri,
-		UploadURL:     upload.URL,
-		UploadMethod:  upload.Method,
-		UploadHeaders: upload.Headers,
-		// Stamped from the Redis-synced clock, not the local one: handles
-		// round-trip across machines, and WriteNotify may run on a different
-		// host — both ends must measure expiry against the same clock (the
-		// ~5s sync resolution is noise next to the minutes-scale TTL).
-		ExpiresAt: c.reader.NowUnix() + int64(o.ttl/time.Second),
+		Catalog: req.Catalog, Path: req.Path, MergeType: req.MergeType, UUID: uuid,
+		Provider: req.Provider, Bucket: req.Bucket, Key: key,
+		URI:       objkey.BuildURI(req.Provider, req.Bucket, key),
+		UploadURL: upload.URL, UploadMethod: upload.Method, UploadHeaders: upload.Headers,
+		ExpiresAt: time.Now().Unix() + int64(o.ttl/time.Second),
 	}
 	if len(c.handleSecret) > 0 {
 		h.Signature = c.signHandle(h)
@@ -183,35 +128,15 @@ func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...
 	return h, nil
 }
 
-// signHandle computes the HMAC-SHA256 over the handle's identity fields —
-// exactly the ones WriteNotify acts on plus ExpiresAt. The payload is a JSON
-// string array, so no field value can forge a boundary into a neighbour.
-func (c *Client) signHandle(h *WriteHandle) string {
-	payload, _ := json.Marshal([6]string{
-		h.Catalog, h.Path, strconv.Itoa(int(h.MergeType)),
-		h.UUID, h.URI, strconv.FormatInt(h.ExpiresAt, 10),
-	})
-	mac := hmac.New(sha256.New, c.handleSecret)
-	mac.Write(payload)
-	return hex.EncodeToString(mac.Sum(nil))
-}
-
-// WriteNotify finalises a write: allocates a tsSeq and atomically records the
-// delta (carrying handle.URI) in Redis. It does NOT touch storage — the body
-// is already at handle.URI from the direct upload.
+// WriteNotify commits a write: allocates a tsSeq and records the delta
+// (carrying handle.URI) in Redis. No storage op — the body is already at
+// handle.URI. Idempotent per handle for an hour: a retry after a lost
+// response returns success without appending a second delta.
 //
-// Handles round-trip through clients Lake does not trust, so Notify rebinds
-// the handle to its own catalog: the URI's object path must be exactly the
-// delta path WriteBegin derived for (Catalog, UUID). A tampered handle can
-// therefore never point a catalog's index at another catalog's objects.
-// With WithHandleSecret configured, Notify additionally requires a valid
-// HMAC signature over the identity fields, pinning Path / MergeType /
-// ExpiresAt to what WriteBegin issued.
-//
-// Notify is NOT idempotent — duplicate calls produce duplicate deltas (each
-// with its own tsSeq, all referencing the same URI). For Replace / RFC7396,
-// applying the same body twice is benign; nevertheless, callers should retry
-// only after the previous Notify definitively errored.
+// Handles round-trip through clients Lake does not trust, so the URI must be
+// exactly the delta path WriteBegin derived for (Catalog, UUID) — a tampered
+// handle can never point one catalog's index at another's objects. With
+// WithHandleSecret, Path / MergeType / ExpiresAt are pinned by the signature.
 func (c *Client) WriteNotify(ctx context.Context, h *WriteHandle) error {
 	if h == nil {
 		return errors.New("nil WriteHandle")
@@ -219,86 +144,77 @@ func (c *Client) WriteNotify(ctx context.Context, h *WriteHandle) error {
 	if c.hasHandlers() {
 		c.emitEvent(h.Catalog, "WriteNotify", map[string]any{"path": h.Path, "uri": h.URI})
 	}
-
-	// New* variants: the handle is untrusted input about to be recorded, so
-	// it is held to the same length caps WriteBegin enforces.
-	if err := utils.ValidateNewCatalog(h.Catalog); err != nil {
-		return err
-	}
-	if err := utils.ValidateNewFieldPath(h.Path); err != nil {
-		return err
-	}
-	if h.MergeType < MergeTypeReplace || h.MergeType > MergeTypeRFC7396 {
-		return fmt.Errorf("invalid mergeType: %d", h.MergeType)
-	}
-	if !isUUIDHex(h.UUID) {
-		return fmt.Errorf("invalid uuid in handle: %q", h.UUID)
-	}
-	if h.URI == "" {
-		return errors.New("empty URI in handle")
-	}
 	provider, bucket, path, err := objkey.ParseURI(h.URI)
 	if err != nil {
 		return err
 	}
-	// The URI round-trips through untrusted clients and is recorded verbatim
-	// into the index, where reads feed its provider/bucket to the resolver —
-	// so hold both to the same charset WriteBegin enforces. ParseURI alone
-	// would accept e.g. bucket "da|ta", which WriteBegin can never emit.
-	if err := utils.ValidateStorageProvider(provider); err != nil {
+	if err := validateWrite(h.Catalog, h.Path, h.MergeType, provider, bucket); err != nil {
 		return err
 	}
-	if err := utils.ValidateStorageBucket(bucket); err != nil {
-		return err
+	if !isUUIDHex(h.UUID) {
+		return fmt.Errorf("invalid uuid in handle: %q", h.UUID)
 	}
 	if want := objkey.DeltaPath(h.Catalog, h.UUID); path != want {
 		return fmt.Errorf("handle URI path %q does not match catalog/uuid (want %q)", path, want)
 	}
 	if len(c.handleSecret) > 0 {
-		if h.Signature == "" {
-			return errors.New("handle signature required")
-		}
-		if !hmac.Equal([]byte(c.signHandle(h)), []byte(h.Signature)) {
+		if h.Signature == "" || !hmac.Equal([]byte(c.signHandle(h)), []byte(h.Signature)) {
 			return errors.New("invalid handle signature")
 		}
-		// The signature authenticates ExpiresAt, so enforce it too: a leaked
-		// signed handle must not be replayable indefinitely. (Without a
-		// secret the field is client-editable, so checking it there would
-		// only be theater.) Compared against the Redis-synced clock — the
-		// same one WriteBegin stamped from — so cross-host clock skew cannot
-		// shift the effective TTL. EnsureClock mirrors WriteBegin's: a
-		// notify-only host must not judge expiry on its local clock during
-		// its own pre-first-sync window.
-		c.reader.EnsureClock(ctx)
-		if now := c.reader.NowUnix(); now > h.ExpiresAt {
+		if now := time.Now().Unix(); now > h.ExpiresAt {
 			return fmt.Errorf("handle expired at %d (now %d)", h.ExpiresAt, now)
 		}
 	}
-	_, _, err = c.writer.Notify(ctx, h.Catalog, h.Path, h.MergeType, h.URI)
+	_, err = c.idx.Notify(ctx, h.Catalog, h.Path, h.MergeType, h.URI)
 	return err
 }
 
-// newUUID returns a UUID v4 string (32 hex chars, no hyphens).
+// validateWrite is the single check both WriteBegin and WriteNotify apply
+// to a write's identity (the handle is untrusted input).
+func validateWrite(catalog, path string, mt MergeType, provider, bucket string) error {
+	if err := utils.ValidateCatalog(catalog); err != nil {
+		return err
+	}
+	if err := utils.ValidateFieldPath(path); err != nil {
+		return err
+	}
+	if mt < MergeTypeReplace || mt > MergeTypeRFC7396 {
+		return fmt.Errorf("invalid mergeType: %d", mt)
+	}
+	if err := utils.ValidateStorageProvider(provider); err != nil {
+		return err
+	}
+	return utils.ValidateStorageBucket(bucket)
+}
+
+// signHandle is the HMAC-SHA256 over the handle's identity fields, encoded as
+// a JSON string array so no field can forge a boundary into a neighbour.
+func (c *Client) signHandle(h *WriteHandle) string {
+	payload, _ := json.Marshal([6]string{
+		h.Catalog, h.Path, strconv.Itoa(int(h.MergeType)), h.UUID, h.URI, strconv.FormatInt(h.ExpiresAt, 10),
+	})
+	mac := hmac.New(sha256.New, c.handleSecret)
+	mac.Write(payload)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// newUUID returns a UUID v4 as 32 lowercase hex chars.
 func newUUID() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", err
 	}
-	b[6] = (b[6] & 0x0f) | 0x40 // version 4
-	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
 	return hex.EncodeToString(b[:]), nil
 }
 
-// isUUIDHex reports whether s is exactly the form newUUID emits: 32 lowercase
-// hex chars. WriteNotify uses it to keep a client-supplied UUID from smuggling
-// path segments into the recomputed delta path.
 func isUUIDHex(s string) bool {
 	if len(s) != 32 {
 		return false
 	}
 	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+		if c := s[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return false
 		}
 	}

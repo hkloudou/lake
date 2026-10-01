@@ -63,8 +63,8 @@ func TestHandleSignature_RejectsTampering(t *testing.T) {
 	// A stripped signature is rejected too.
 	h := beginSigned(t, c)
 	h.Signature = ""
-	if err := c.WriteNotify(ctx, h); err == nil || !strings.Contains(err.Error(), "signature required") {
-		t.Errorf("stripped signature: expected 'signature required', got %v", err)
+	if err := c.WriteNotify(ctx, h); err == nil || !strings.Contains(err.Error(), "invalid handle signature") {
+		t.Errorf("stripped signature: expected 'invalid handle signature', got %v", err)
 	}
 
 	// A different deployment secret must not validate this handle.

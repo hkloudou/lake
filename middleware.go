@@ -16,22 +16,22 @@ func (c *Client) Use(h EventHandler) {
 	c.useMu.Lock()
 	defer c.useMu.Unlock()
 	var next []EventHandler
-	if old := c.eventHandlers.Load(); old != nil {
+	if old := c.handlers.Load(); old != nil {
 		next = append(next, *old...)
 	}
 	next = append(next, h)
-	c.eventHandlers.Store(&next)
+	c.handlers.Store(&next)
 }
 
 // hasHandlers is the hot-path guard call sites use to skip building the
 // attrs map entirely when nobody is listening (the common production case).
 func (c *Client) hasHandlers() bool {
-	hs := c.eventHandlers.Load()
+	hs := c.handlers.Load()
 	return hs != nil && len(*hs) > 0
 }
 
 func (c *Client) emitEvent(catalog, event string, attrs map[string]any) {
-	hs := c.eventHandlers.Load()
+	hs := c.handlers.Load()
 	if hs == nil {
 		return
 	}

@@ -12,37 +12,18 @@ import (
 )
 
 // RemoveDelta is the operator's escape hatch for a poison delta — one whose
-// body cannot be merged (invalid JSON, unappliable patch) and therefore
-// fails EVERY read of the catalog. The merge error names the offending
-// delta's tsSeq exactly for this call:
+// body cannot be merged and therefore fails every read of the catalog. The
+// merge error names its tsSeq ("{timestamp}_{seqid}") exactly for this call.
+// Only the index entry goes; the body object stays. Returns whether an entry
+// was removed.
 //
-//	merge failed (path=/profile tsSeq=1700000000_42 uri=... type=1): ...
-//	→ removed, err := client.RemoveDelta(ctx, "users", "1700000000_42")
+// The removal bumps the catalog's removal generation atomically, so a read
+// in flight that listed the removed delta can neither persist a snapshot nor
+// have its cached sample served afterwards (both carry the generation they
+// were computed under). Snapshots that already absorbed the delta keep it:
+// this unblocks the log, it does not rewrite history.
 //
-// tsSeq is that "{timestamp}_{seqid}" string, verbatim. Only Redis state is
-// touched — the body object in storage remains. Returns whether an entry was
-// actually removed (false: no delta at that tsSeq, e.g. already removed or
-// compacted).
-//
-// Removal is coherent with derived state:
-//
-//   - snapshots: the removal bumps the catalog's removal generation in the
-//     same atomic step, and AddSnap refuses a snapshot computed from an
-//     earlier generation — so a read that was in flight (and had listed the
-//     removed delta) cannot persist its effect. Snapshots that ALREADY
-//     absorbed the delta before this call keep it — RemoveDelta unblocks the
-//     log, it does not rewrite history.
-//   - samples: the catalog's sample removal generation is bumped BEFORE the
-//     removal (in-flight computes for any indicator — even one that has
-//     never cached — cannot write pre-removal state back), cached entries
-//     carry the generation they were computed under and are rejected on
-//     generation mismatch at read time, and every indicator's memo entry is
-//     swept eagerly. A sweep failure therefore costs memory, not
-//     correctness.
-//
-// DESTRUCTIVE: the removed delta's write disappears from every future read.
-// That is the point — the delta was blocking the catalog — but it is not an
-// undo mechanism for healthy writes.
+// DESTRUCTIVE: the removed write disappears from every future read.
 func (c *Client) RemoveDelta(ctx context.Context, catalog, tsSeq string) (bool, error) {
 	c.emitEvent(catalog, "RemoveDelta", map[string]any{"tsSeq": tsSeq})
 	if err := utils.ValidateCatalog(catalog); err != nil {
@@ -52,59 +33,15 @@ func (c *Client) RemoveDelta(ctx context.Context, catalog, tsSeq string) (bool, 
 	if err != nil {
 		return false, err
 	}
-	// Probe existence BEFORE installing any barrier: the bumps below mint
-	// permanent hash fields keyed by the caller-supplied catalog, and an
-	// operator retrying with a mistyped (or arbitrarily long — this path
-	// accepts legacy names the write-side caps reject) catalog/tsSeq must
-	// not grow Redis state on every attempt. The probe-then-remove gap is
-	// benign: tsSeq allocation is monotonic, so a delta can only DISAPPEAR
-	// between the two (removed=false with a harmless extra bump), never
-	// appear.
-	if exists, err := c.reader.HasDelta(ctx, catalog, id); err != nil {
-		return false, fmt.Errorf("probe delta: %w", err)
-	} else if !exists {
-		return false, nil
-	}
-	// Install the sample write barrier BEFORE removing anything: if the bump
-	// failed after the ZREM (e.g. a separate sample-cache Redis briefly
-	// down), the delta would be gone with the barrier at the old generation,
-	// an in-flight first-ever sampler could still cache pre-removal state,
-	// and a retry would return false without ever installing the barrier. A
-	// bump whose removal then fails is harmless — it only discards some
-	// in-flight cache writes.
-	if err := c.sampleRdb.HIncrBy(ctx, c.reader.MakeSampleRemoveGenKey(), catalog, 1).Err(); err != nil {
-		return false, fmt.Errorf("install sample barrier: %w", err)
-	}
-	removed, err := c.writer.RemoveDelta(ctx, catalog, id)
-	if err != nil || !removed {
-		return removed, err
-	}
-	if err := c.sweepSamples(ctx, catalog); err != nil {
-		// Correctness no longer depends on the sweep (stale entries carry an
-		// older generation and are rejected at read time); failing here only
-		// leaves memory to reclaim.
-		return true, fmt.Errorf("delta removed, but memo sweep failed (entries expire from reads; retry InvalidateSamples to reclaim now): %w", err)
-	}
-	return true, nil
+	return c.idx.RemoveDelta(ctx, catalog, id)
 }
 
-// sweepSamples deletes the catalog's entry from every EXISTING memo hash
-// (SCAN "<prefix>:m:*"; never blocks the server on the full keyspace). The
-// write barrier ("<prefix>:mrg", bumped by RemoveDelta before the removal)
-// already voids in-flight computes for every indicator — including ones
-// whose memo hash does not exist yet, which no key scan could reach — and
-// the per-entry generation check rejects unswept entries at read time; this
-// sweep just reclaims their memory eagerly.
-//
-// Each SCAN page's HDELs go out in one pipeline (one round-trip per 256
-// indicators instead of one per indicator), and a failing HDEL does not
-// abandon the rest of the sweep — errors are collected and joined, so as
-// much memory as possible is reclaimed in one pass.
+// sweepSamples deletes the catalog's field from every memo hash
+// ("<prefix>:m:*", found via SCAN so the server is never blocked). Stale
+// entries are already rejected at read time by their generation; this just
+// reclaims their memory. Errors are collected, not fatal to the sweep.
 func (c *Client) sweepSamples(ctx context.Context, catalog string) error {
-	// The prefix is user-supplied and MATCH treats *?[]\ as glob syntax —
-	// unescaped, a prefix like "app[1]" would silently match the wrong keys
-	// (missing this deployment's memo hashes, or sweeping another's).
-	pattern := globEscape(c.reader.Prefix()) + ":m:*"
+	pattern := globEscape(c.idx.Prefix()) + ":m:*"
 	var (
 		cursor uint64
 		errs   []error
@@ -112,10 +49,7 @@ func (c *Client) sweepSamples(ctx context.Context, catalog string) error {
 	for {
 		keys, next, err := c.sampleRdb.Scan(ctx, cursor, pattern, 256).Result()
 		if err != nil {
-			// The cursor is gone with the failed SCAN; report what happened
-			// so the operator can retry via InvalidateSamples.
-			errs = append(errs, fmt.Errorf("scan %q: %w", pattern, err))
-			break
+			return errors.Join(append(errs, fmt.Errorf("scan %q: %w", pattern, err))...)
 		}
 		if len(keys) > 0 {
 			pipe := c.sampleRdb.Pipeline()
@@ -126,23 +60,21 @@ func (c *Client) sweepSamples(ctx context.Context, catalog string) error {
 			_, _ = pipe.Exec(ctx)
 			for i, cmd := range cmds {
 				if err := cmd.Err(); err != nil {
-					errs = append(errs, fmt.Errorf("invalidate %s: %w", keys[i], err))
+					errs = append(errs, fmt.Errorf("hdel %s: %w", keys[i], err))
 				}
 			}
 		}
 		if next == 0 {
-			break
+			return errors.Join(errs...)
 		}
 		cursor = next
 	}
-	return errors.Join(errs...)
 }
 
-// globEscape backslash-escapes Redis MATCH metacharacters so s matches only
-// itself as a literal pattern segment.
+// globEscape makes s match only itself in a Redis MATCH pattern (the prefix
+// is user-supplied and may contain glob metacharacters).
 func globEscape(s string) string {
 	var b strings.Builder
-	b.Grow(len(s))
 	for i := 0; i < len(s); i++ {
 		switch s[i] {
 		case '*', '?', '[', ']', '\\':
