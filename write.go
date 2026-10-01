@@ -71,7 +71,8 @@ func WithUploadContentType(ct string) WriteBeginOption {
 }
 
 // WriteBegin reserves a UUID, derives the object path and signs a PUT URL
-// against (Provider, Bucket) for direct client upload. No Redis op.
+// against (Provider, Bucket) for direct client upload. No Redis op: it is
+// NewWriteHandle with the presigner looked up through the Client's Resolver.
 func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...WriteBeginOption) (*WriteHandle, error) {
 	if c.hasHandlers() {
 		c.emitEvent(req.Catalog, "WriteBegin", map[string]any{
@@ -89,7 +90,18 @@ func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...
 	if !ok {
 		return nil, ErrPresignNotSupported
 	}
+	return NewWriteHandle(ctx, req, presigner, c.handleSecret, opts...)
+}
 
+// NewWriteHandle builds a WriteHandle without a Client: pure local
+// computation plus one presign call, so anything that holds the object
+// store's credentials — a gateway, a batch job pre-minting uploads, a client
+// SDK — can produce handles itself and hand them to WriteNotify. secret must
+// match the notifying Client's WithHandleSecret (nil when it has none).
+func NewWriteHandle(ctx context.Context, req WriteBeginRequest, presigner storage.Presigner, secret []byte, opts ...WriteBeginOption) (*WriteHandle, error) {
+	if err := validateWrite(req.Catalog, req.Path, req.MergeType, req.Provider, req.Bucket); err != nil {
+		return nil, err
+	}
 	o := &writeBeginOpts{ttl: defaultUploadTTL}
 	for _, opt := range opts {
 		opt(o)
@@ -122,8 +134,8 @@ func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...
 		UploadURL: upload.URL, UploadMethod: upload.Method, UploadHeaders: upload.Headers,
 		ExpiresAt: time.Now().Unix() + int64(o.ttl/time.Second),
 	}
-	if len(c.handleSecret) > 0 {
-		h.Signature = c.signHandle(h)
+	if len(secret) > 0 {
+		h.Signature = signHandle(secret, h)
 	}
 	return h, nil
 }
@@ -158,7 +170,7 @@ func (c *Client) WriteNotify(ctx context.Context, h *WriteHandle) error {
 		return fmt.Errorf("handle URI path %q does not match catalog/uuid (want %q)", path, want)
 	}
 	if len(c.handleSecret) > 0 {
-		if h.Signature == "" || !hmac.Equal([]byte(c.signHandle(h)), []byte(h.Signature)) {
+		if h.Signature == "" || !hmac.Equal([]byte(signHandle(c.handleSecret, h)), []byte(h.Signature)) {
 			return errors.New("invalid handle signature")
 		}
 		if now := time.Now().Unix(); now > h.ExpiresAt {
@@ -189,11 +201,11 @@ func validateWrite(catalog, path string, mt MergeType, provider, bucket string) 
 
 // signHandle is the HMAC-SHA256 over the handle's identity fields, encoded as
 // a JSON string array so no field can forge a boundary into a neighbour.
-func (c *Client) signHandle(h *WriteHandle) string {
+func signHandle(secret []byte, h *WriteHandle) string {
 	payload, _ := json.Marshal([6]string{
 		h.Catalog, h.Path, strconv.Itoa(int(h.MergeType)), h.UUID, h.URI, strconv.FormatInt(h.ExpiresAt, 10),
 	})
-	mac := hmac.New(sha256.New, c.handleSecret)
+	mac := hmac.New(sha256.New, secret)
 	mac.Write(payload)
 	return hex.EncodeToString(mac.Sum(nil))
 }

@@ -83,7 +83,7 @@ func TestHandleSignature_RejectsExpiredHandle(t *testing.T) {
 	c := newSignedDeadClient(t, "s3cret")
 	h := beginSigned(t, c)
 	h.ExpiresAt = time.Now().Add(-time.Hour).Unix()
-	h.Signature = c.signHandle(h)
+	h.Signature = signHandle(c.handleSecret, h)
 	if err := c.WriteNotify(context.Background(), h); err == nil || !strings.Contains(err.Error(), "expired") {
 		t.Fatalf("expected expiry rejection, got %v", err)
 	}
