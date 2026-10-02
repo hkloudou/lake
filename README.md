@@ -331,6 +331,69 @@ type WriteHandle struct {
 
 **Options**: `WithUploadTTL(d)`, `WithUploadContentType(ct)`.
 
+#### Minting handles where there is no Client
+
+`NewWriteHandle` takes a `storage.Resolver`, not a `Client`, so the process
+that issues handles can be a different one from the process that owns the
+index. A typical split: an API server that holds the object-store credentials
+mints handles for browsers or mobile apps; the clients upload directly; a
+notify service with the index Redis commits them. The two processes share
+only the resolver's `(provider, bucket)` naming and, if signing is on, the
+secret.
+
+```go
+// Issuing side — object-store credentials, no Redis, no lake.Client.
+oss, _ := lakeoss.New(lakeoss.Config{Endpoint: "oss-cn-hangzhou", AccessKey: ak, SecretKey: sk})
+resolve := func(_ storage.Kind, provider, bucket string) (storage.Storage, error) {
+    if provider != "oss" {
+        return nil, fmt.Errorf("unknown provider %q", provider)
+    }
+    return oss.Bucket(bucket), nil // cheap: the OSS client caches bucket handles
+}
+secret := []byte(os.Getenv("LAKE_HANDLE_SECRET"))
+
+http.HandleFunc("POST /write/begin", func(w http.ResponseWriter, r *http.Request) {
+    var req lake.WriteRequest
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        http.Error(w, err.Error(), http.StatusBadRequest)
+        return
+    }
+    h, err := lake.NewWriteHandle(r.Context(), req, resolve, secret)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusBadRequest) // validation / unknown bucket / no presign
+        return
+    }
+    json.NewEncoder(w).Encode(h) // the client PUTs to h.UploadURL with h.UploadHeaders
+})
+```
+
+```go
+// Notify side — index Redis and the SAME resolver + secret, no presigning.
+client := lake.New("my-lake", rdb, resolve, lake.WithHandleSecret(secret))
+
+http.HandleFunc("POST /write/notify", func(w http.ResponseWriter, r *http.Request) {
+    var h lake.WriteHandle
+    if err := json.NewDecoder(r.Body).Decode(&h); err != nil {
+        http.Error(w, err.Error(), http.StatusBadRequest)
+        return
+    }
+    if err := client.WriteNotify(r.Context(), &h); err != nil { // idempotent: safe for the client to retry
+        http.Error(w, err.Error(), http.StatusBadRequest)
+        return
+    }
+    w.WriteHeader(http.StatusNoContent)
+})
+```
+
+Three things make the split safe. The handle is untrusted on the notify side:
+its URI is re-derived from `(Catalog, UUID)` and, with the secret, its
+`Path` / `MergeType` / `ExpiresAt` are pinned by the signature. The resolver is
+the single definition of what `(provider, bucket)` means, so the URI the
+issuing side records and the backend the notify side's readers fetch from can
+never disagree. And the resolver is called once per handle, possibly
+concurrently, so it must stay cheap: build SDK clients outside the closure, as
+above.
+
 **Handle integrity**: handles round-trip through clients Lake does not trust,
 so `WriteNotify` always re-derives the object path from the handle's own
 `(Catalog, UUID)` and rejects a URI that doesn't match — a tampered handle can
