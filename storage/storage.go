@@ -2,7 +2,7 @@
 // storage-agnostic — it never imports a cloud SDK. The embedding program
 // supplies a Resolver that maps a (kind, provider, bucket) to a bucket-scoped
 // Storage; ready-made backends live in optional subpackages (storage/oss,
-// storage/file, storage/mem).
+// storage/mem).
 package storage
 
 import (
@@ -28,8 +28,8 @@ type Storage interface {
 
 // Presigner is an optional capability: a Storage that can mint an HTTP-signed
 // URL for a direct client upload. Object stores (OSS / S3 / COS) implement it;
-// file / memory backends do not, and NewWriteHandle returns ErrPresignNotSupported
-// for them.
+// the memory backend does not, and NewWriteHandle returns
+// ErrPresignNotSupported for it.
 type Presigner interface {
 	PresignPut(ctx context.Context, catalog, path string, opts PresignOptions) (PresignedUpload, error)
 }
@@ -67,7 +67,7 @@ func (k Kind) String() string {
 // read path, but NewWriteHandle calls the Resolver for every handle it mints,
 // possibly concurrently — so a Resolver must be cheap and safe for concurrent
 // use: build SDK clients once outside the closure and only look them up inside
-// (the oss / file / mem backends and cached.Resolver all behave this way).
+// (the oss / mem backends and cached.Resolver all behave this way).
 type Resolver func(kind Kind, provider, bucket string) (Storage, error)
 
 // PresignOptions tunes the signed PUT.

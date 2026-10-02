@@ -7,9 +7,9 @@ import (
 
 	"github.com/hkloudou/lake/v3/internal/index"
 	"github.com/hkloudou/lake/v3/internal/utils"
+	"github.com/hkloudou/lake/v3/internal/xsync"
 	"github.com/hkloudou/lake/v3/storage"
 	"github.com/redis/go-redis/v9"
-	"golang.org/x/sync/singleflight"
 )
 
 // Client is the entry point for Lake v3. Everything is wired explicitly at
@@ -29,8 +29,8 @@ type Client struct {
 	storMu sync.Mutex
 	stores map[string]storage.Storage // memoised per (kind, provider, bucket)
 
-	snapSaving   sync.Map           // per-catalog gate: one async snapshot save at a time
-	sampleFlight singleflight.Group // dedupes concurrent sample loaders
+	snapSaving   sync.Map                   // per-catalog gate: one async snapshot save at a time
+	sampleFlight xsync.SingleFlight[string] // dedupes concurrent sample loaders
 
 	handlers atomic.Pointer[[]EventHandler]
 	useMu    sync.Mutex
@@ -63,6 +63,7 @@ func New(prefix string, rdb *redis.Client, resolve storage.Resolver, opts ...fun
 		snapBucket:    o.snapBucket,
 		snapMinDeltas: o.snapMinDeltas,
 		stores:        map[string]storage.Storage{},
+		sampleFlight:  xsync.NewSingleFlight[string](),
 	}
 }
 

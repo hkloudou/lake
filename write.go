@@ -15,7 +15,7 @@ import (
 )
 
 // ErrPresignNotSupported is returned by NewWriteHandle when the resolved backend
-// cannot mint presigned URLs (file / memory).
+// cannot mint presigned URLs (the memory backend).
 var ErrPresignNotSupported = storage.ErrPresignNotSupported
 
 const defaultUploadTTL = 15 * time.Minute

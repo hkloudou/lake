@@ -5,8 +5,8 @@ import (
 	"log"
 	"time"
 
+	"github.com/hkloudou/lake/v3/internal/xsync"
 	"github.com/redis/go-redis/v9"
-	"golang.org/x/sync/singleflight"
 )
 
 // RedisCache is a Redis-backed Cache: one TTL'd string per object, so an
@@ -14,11 +14,11 @@ import (
 type RedisCache struct {
 	client *redis.Client
 	ttl    time.Duration
-	flight singleflight.Group
+	flight xsync.SingleFlight[[]byte]
 }
 
 func NewRedisCache(client *redis.Client, ttl time.Duration) *RedisCache {
-	return &RedisCache{client: client, ttl: ttl}
+	return &RedisCache{client: client, ttl: ttl, flight: xsync.NewSingleFlight[[]byte]()}
 }
 
 func (c *RedisCache) cacheKey(namespace, key string) string {
@@ -34,7 +34,7 @@ func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader fun
 	if data, err := c.client.GetEx(ctx, cacheKey, c.ttl).Bytes(); err == nil {
 		return data, nil
 	}
-	v, err, _ := c.flight.Do(cacheKey, func() (any, error) {
+	data, err := c.flight.Do(cacheKey, func() ([]byte, error) {
 		data, err := loader()
 		if err == nil {
 			c.write(ctx, cacheKey, data)
@@ -44,7 +44,7 @@ func (c *RedisCache) Take(ctx context.Context, namespace, key string, loader fun
 	if err != nil {
 		return nil, err
 	}
-	return append([]byte(nil), v.([]byte)...), nil
+	return append([]byte(nil), data...), nil
 }
 
 // Set writes data through to the cache (write-through warming).
