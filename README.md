@@ -382,6 +382,13 @@ lake.MergeTypeRFC7396  // = 2: RFC 7396 JSON Merge Patch (null removes)
 | `ReadBytes / ReadString / ReadMap(ctx, *ListResult)` | Merged document as bytes / string / map |
 | `Read[T any](ctx, *ListResult) (*T, error)` | Generic typed read |
 
+A `ListResult` exposes `LatestSnap`, `Entries` and `Err`, plus three
+accessors: `Exist()` (any persisted state), `LastUpdated()` (the data version:
+score of the newest delta, else the snap stop, else 0) and `RemoveGen()` (the
+removal generation observed with the list, `"0"` until the first
+`RemoveDelta`). The last two are what a cross-catalog `WithShouldRefresh`
+predicate compares against its recorded baseline.
+
 ```go
 list := client.List(ctx, "users")
 if list.Err != nil {
