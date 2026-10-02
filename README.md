@@ -387,8 +387,11 @@ never disagree. And the resolver is called once per handle, possibly
 concurrently, so it must stay cheap: build SDK clients outside the closure, as
 above. Lake does not authenticate callers: the presigned URL is the object
 store's own credential for the upload, and whether a caller may begin or
-notify a write to a given catalog is decided by whatever guards the two
-endpoints.
+notify a write is decided by whatever guards the two endpoints. Lake carries
+no approval token between them, so the notify endpoint must authorize the
+handle's `Catalog`, `Path` and `MergeType` exactly as the begin endpoint did —
+a client can edit those fields between the two calls, and `WriteNotify`
+commits what it is given.
 
 **Handle integrity**: handles round-trip through clients Lake does not trust,
 so `WriteNotify` always re-derives the object path from the handle's own

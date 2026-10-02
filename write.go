@@ -132,7 +132,10 @@ func NewWriteHandle(ctx context.Context, req WriteRequest, resolve storage.Resol
 // Handles round-trip through clients Lake does not trust, so the URI must be
 // exactly the delta path NewWriteHandle derived for (Catalog, UUID) — a tampered
 // handle can never point one catalog's index at another's objects. Whether
-// the caller may write this catalog at all is the HTTP layer's decision.
+// the caller may commit this Catalog / Path / MergeType is the HTTP layer's
+// decision, made at notify time on the handle it receives: Lake carries no
+// approval token from the begin step, so a client can edit those fields in
+// between and WriteNotify commits what it is given.
 func (c *Client) WriteNotify(ctx context.Context, h *WriteHandle) error {
 	if h == nil {
 		return errors.New("nil WriteHandle")
