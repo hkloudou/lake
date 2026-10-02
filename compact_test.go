@@ -34,7 +34,7 @@ func TestCompactRoundTrip_Redis(t *testing.T) {
 	ctx := context.Background()
 	write := func(path string, mt MergeType, body string) {
 		t.Helper()
-		h, err := beginWrite(c, store, WriteRequest{
+		h, err := beginWrite(c, WriteRequest{
 			Catalog: "users", Path: path, MergeType: mt, Provider: "mem", Bucket: "data",
 		})
 		if err != nil {

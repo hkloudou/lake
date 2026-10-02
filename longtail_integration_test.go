@@ -29,7 +29,7 @@ func newMemClient(t *testing.T, opts ...func(*option)) (*Client, *mem.Store, con
 func writeDelta(t *testing.T, c *Client, store *mem.Store, catalog, path string, mt MergeType, body string) *WriteHandle {
 	t.Helper()
 	ctx := context.Background()
-	h, err := beginWrite(c, store, WriteRequest{
+	h, err := beginWrite(c, WriteRequest{
 		Catalog: catalog, Path: path, MergeType: mt, Provider: "mem", Bucket: "data",
 	})
 	if err != nil {

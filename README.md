@@ -140,16 +140,16 @@ func main() {
     ctx := context.Background()
     body := []byte(`{"name":"Alice","age":30}`)
 
-    // 2. Mint a handle: UUID + signed PUT URL for the chosen (provider, bucket).
-    //    Pure local computation against the bucket — no Redis, no Client — so
-    //    any process holding the OSS credentials can do this step.
+    // 2. Mint a handle: UUID + signed PUT URL for the chosen (provider, bucket),
+    //    looked up through the SAME resolver reads use — no Redis, no Client —
+    //    so any process holding the OSS credentials can do this step.
     h, err := lake.NewWriteHandle(ctx, lake.WriteRequest{
         Catalog:   "users",
         Path:      "/profile",
         MergeType: lake.MergeTypeReplace,
         Provider:  "oss",
         Bucket:    "my-bucket",
-    }, oss.Bucket("my-bucket"), nil /* handle secret, see WithHandleSecret */)
+    }, resolve, nil /* handle secret, see WithHandleSecret */)
     if err != nil {
         log.Fatal(err)
     }
@@ -272,9 +272,12 @@ type Kind uint8 // Delta | Snap — which object class is being resolved
 type Resolver func(kind Kind, provider, bucket string) (Storage, error)
 ```
 
-Lake memoises the resolved `Storage` per `(kind, provider, bucket)`, so your
-resolver is called at most once per distinct triple. Put credential / endpoint /
-pooling / multi-account routing inside the closure.
+A `Client` memoises the resolved `Storage` per `(kind, provider, bucket)` on
+the read path, but `NewWriteHandle` calls the resolver for every handle it
+mints, possibly concurrently. So keep the resolver cheap and concurrency-safe:
+build SDK clients once outside the closure and only look them up inside (the
+bundled backends and `cached.Resolver` all work this way); routing by
+credential / endpoint / account lives in the closure.
 
 `storage/cached` is a decorator, not a backend: `cached.Wrap(namespace, backend, cache)`
 adds read-through (Get) and write-through (Put) caching to any `Storage`, and
@@ -287,14 +290,16 @@ object-store fetch — see **Configuration** below.
 
 Client bytes never traverse the Lake process. The write target (provider +
 bucket) is chosen **per write** and recorded in the delta. Starting a write
-needs no Client and no Redis: `NewWriteHandle` is pure local computation plus
-one presign call against the bucket, so an API server, a gateway or a batch
-job that holds the storage credentials mints handles, and only `WriteNotify`
-touches the index.
+needs no Client and no Redis: `NewWriteHandle` resolves `(Provider, Bucket)`
+through the same `Resolver` reads use and makes one presign call, so an API
+server, a gateway or a batch job that holds the storage credentials mints
+handles, and only `WriteNotify` touches the index. Because both the recorded
+URI and the upload URL come from the same `(Provider, Bucket)`, they cannot
+name different places.
 
 | Function | Description |
 |----------|-------------|
-| `NewWriteHandle(ctx, WriteRequest, storage, secret, opts...) (*WriteHandle, error)` | Reserve a UUID, derive the object path, presign a PUT against `storage` (the bucket-scoped `storage.Storage` for `(Provider, Bucket)`; must implement `storage.Presigner`). `secret` is the notifying Client's `WithHandleSecret`, or nil. **No Redis op.** |
+| `NewWriteHandle(ctx, WriteRequest, resolve, secret, opts...) (*WriteHandle, error)` | Reserve a UUID, derive the object path, presign a PUT against `resolve(Delta, Provider, Bucket)` (which must implement `storage.Presigner`). `secret` is the notifying Client's `WithHandleSecret`, or nil. **No Redis op.** |
 | (HTTP PUT to `handle.UploadURL`) | The client uploads bytes directly using the signed URL + `handle.UploadHeaders`. |
 | `(*Client) WriteNotify(ctx, *WriteHandle) error` | Allocate the tsSeq and atomically record the delta (carrying `handle.URI`). **No storage op.** Idempotent per handle for an hour — safe to retry |
 
@@ -344,7 +349,7 @@ surfaced by the backend itself. They are embedded in the recorded URI, so `/`
 back to a different object), and WriteNotify re-checks the parsed parts of the
 handle's URI (the handle is untrusted input).
 
-> **Presign capability**: `NewWriteHandle` requires the storage it is given to
+> **Presign capability**: `NewWriteHandle` requires the resolved storage to
 > implement `storage.Presigner`. OSS supports it; file / memory return
 > `lake.ErrPresignNotSupported`.
 >
@@ -501,7 +506,7 @@ catalogs.
 ### Three-step direct upload
 
 ```
-NewWriteHandle: UUID v4 → object path → PresignPut(provider, bucket, path)  (NO Redis op, NO Client)
+NewWriteHandle: UUID v4 → object path → resolve(provider, bucket).PresignPut(path)  (NO Redis op, NO Client)
 (client uploads bytes directly to handle.UploadURL)
 WriteNotify: Lua → dedup by uri (a replay returns the original entry) → monotonic tsSeq alloc; ZADD [mergeType, path, tsSeq, uri]  (NO storage op)
 ```

@@ -63,8 +63,11 @@ func (k Kind) String() string {
 // lets it route snapshots and deltas differently (e.g. cache only snapshots)
 // even when they share a bucket. The implementation owns all credential /
 // endpoint / pooling / multi-account routing; Lake only ever calls the returned
-// Storage. Lake memoises the result per (kind, provider, bucket), so a Resolver
-// is called at most once per distinct triple for the life of the client.
+// Storage. A Client memoises the result per (kind, provider, bucket) on the
+// read path, but NewWriteHandle calls the Resolver for every handle it mints,
+// possibly concurrently — so a Resolver must be cheap and safe for concurrent
+// use: build SDK clients once outside the closure and only look them up inside
+// (the oss / file / mem backends and cached.Resolver all behave this way).
 type Resolver func(kind Kind, provider, bucket string) (Storage, error)
 
 // PresignOptions tunes the signed PUT.

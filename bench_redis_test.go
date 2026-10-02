@@ -30,7 +30,7 @@ func benchClient(b *testing.B, nDeltas int) (*Client, context.Context) {
 
 	ctx := context.Background()
 	for i := 0; i < nDeltas; i++ {
-		h, err := beginWrite(c, store, WriteRequest{
+		h, err := beginWrite(c, WriteRequest{
 			Catalog: "bench", Path: "/", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data",
 		})
 		if err != nil {
@@ -80,7 +80,7 @@ func BenchmarkBatchList100(b *testing.B) {
 // BenchmarkNotify measures the write-commit script (seqid alloc + ZADD).
 func BenchmarkNotify(b *testing.B) {
 	c, ctx := benchClient(b, 0)
-	h, err := beginWrite(c, mem.New(), WriteRequest{
+	h, err := beginWrite(c, WriteRequest{
 		Catalog: "bench", Path: "/", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data",
 	})
 	if err != nil {

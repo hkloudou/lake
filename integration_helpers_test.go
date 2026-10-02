@@ -8,14 +8,28 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hkloudou/lake/v3/storage"
 	"github.com/hkloudou/lake/v3/storage/mem"
 	"github.com/redis/go-redis/v9"
 )
 
-// beginWrite mints a handle the way an API server would: NewWriteHandle on
-// the in-memory bucket named by the request, signed with the Client's secret.
-func beginWrite(c *Client, store *mem.Store, req WriteRequest, opts ...WriteOption) (*WriteHandle, error) {
-	return NewWriteHandle(context.Background(), req, presignBucket{store.Bucket(req.Bucket)}, c.handleSecret, opts...)
+// beginWrite mints a handle the way an API server would: NewWriteHandle
+// through the Client's own Resolver, signed with the Client's secret.
+func beginWrite(c *Client, req WriteRequest, opts ...WriteOption) (*WriteHandle, error) {
+	return NewWriteHandle(context.Background(), req, c.resolve, c.handleSecret, opts...)
+}
+
+// presignResolver maps every (provider, bucket) to a presign-capable view of
+// one in-memory store.
+func presignResolver(store *mem.Store) storage.Resolver {
+	return func(_ storage.Kind, _, bucket string) (storage.Storage, error) {
+		return presignBucket{store.Bucket(bucket)}, nil
+	}
+}
+
+// failingResolver must never be reached: validation rejects the request first.
+func failingResolver(storage.Kind, string, string) (storage.Storage, error) {
+	panic("resolver must not be called for an invalid request")
 }
 
 // Integration tests talk to a developer's real Redis — 127.0.0.1:6379 unless
