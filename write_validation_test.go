@@ -26,8 +26,8 @@ func TestWriteNotify_RejectsInvalidMergeTypeBeforeRedis(t *testing.T) {
 	}
 }
 
-// testUUID is a well-formed (32 lowercase hex) handle UUID for tests that
-// must get past the UUID check to reach a later validation step.
+// testUUID is a well-formed (32 lowercase hex) UUID segment for delta paths
+// that must pass the URI binding check and reach a later validation step.
 const testUUID = "0123456789abcdef0123456789abcdef"
 
 func TestWriteNotify_RejectsMalformedURIBeforeRedis(t *testing.T) {
@@ -36,7 +36,6 @@ func TestWriteNotify_RejectsMalformedURIBeforeRedis(t *testing.T) {
 		Catalog:   "users",
 		Path:      "/",
 		MergeType: MergeTypeReplace,
-		UUID:      testUUID,
 		URI:       "oops",
 	})
 	if err == nil {
@@ -47,47 +46,40 @@ func TestWriteNotify_RejectsMalformedURIBeforeRedis(t *testing.T) {
 	}
 }
 
-// TestWriteNotify_RejectsTamperedUUID: a handle whose UUID is not the exact
-// 32-hex form NewWriteHandle mints is rejected before any Redis call — the UUID
-// participates in the recomputed delta path, so it must not carry path
-// metacharacters.
-func TestWriteNotify_RejectsTamperedUUID(t *testing.T) {
-	c := newDeadClient(t)
-	for _, uuid := range []string{"", "short", strings.Repeat("g", 32), testUUID + "ff", "../" + testUUID[3:]} {
-		err := c.WriteNotify(context.Background(), &WriteHandle{
-			Catalog:   "users",
-			Path:      "/",
-			MergeType: MergeTypeReplace,
-			UUID:      uuid,
-			URI:       "mem://data/whatever.dat",
-		})
-		if err == nil || !strings.Contains(err.Error(), "invalid uuid") {
-			t.Fatalf("uuid %q: expected invalid uuid error, got %v", uuid, err)
-		}
-	}
-}
-
 // TestWriteNotify_RejectsForeignURI: handles round-trip through untrusted
-// clients, so Notify must refuse a URI whose object path is not the delta
-// path derived from this handle's own (catalog, uuid) — otherwise a tampered
-// handle could point catalog A's index at catalog B's objects (or anywhere).
+// clients, so Notify must refuse a URI whose object path is not a delta path
+// of this handle's own catalog — another catalog's object, a free-form path,
+// a snapshot, or a delta path whose UUID segment is malformed (the segment
+// is the only free text in the path, so it must be exactly 32 lowercase hex).
 func TestWriteNotify_RejectsForeignURI(t *testing.T) {
 	c := newDeadClient(t)
 	for _, uri := range []string{
 		"mem://data/" + objkey.DeltaPath("other-catalog", testUUID), // another catalog's object
 		"mem://data/arbitrary/object.dat",                           // free-form path
 		"mem://data/" + objkey.SnapPath("users", "1700000000_1"),    // a snap, not a delta
+		"mem://data/" + objkey.DeltaPath("users", "short"),
+		"mem://data/" + objkey.DeltaPath("users", strings.Repeat("g", 32)),
+		"mem://data/" + objkey.DeltaPath("users", testUUID+"ff"),
+		"mem://data/" + objkey.DeltaPath("users", "../"+testUUID[3:]),
 	} {
 		err := c.WriteNotify(context.Background(), &WriteHandle{
 			Catalog:   "users",
 			Path:      "/",
 			MergeType: MergeTypeReplace,
-			UUID:      testUUID,
 			URI:       uri,
 		})
-		if err == nil || !strings.Contains(err.Error(), "does not match catalog/uuid") {
-			t.Fatalf("uri %q: expected catalog/uuid mismatch error, got %v", uri, err)
+		if err == nil || !strings.Contains(err.Error(), "is not a delta object") {
+			t.Fatalf("uri %q: expected not-a-delta error, got %v", uri, err)
 		}
+	}
+	// The exact shape NewWriteHandle mints passes this check (and then fails
+	// only on the unreachable Redis).
+	err := c.WriteNotify(context.Background(), &WriteHandle{
+		Catalog: "users", Path: "/", MergeType: MergeTypeReplace,
+		URI: "mem://data/" + objkey.DeltaPath("users", testUUID),
+	})
+	if err == nil || strings.Contains(err.Error(), "is not a delta object") {
+		t.Fatalf("well-formed delta URI must pass the binding check, got %v", err)
 	}
 }
 
@@ -130,7 +122,6 @@ func TestWriteNotify_RejectsAmbiguousURIParts(t *testing.T) {
 			Catalog:   "users",
 			Path:      "/",
 			MergeType: MergeTypeReplace,
-			UUID:      testUUID,
 			URI:       uri,
 		})
 		if err == nil || !strings.Contains(err.Error(), "invalid storage") {

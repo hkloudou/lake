@@ -315,7 +315,6 @@ type WriteHandle struct {
     Catalog   string    `json:"catalog"`
     Path      string    `json:"path"`
     MergeType MergeType `json:"mergeType"`
-    UUID      string    `json:"uuid"`
     URI       string    `json:"uri"` // provider://bucket/key — recorded in the delta
 
     // The presigned PUT the caller performs itself. Ignored by WriteNotify,
@@ -379,8 +378,9 @@ http.HandleFunc("POST /write/notify", func(w http.ResponseWriter, r *http.Reques
 ```
 
 Three things make the split safe. The handle is untrusted on the notify side:
-its URI is re-derived from `(Catalog, UUID)`, so it can only ever commit the
-object it was issued for, into the catalog it was issued for. The resolver is
+its URI must name a delta object of its own `Catalog` (that catalog's path
+prefix, a well-formed UUID, `.dat`), so it can only ever commit a delta into
+the catalog it was issued for. The resolver is
 the single definition of what `(provider, bucket)` means, so the URI the
 issuing side records and the backend the notify side's readers fetch from can
 never disagree. And the resolver is called once per handle, possibly
@@ -394,11 +394,12 @@ a client can edit those fields between the two calls, and `WriteNotify`
 commits what it is given.
 
 **Handle integrity**: handles round-trip through clients Lake does not trust,
-so `WriteNotify` always re-derives the object path from the handle's own
-`(Catalog, UUID)` and rejects a URI that doesn't match (the provider, bucket
-and key live only in the URI — there are no separate fields to disagree with
-it) — a tampered handle can
-never point one catalog's index at another catalog's objects. That is a data
+so `WriteNotify` checks that the URI's object path is a delta path of the
+handle's own `Catalog` — that catalog's prefix, a 32-hex UUID, `.dat`. The
+provider, bucket, key and UUID live only in the URI, so there is no separate
+field that could disagree with it, and a tampered handle can never point one
+catalog's index at another catalog's objects or at anything that is not a
+delta. That is a data
 integrity check, not authentication: who may mint or notify handles for a
 catalog is decided at the HTTP layer in front of Lake.
 

@@ -16,6 +16,27 @@ func DeltaPath(catalog, uuid string) string {
 	return prefix(catalog) + "/" + uuid + ".dat"
 }
 
+// IsDeltaPath reports whether path is a delta object of catalog: this
+// catalog's prefix, then a 32-lowercase-hex UUID, then ".dat" — exactly what
+// DeltaPath produces. WriteNotify uses it to bind an untrusted handle's URI
+// to the catalog it names, without a separate UUID field to disagree with it.
+func IsDeltaPath(catalog, path string) bool {
+	pre := prefix(catalog) + "/"
+	if !strings.HasPrefix(path, pre) || !strings.HasSuffix(path, ".dat") {
+		return false
+	}
+	uuid := path[len(pre) : len(path)-len(".dat")]
+	if len(uuid) != 32 {
+		return false
+	}
+	for i := 0; i < len(uuid); i++ {
+		if c := uuid[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // SnapPath: "{md5(catalog)[0:4]}/{enc(catalog)}/{stopTsSeq}.snap".
 func SnapPath(catalog, stopTsSeq string) string {
 	return prefix(catalog) + "/" + stopTsSeq + ".snap"

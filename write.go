@@ -31,7 +31,8 @@ type WriteRequest struct {
 }
 
 // WriteHandle is what NewWriteHandle returns and WriteNotify consumes. The
-// identity fields (everything but Upload) are exactly what the index records;
+// identity fields (everything but Upload) are exactly what the index records
+// — Catalog keys the delta log, the rest is the member [mergeType, path, …, uri];
 // Upload is for the caller's PUT and is ignored by WriteNotify, so a client
 // may drop it when it notifies. It is JSON-serialisable so a non-Go client can
 // do the upload and ship the handle back to a notify endpoint. The object's
@@ -42,7 +43,6 @@ type WriteHandle struct {
 	Catalog   string    `json:"catalog"`
 	Path      string    `json:"path"`
 	MergeType MergeType `json:"mergeType"`
-	UUID      string    `json:"uuid"`
 	URI       string    `json:"uri"` // provider://bucket/key — recorded in the delta
 
 	// Upload is the presigned PUT the caller performs itself: send the body to
@@ -118,7 +118,7 @@ func NewWriteHandle(ctx context.Context, req WriteRequest, resolve storage.Resol
 		return nil, fmt.Errorf("presign put: %w", err)
 	}
 	return &WriteHandle{
-		Catalog: req.Catalog, Path: req.Path, MergeType: req.MergeType, UUID: uuid,
+		Catalog: req.Catalog, Path: req.Path, MergeType: req.MergeType,
 		URI:    objkey.BuildURI(req.Provider, req.Bucket, key),
 		Upload: upload,
 	}, nil
@@ -129,9 +129,10 @@ func NewWriteHandle(ctx context.Context, req WriteRequest, resolve storage.Resol
 // handle.URI. Idempotent per handle for an hour: a retry after a lost
 // response returns success without appending a second delta.
 //
-// Handles round-trip through clients Lake does not trust, so the URI must be
-// exactly the delta path NewWriteHandle derived for (Catalog, UUID) — a tampered
-// handle can never point one catalog's index at another's objects. Whether
+// Handles round-trip through clients Lake does not trust, so the URI's object
+// path must be a delta path of this handle's own Catalog (its prefix, a
+// well-formed UUID, ".dat") — a tampered handle can never point one catalog's
+// index at another's objects, or at anything that is not a delta. Whether
 // the caller may commit this Catalog / Path / MergeType is the HTTP layer's
 // decision, made at notify time on the handle it receives: Lake carries no
 // approval token from the begin step, so a client can edit those fields in
@@ -150,11 +151,8 @@ func (c *Client) WriteNotify(ctx context.Context, h *WriteHandle) error {
 	if err := validateWrite(h.Catalog, h.Path, h.MergeType, provider, bucket); err != nil {
 		return err
 	}
-	if !isUUIDHex(h.UUID) {
-		return fmt.Errorf("invalid uuid in handle: %q", h.UUID)
-	}
-	if want := objkey.DeltaPath(h.Catalog, h.UUID); path != want {
-		return fmt.Errorf("handle URI path %q does not match catalog/uuid (want %q)", path, want)
+	if !objkey.IsDeltaPath(h.Catalog, path) {
+		return fmt.Errorf("handle URI %q is not a delta object of catalog %q", h.URI, h.Catalog)
 	}
 	_, err = c.idx.Notify(ctx, h.Catalog, h.Path, h.MergeType, h.URI)
 	return err
@@ -187,16 +185,4 @@ func newUUID() (string, error) {
 	b[6] = (b[6] & 0x0f) | 0x40
 	b[8] = (b[8] & 0x3f) | 0x80
 	return hex.EncodeToString(b[:]), nil
-}
-
-func isUUIDHex(s string) bool {
-	if len(s) != 32 {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		if c := s[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
 }
