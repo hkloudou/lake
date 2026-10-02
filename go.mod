@@ -8,7 +8,6 @@ require (
 	github.com/redis/go-redis/v9 v9.21.0
 	github.com/tidwall/gjson v1.19.0
 	github.com/tidwall/sjson v1.2.5
-	golang.org/x/sync v0.16.0
 )
 
 require (
