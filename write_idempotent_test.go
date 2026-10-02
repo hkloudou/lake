@@ -34,7 +34,7 @@ func TestWriteNotify_IdempotentRetry_Redis(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewWriteHandle: %v", err)
 		}
-		if err := store.Bucket(h.Bucket).Put(ctx, h.Catalog, h.Key, []byte(body)); err != nil {
+		if err := upload(store, h, body); err != nil {
 			t.Fatalf("upload: %v", err)
 		}
 		return h

@@ -20,7 +20,7 @@ func TestCatalogValidation_NewWriteHandle(t *testing.T) {
 		Catalog:   "/leading-slash",
 		Path:      "/x",
 		MergeType: MergeTypeReplace,
-	}, failingResolver, nil)
+	}, failingResolver)
 	if !isValidationErr(err) {
 		t.Fatalf("expected catalog validation error, got %v", err)
 	}
@@ -60,7 +60,7 @@ func TestCatalogValidation_AcceptsHierarchy(t *testing.T) {
 		Catalog:   "tenantA/users",
 		Path:      "/x",
 		MergeType: MergeTypeReplace,
-	}, failingResolver, nil)
+	}, failingResolver)
 	if isValidationErr(err) {
 		t.Fatalf("internal / should be allowed; got validation error: %v", err)
 	}

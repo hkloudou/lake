@@ -8,15 +8,26 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hkloudou/lake/v3/internal/objkey"
 	"github.com/hkloudou/lake/v3/storage"
 	"github.com/hkloudou/lake/v3/storage/mem"
 	"github.com/redis/go-redis/v9"
 )
 
 // beginWrite mints a handle the way an API server would: NewWriteHandle
-// through the Client's own Resolver, signed with the Client's secret.
+// through the Client's own Resolver.
 func beginWrite(c *Client, req WriteRequest, opts ...WriteOption) (*WriteHandle, error) {
-	return NewWriteHandle(context.Background(), req, c.resolve, c.handleSecret, opts...)
+	return NewWriteHandle(context.Background(), req, c.resolve, opts...)
+}
+
+// upload plays the client's part: PUT body at the handle's URI (tests have no
+// HTTP; the mem store is written directly at the key the URI names).
+func upload(store *mem.Store, h *WriteHandle, body string) error {
+	_, bucket, key, err := objkey.ParseURI(h.URI)
+	if err != nil {
+		return err
+	}
+	return store.Bucket(bucket).Put(context.Background(), h.Catalog, key, []byte(body))
 }
 
 // presignResolver maps every (provider, bucket) to a presign-capable view of

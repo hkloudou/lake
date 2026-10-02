@@ -40,7 +40,7 @@ func TestCompactRoundTrip_Redis(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewWriteHandle(%s): %v", path, err)
 		}
-		if err := store.Bucket(h.Bucket).Put(ctx, h.Catalog, h.Key, []byte(body)); err != nil {
+		if err := upload(store, h, body); err != nil {
 			t.Fatalf("upload: %v", err)
 		}
 		if err := c.WriteNotify(ctx, h); err != nil {

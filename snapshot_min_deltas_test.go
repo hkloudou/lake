@@ -45,7 +45,7 @@ func TestWithSnapMinDeltas_Redis(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_ = store.Bucket(h.Bucket).Put(ctx, h.Catalog, h.Key, []byte(`1`))
+		_ = upload(store, h, `1`)
 		if err := c.WriteNotify(ctx, h); err != nil {
 			t.Fatal(err)
 		}

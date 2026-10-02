@@ -2,11 +2,8 @@ package lake
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -33,23 +30,24 @@ type WriteRequest struct {
 	Bucket    string    `json:"bucket"`
 }
 
-// WriteHandle is what NewWriteHandle returns and WriteNotify consumes. It is
-// JSON-serialisable so a non-Go client can upload to UploadURL and ship the
-// handle back to a notify endpoint.
+// WriteHandle is what NewWriteHandle returns and WriteNotify consumes. The
+// identity fields (everything but Upload) are exactly what the index records;
+// Upload is for the caller's PUT and is ignored by WriteNotify, so a client
+// may drop it when it notifies. It is JSON-serialisable so a non-Go client can
+// do the upload and ship the handle back to a notify endpoint. The object's
+// provider, bucket and key are all in URI (provider://bucket/key). Who may
+// mint or notify is not Lake's concern: authenticate those endpoints at the
+// HTTP layer.
 type WriteHandle struct {
-	Catalog       string            `json:"catalog"`
-	Path          string            `json:"path"`
-	MergeType     MergeType         `json:"mergeType"`
-	UUID          string            `json:"uuid"`
-	Provider      string            `json:"provider"`
-	Bucket        string            `json:"bucket"`
-	Key           string            `json:"key"` // object path within the bucket
-	URI           string            `json:"uri"` // provider://bucket/key — recorded in the delta
-	UploadURL     string            `json:"uploadURL"`
-	UploadMethod  string            `json:"uploadMethod"`
-	UploadHeaders map[string]string `json:"uploadHeaders"`
-	ExpiresAt     int64             `json:"expiresAt"`           // unix seconds
-	Signature     string            `json:"signature,omitempty"` // set iff WithHandleSecret; echo back unchanged
+	Catalog   string    `json:"catalog"`
+	Path      string    `json:"path"`
+	MergeType MergeType `json:"mergeType"`
+	UUID      string    `json:"uuid"`
+	URI       string    `json:"uri"` // provider://bucket/key — recorded in the delta
+
+	// Upload is the presigned PUT the caller performs itself: send the body to
+	// URL with Method and every header in Headers, verbatim.
+	Upload storage.PresignedUpload `json:"upload,omitzero"`
 }
 
 // WriteOption tunes the presign call.
@@ -77,10 +75,9 @@ func WithUploadContentType(ct string) WriteOption {
 // It needs no Client and no Redis — pure local computation plus one presign
 // call — so anything that holds the object store's credentials (an API
 // server, a gateway, a batch job pre-minting uploads) can produce handles and
-// hand them to WriteNotify. secret must match the notifying Client's
-// WithHandleSecret (nil if none). resolve is called once per handle, so it
-// must be cheap and safe for concurrent use (see storage.Resolver).
-func NewWriteHandle(ctx context.Context, req WriteRequest, resolve storage.Resolver, secret []byte, opts ...WriteOption) (*WriteHandle, error) {
+// hand them to WriteNotify. resolve is called once per handle, so it must be
+// cheap and safe for concurrent use (see storage.Resolver).
+func NewWriteHandle(ctx context.Context, req WriteRequest, resolve storage.Resolver, opts ...WriteOption) (*WriteHandle, error) {
 	if err := validateWrite(req.Catalog, req.Path, req.MergeType, req.Provider, req.Bucket); err != nil {
 		return nil, err
 	}
@@ -102,7 +99,7 @@ func NewWriteHandle(ctx context.Context, req WriteRequest, resolve storage.Resol
 	if o.ttl <= 0 {
 		o.ttl = defaultUploadTTL
 	} else if o.ttl < time.Second {
-		o.ttl = time.Second // presign APIs and ExpiresAt work in whole seconds
+		o.ttl = time.Second // presign APIs work in whole seconds
 	}
 
 	uuid, err := newUUID()
@@ -120,17 +117,11 @@ func NewWriteHandle(ctx context.Context, req WriteRequest, resolve storage.Resol
 	if err != nil {
 		return nil, fmt.Errorf("presign put: %w", err)
 	}
-	h := &WriteHandle{
+	return &WriteHandle{
 		Catalog: req.Catalog, Path: req.Path, MergeType: req.MergeType, UUID: uuid,
-		Provider: req.Provider, Bucket: req.Bucket, Key: key,
-		URI:       objkey.BuildURI(req.Provider, req.Bucket, key),
-		UploadURL: upload.URL, UploadMethod: upload.Method, UploadHeaders: upload.Headers,
-		ExpiresAt: time.Now().Unix() + int64(o.ttl/time.Second),
-	}
-	if len(secret) > 0 {
-		h.Signature = signHandle(secret, h)
-	}
-	return h, nil
+		URI:    objkey.BuildURI(req.Provider, req.Bucket, key),
+		Upload: upload,
+	}, nil
 }
 
 // WriteNotify commits a write: allocates a tsSeq and records the delta
@@ -140,8 +131,11 @@ func NewWriteHandle(ctx context.Context, req WriteRequest, resolve storage.Resol
 //
 // Handles round-trip through clients Lake does not trust, so the URI must be
 // exactly the delta path NewWriteHandle derived for (Catalog, UUID) — a tampered
-// handle can never point one catalog's index at another's objects. With
-// WithHandleSecret, Path / MergeType / ExpiresAt are pinned by the signature.
+// handle can never point one catalog's index at another's objects. Whether
+// the caller may commit this Catalog / Path / MergeType is the HTTP layer's
+// decision, made at notify time on the handle it receives: Lake carries no
+// approval token from the begin step, so a client can edit those fields in
+// between and WriteNotify commits what it is given.
 func (c *Client) WriteNotify(ctx context.Context, h *WriteHandle) error {
 	if h == nil {
 		return errors.New("nil WriteHandle")
@@ -161,14 +155,6 @@ func (c *Client) WriteNotify(ctx context.Context, h *WriteHandle) error {
 	}
 	if want := objkey.DeltaPath(h.Catalog, h.UUID); path != want {
 		return fmt.Errorf("handle URI path %q does not match catalog/uuid (want %q)", path, want)
-	}
-	if len(c.handleSecret) > 0 {
-		if h.Signature == "" || !hmac.Equal([]byte(signHandle(c.handleSecret, h)), []byte(h.Signature)) {
-			return errors.New("invalid handle signature")
-		}
-		if now := time.Now().Unix(); now > h.ExpiresAt {
-			return fmt.Errorf("handle expired at %d (now %d)", h.ExpiresAt, now)
-		}
 	}
 	_, err = c.idx.Notify(ctx, h.Catalog, h.Path, h.MergeType, h.URI)
 	return err
@@ -190,17 +176,6 @@ func validateWrite(catalog, path string, mt MergeType, provider, bucket string) 
 		return err
 	}
 	return utils.ValidateStorageBucket(bucket)
-}
-
-// signHandle is the HMAC-SHA256 over the handle's identity fields, encoded as
-// a JSON string array so no field can forge a boundary into a neighbour.
-func signHandle(secret []byte, h *WriteHandle) string {
-	payload, _ := json.Marshal([6]string{
-		h.Catalog, h.Path, strconv.Itoa(int(h.MergeType)), h.UUID, h.URI, strconv.FormatInt(h.ExpiresAt, 10),
-	})
-	mac := hmac.New(sha256.New, secret)
-	mac.Write(payload)
-	return hex.EncodeToString(mac.Sum(nil))
 }
 
 // newUUID returns a UUID v4 as 32 lowercase hex chars.
