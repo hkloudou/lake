@@ -4,8 +4,11 @@
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Latest tag](https://img.shields.io/github/v/tag/hkloudou/lake?sort=semver)](https://github.com/hkloudou/lake/tags)
 
-> Distributed JSON document store with atomic writes, RFC-standard merging,
-> snapshot acceleration, and computed sampling.
+> Lake is a time-ordered delta journal for a JSON document: a write appends a
+> time-sequenced patch, a read folds the patches in order into the current
+> document. Delta bodies live in object storage, the ordering index in Redis;
+> history can be snapshotted and pruned. It is not a data lake — the name only
+> borrows "bodies in object storage".
 
 > **⚠️ Status: not production-ready.** No current release is sanctioned for
 > production use — v3 is alpha (its public API may still change before `v3.0.0`
