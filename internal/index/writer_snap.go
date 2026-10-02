@@ -1,9 +1,6 @@
 package index
 
-import (
-	"context"
-	"fmt"
-)
+import "context"
 
 // AddSnap publishes the catalog's snap pointer as [tsSeq, uri] — only
 // monotonically, and only when removeGen still matches the catalog's removal
@@ -18,14 +15,4 @@ func (x *Index) AddSnap(ctx context.Context, catalog string, stop TimeSeqID, uri
 		removeGen = "0"
 	}
 	return luaAddSnap.Run(ctx, x.rdb, []string{x.snapsKey()}, catalog, val, stop.Score(), removeGen).Err()
-}
-
-// Compact trims the delta log up to and including the current snap stop,
-// atomically with reading the pointer. Returns the number of entries removed.
-func (x *Index) Compact(ctx context.Context, catalog string) (int64, error) {
-	n, err := luaCompact.Run(ctx, x.rdb, []string{x.snapsKey(), x.deltaKey(catalog)}, catalog).Int64()
-	if err != nil {
-		return 0, fmt.Errorf("compact: %w", err)
-	}
-	return n, nil
 }

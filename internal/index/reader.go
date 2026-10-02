@@ -73,7 +73,7 @@ func (x *Index) BatchList(ctx context.Context, catalogs []string) map[string]Lis
 
 // parseListing decodes a listScript reply. An undecodable snap value is an
 // error, not a silent nil: the read path must not replay the whole log as if
-// no snapshot existed (the log may be compacted up to that snapshot).
+// no snapshot existed (the log may have been trimmed up to that snapshot).
 func parseListing(cmd *redis.Cmd) Listing {
 	arr, err := cmd.Slice()
 	if err != nil {
@@ -126,6 +126,20 @@ func (x *Index) GetLatestSnap(ctx context.Context, catalog string) (*SnapInfo, e
 		return nil, err
 	}
 	return &SnapInfo{StopTsSeq: stop, URI: uri}, nil
+}
+
+// Absorbed counts the delta entries at or before the catalog's snap stop —
+// the ones no read fetches any more. 0 without a snapshot. Not atomic with
+// the pointer read: against writes and snapshots that is fine (the pointer
+// only moves forward, so the count can only lag), but a DeleteCatalog in
+// between resets the sequence and the count may include the re-created
+// catalog's live deltas. Both are operator calls; they serialise them.
+func (x *Index) Absorbed(ctx context.Context, catalog string) (int64, error) {
+	snap, err := x.GetLatestSnap(ctx, catalog)
+	if err != nil || snap == nil {
+		return 0, err
+	}
+	return x.rdb.ZCount(ctx, x.deltaKey(catalog), "-inf", strconv.FormatFloat(snap.Score(), 'f', 6, 64)).Result()
 }
 
 // IterateSnaps streams every catalog's snap to fn via HSCAN (500 fields per

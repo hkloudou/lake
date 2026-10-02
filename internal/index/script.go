@@ -11,8 +11,8 @@ import "github.com/redis/go-redis/v9"
 // Allocation is monotonic per catalog: the issued (ts, seq) is floored by the
 // allocator key (last issued pair), the snap stop and the newest delta, so a
 // backwards Redis clock (NTP step, failover) can never mint a duplicate or a
-// write that sorts at-or-below the snapshot bound, which reads would skip and
-// Compact would delete. When the 999,999 seq budget of a second is exhausted
+// write that sorts at-or-below the snapshot bound, which reads would skip
+// (and an operator's index trim would delete). When the 999,999 seq budget of a second is exhausted
 // allocation spills into the next second.
 //
 // Notify is idempotent per uri for the dedup TTL: the committed member is
@@ -81,8 +81,9 @@ return {ts, seq}
 `
 
 // listScript reads the snap pointer, the removal generation and the deltas
-// past the snap in ONE atomic step — with Compact in the picture a non-atomic
-// HGET→ZRANGE pair could pair an old pointer with an already-trimmed log.
+// past the snap in ONE atomic step — an operator trimming absorbed entries
+// (ZREMRANGEBYSCORE up to the snap stop) could otherwise pair a non-atomic
+// HGET→ZRANGE's old pointer with an already-trimmed log.
 // KEYS[1] = snaps hash, KEYS[2] = delta zset; ARGV[1] = catalog.
 // Returns {snapValue|false, removeGen, [member, score, ...]}; scores travel as
 // Redis reply strings so no Lua number formatting touches them.
@@ -119,18 +120,6 @@ if (redis.call("HGET", KEYS[1], ARGV[1] .. ":rg") or "0") ~= ARGV[4] then
 end
 redis.call("HSET", KEYS[1], ARGV[1], ARGV[2])
 return 1
-`
-
-// compactScript trims every delta the current snapshot absorbed (score ≤ the
-// snap stop; reads fetch strictly after it). An absent or undecodable snap
-// trims nothing. KEYS[1] = snaps hash, KEYS[2] = delta zset; ARGV[1] = catalog.
-const compactScript = snapScoreLua + `
-local cur = redis.call("HGET", KEYS[1], ARGV[1])
-local score = cur and snap_score(cur)
-if not score then
-  return 0
-end
-return redis.call("ZREMRANGEBYSCORE", KEYS[2], "-inf", string.format("%.6f", score))
 `
 
 // removeDeltaScript removes the one entry whose embedded tsSeq matches, and
@@ -170,7 +159,6 @@ var (
 	luaNotify        = redis.NewScript(notifyScript)
 	luaList          = redis.NewScript(listScript)
 	luaAddSnap       = redis.NewScript(addSnapScript)
-	luaCompact       = redis.NewScript(compactScript)
 	luaRemoveDelta   = redis.NewScript(removeDeltaScript)
 	luaDeleteCatalog = redis.NewScript(deleteCatalogScript)
 )

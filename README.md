@@ -72,7 +72,7 @@ retried body can never overtake writes that landed in between.
 
 **A read** fetches the snapshot pointer + delta log (1 atomic Redis op — a Lua
 script returns both together, so a read can never pair a stale pointer with a
-compacted log), loads the bodies through the resolver, and merges them. With a
+trimmed log), loads the bodies through the resolver, and merges them. With a
 snapshot target configured a fresh snapshot is written back asynchronously, off
 the read's critical path (every read with new deltas by default; raise
 `WithSnapMinDeltas` on large, hot catalogs — each snapshot uploads the whole
@@ -469,21 +469,18 @@ jsonStr, err := lake.ReadString(ctx, list)
 profile, err := lake.Read[UserProfile](ctx, list)
 ```
 
-A `Read*` call takes the `ListResult` through five steps:
+A `Read*` call takes the `ListResult` through four steps:
 
-1. **Prune.** Entries a later `Replace` fully overwrites (same path or below)
-   can never affect the document, so their bodies are never fetched — and a
-   poison body among them cannot wedge the read.
-2. **Fetch.** The snapshot (`resolve(Snap, …).Get`) and the surviving delta
+1. **Fetch.** The snapshot (`resolve(Snap, …).Get`) and the delta
    bodies (`resolve(Delta, …).Get`, at most 10 in flight) load concurrently;
    the first failure cancels the rest. A 0-byte object is an error naming the
    delta's tsSeq (the client uploaded nothing — unblock with `RemoveDelta`).
-3. **Memoise.** Fetched bodies are kept on the `ListResult`, so reading the
+2. **Memoise.** Fetched bodies are kept on the `ListResult`, so reading the
    same `ListResult` again — or handing it to a `Sampler` loader that reads it
    — fetches nothing twice.
-4. **Merge** in score order, `Replace` then `RFC 7396` as recorded. The result
+3. **Merge** in score order, `Replace` then `RFC 7396` as recorded. The result
    never aliases a cached body, so callers may mutate it.
-5. **Snapshot.** With `WithSnapTarget` set and at least `WithSnapMinDeltas`
+4. **Snapshot.** With `WithSnapTarget` set and at least `WithSnapMinDeltas`
    entries past the current snap, the merged document is handed to a detached
    goroutine (at most one per catalog in flight, bounded to 5 minutes) that
    uploads it and publishes the pointer behind the monotonic + removal-
@@ -526,8 +523,9 @@ per-call and never written back, so a transient blip can't freeze a degraded
 value into the cache. The memo hash may live on a dedicated cache-tier Redis
 (`WithSampleCacheRedis`); it's a derived cache — flush/restart merely
 recomputes. There is no explicit invalidation call: when a loader's logic
-changes, change the indicator name (`"daily"` → `"daily-v2"`), and
-`DeleteCatalog` sweeps a deleted catalog's entries.
+changes, change the indicator name (`"daily"` → `"daily-v2"`). A deleted
+catalog's entries linger (rejected by generation, overwritten on the next
+compute) — Lake sweeps nothing.
 
 ### Backup
 
@@ -552,8 +550,8 @@ err := client.IterateSnaps(ctx, func(catalog string, snap lake.SnapInfo) bool {
 | Function | Description |
 |----------|-------------|
 | `(*Client) RemoveDelta(ctx, catalog, tsSeq) (bool, error)` | Remove one poison delta from the index (the body object stays). The **only** correct way to unblock a catalog wedged by an unappliable body |
-| `(*Client) Compact(ctx, catalog) (int64, error)` | Trim the delta zset up to the current snapshot; index-only, safe anytime, no background reaper |
-| `(*Client) DeleteCatalog(ctx, catalog) (bool, error)` | Drop a catalog from the index — delta log, snap pointer, allocator and cached samples; objects in storage stay. Returns whether it existed |
+| `(*Client) DeleteCatalog(ctx, catalog) (bool, error)` | Drop a catalog from the index — delta log, snap pointer, allocator; objects and cached samples stay. Returns whether it existed |
+| `(*Client) Collectable(ctx, catalog) (int64, error)` | How many delta entries the current snapshot has absorbed (dead to every read). Report only — Lake never deletes; see *Lake never deletes* below |
 
 `RemoveDelta` takes the `tsSeq` string verbatim from the merge error
 (`merge failed (path=… tsSeq=1700000000_42 …)`). It is destructive — the
@@ -607,8 +605,7 @@ WriteNotify: Lua → dedup by uri (a replay returns the original entry) → mono
 
 Because tsSeq is allocated only at notify (after the upload), a slow or aborted
 upload never appears in the index — nothing to wait for, nothing to roll back.
-An aborted write leaves at most one orphaned object (reaped by future sweep
-tooling).
+An aborted write leaves at most one orphaned object.
 
 ## 🏗️ Architecture
 
@@ -639,7 +636,6 @@ tooling).
 
 ```
 List          ── 1× Lua call (snap pointer + deltas after it, atomically)
-   ├── prune deltas a later Replace fully overwrites (never fetched)
    ├── load snapshot   (resolve(Snap, …).Get — cached when the policy caches Snap)
    ├── load deltas × N (resolve(Delta, …).Get, 10 workers)
    ↓
@@ -716,7 +712,6 @@ client.Use(func(catalog, event string, attrs map[string]any) {
 | `SampleCacheError` | `op`, `err` |
 | `RemoveDelta` | `tsSeq` |
 | `DeleteCatalog` | — |
-| `Compact` | — |
 | `SnapshotError` | `stop`, `err` — the async snapshot save failed (it is otherwise invisible: reads never wait for it) |
 
 Events fire at operation **start** (before validation / Redis I/O), so
@@ -823,18 +818,45 @@ not with the number of new deltas. The default (`WithSnapMinDeltas(1)`) keeps
 replay at zero for read-heavy catalogs; for a large document that is written
 and read continuously, raise it so each upload absorbs several writes.
 
-### Compaction is explicit — and index-only
+### Lake never deletes
 
-There is no background reaper. `Compact(ctx, catalog)` trims the delta zset up
-to the current snapshot (the entries a read can never fetch again) and returns
-how many it removed; sweep catalogs on your own schedule, e.g. via
-`IterateSnaps`. It is safe to run at any time from any process: reads observe
-the snap pointer and the delta log atomically, and the pointer is monotonic,
-so compaction can never remove a delta a concurrent read still needs.
+There is no compaction, no reaper, no sweep. Every delta entry, every delta
+object and every snapshot object stays where it landed; `DeleteCatalog` and
+`RemoveDelta` are the only subtractions, both explicit operator calls on the
+index alone. Left alone, the index and the bucket grow with history. That is
+correct — reads only ever touch the snapshot and the deltas after it — just
+not free, and keeping history is the supported choice today.
 
-Compact touches Redis only. Delta *objects* in storage are untouched — they
-remain portable history, and object deletion belongs to bucket lifecycle
-rules, not Lake. A catalog with no snapshot is left intact.
+What is dead is still well defined, courtesy of tsSeq being unique and
+monotonic per catalog: the delta entries at or before the live snapshot's
+stop, the objects they name, and every snapshot object of the catalog other
+than the one the pointer names. `Collectable(ctx, catalog)` reports the first
+of these, so you can see how much history a catalog carries.
+
+If you build a sweep on that definition, it is yours — and these are the ways
+a naive one loses data:
+
+- **In-flight reads.** A read is bounded only by its caller's context and may
+  still be fetching what the pointer it listed had absorbed. Objects need a
+  grace longer than your longest read, started when *you* observed the
+  pointer's identity (stop + URI, via `List` or `IterateSnaps`) and restarted
+  whenever it changes. The index trim itself
+  (`ZREMRANGEBYSCORE {prefix}:d:{catalog} -inf {stop score}`) needs no grace:
+  reads observe pointer and log in one atomic call. (A `ZREM` on a *live*
+  delta is never safe; that is what `RemoveDelta` is for.)
+- **In-flight snapshot saves.** A snapshot object exists before its pointer is
+  published — for up to the save timeout, five minutes. Never delete an object
+  younger than the grace, whatever the pointer says.
+- **`DeleteCatalog`.** It resets the catalog's sequence, so a same-second
+  re-creation can mint live tsSeqs at or below a stop you recorded. Exclude
+  the whole sweep cycle, grace included, from deleting the same catalog.
+- **Names.** `{stop}[-g{gen}].snap` names do not sort, and several generations
+  can share one stop. Select by reference — the trimmed entries' URIs, the
+  live pointer's URI — never by name.
+- **Replayed handles.** The notify dedup record lives one hour; a handle
+  notified again after that commits a *new* entry with the *same* URI. If a
+  sweep has already deleted that object, the replay is a poison delta: repair
+  it with `RemoveDelta`, and treat a replay that late as the client bug it is.
 
 ## 🔄 Migrating from v2 to v3
 
@@ -850,7 +872,8 @@ v3 is **not** wire-compatible with v2. The headline changes:
   `[tsSeq, uri]` — old members/snaps don't decode; flush and repopulate.
 - **RFC 6902 removed**: only `MergeTypeReplace` (1) and `MergeTypeRFC7396` (2)
   remain.
-- **`ClearHistory` removed** — use the explicit `Compact`. **`AllSnaps` removed** — use
+- **`ClearHistory` removed** — Lake no longer deletes anything; `Collectable`
+  reports what a sweep of yours may remove. **`AllSnaps` removed** — use
   `IterateSnaps`. **File API**, **`WriteRequest.Meta`**, and **`MotionSample`**
   removed (use `NewSampler[T]`).
 - **Snapshots auto-generate** to `WithSnapTarget`; omit it to disable.

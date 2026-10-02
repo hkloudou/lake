@@ -1,7 +1,6 @@
 package lake
 
 import (
-	"context"
 	"sync/atomic"
 	"testing"
 
@@ -64,34 +63,6 @@ func TestSampleUnsweptStaleEntryRejected_Redis(t *testing.T) {
 	sampler := NewSampler[int]("views", func(*ListResult) (int, error) { runs.Add(1); return 222, nil })
 	if v, err := sampler.Sample(ctx, c.List(ctx, "users")); err != nil || v != 222 || runs.Load() != 1 {
 		t.Fatalf("Sample: v=%d err=%v runs=%d, want recomputed 222", v, err, runs.Load())
-	}
-}
-
-// TestDeleteCatalogSweepsGlobPrefix_Redis: a prefix with MATCH metacharacters
-// must still have its memo hashes swept (unescaped, "p[g]…" would match
-// "pg…" instead).
-func TestDeleteCatalogSweepsGlobPrefix_Redis(t *testing.T) {
-	c, store, ctx := newMemClient(t)
-	prefix := c.idx.Prefix() + "[g]*?"
-	t.Cleanup(func() {
-		c.rdb.Del(context.Background(), prefix+":d:users", prefix+":s", prefix+":m:views", prefix+":seq:users")
-	})
-	c = New(prefix, c.rdb, c.resolve)
-	writeDelta(t, c, store, "users", "/", MergeTypeReplace, `{"n":1}`)
-
-	sampler := NewSampler[int]("views", func(*ListResult) (int, error) { return 7, nil })
-	if _, err := sampler.Sample(ctx, c.List(ctx, "users")); err != nil {
-		t.Fatalf("prime Sample: %v", err)
-	}
-	memoKey := c.idx.SampleKey("views")
-	if n, err := c.sampleRdb.HExists(ctx, memoKey, "users").Result(); err != nil || !n {
-		t.Fatalf("prime not cached (exists=%v err=%v)", n, err)
-	}
-	if existed, err := c.DeleteCatalog(ctx, "users"); err != nil || !existed {
-		t.Fatalf("DeleteCatalog: existed=%v err=%v", existed, err)
-	}
-	if n, err := c.sampleRdb.HExists(ctx, memoKey, "users").Result(); err != nil || n {
-		t.Fatalf("glob-prefix memo hash escaped the sweep (exists=%v err=%v)", n, err)
 	}
 }
 

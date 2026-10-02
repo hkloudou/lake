@@ -46,7 +46,15 @@ func TestDeleteCatalog_Redis(t *testing.T) {
 		t.Fatal(err)
 	}
 	runs := 0
-	sampler := NewSampler[int]("cnt", func(l *ListResult) (int, error) { runs++; return len(l.Entries), nil })
+	// Exist, not len(Entries): the read above may already have snapshotted
+	// the catalog, which empties Entries without changing what exists.
+	sampler := NewSampler[int]("cnt", func(l *ListResult) (int, error) {
+		runs++
+		if l.Exist() {
+			return 1, nil
+		}
+		return 0, nil
+	})
 	if v, err := sampler.Sample(ctx, c.List(ctx, "users")); err != nil || v != 1 {
 		t.Fatalf("sample = %d/%v, want 1", v, err)
 	}

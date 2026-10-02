@@ -43,7 +43,7 @@ func (m ListResult) RemoveGen() string {
 }
 
 // List reads the catalog's snap pointer and the deltas past it in one atomic
-// Redis op (which is what makes Compact safe to run concurrently with reads).
+// Redis op (so an operator trimming absorbed entries can never race a read).
 func (c *Client) List(ctx context.Context, catalog string) *ListResult {
 	c.emitEvent(catalog, "List", nil)
 	if err := utils.ValidateCatalog(catalog); err != nil {

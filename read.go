@@ -20,12 +20,6 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 		return nil, list.Err
 	}
 
-	// Entries a later Replace fully overwrites can never affect the document:
-	// skip their fetch (and let a poison body among them do no harm). Bodies
-	// fetched into the pruned copy are written back below so they memoise on
-	// the ListResult.
-	entries, aliveIdx := merge.PruneDead(list.Entries)
-
 	var (
 		base    = []byte("{}")
 		baseErr error
@@ -34,7 +28,7 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 	if list.LatestSnap != nil {
 		wg.Go(func() { base, baseErr = c.fetchURI(ctx, storage.Snap, list.catalog, list.LatestSnap.URI) })
 	}
-	deltaErr := c.fillBodies(ctx, list.catalog, entries)
+	deltaErr := c.fillBodies(ctx, list.catalog, list.Entries)
 	wg.Wait()
 	if baseErr != nil {
 		return nil, fmt.Errorf("load snapshot: %w", baseErr)
@@ -42,13 +36,7 @@ func (c *Client) readData(ctx context.Context, list *ListResult) ([]byte, error)
 	if deltaErr != nil {
 		return nil, fmt.Errorf("load deltas: %w", deltaErr)
 	}
-	for k, i := range aliveIdx {
-		if len(list.Entries[i].Body) == 0 {
-			list.Entries[i].Body = entries[k].Body
-		}
-	}
-
-	result, err := merge.Merge(base, entries)
+	result, err := merge.Merge(base, list.Entries)
 	if err != nil {
 		return nil, fmt.Errorf("merge catalog %s: %w", list.catalog, err)
 	}
