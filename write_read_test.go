@@ -43,7 +43,7 @@ func TestWriteReadRoundTrip_Redis(t *testing.T) {
 			t.Fatalf("NewWriteHandle(%s): %v", path, err)
 		}
 		// Simulate the client's direct upload to the presigned location.
-		if err := store.Bucket(h.Bucket).Put(ctx, h.Catalog, h.Key, []byte(body)); err != nil {
+		if err := upload(store, h, body); err != nil {
 			t.Fatalf("upload: %v", err)
 		}
 		if err := c.WriteNotify(ctx, h); err != nil {
@@ -109,7 +109,7 @@ func TestReadBytesMutationDoesNotCorruptSnapshot(t *testing.T) {
 		t.Fatalf("NewWriteHandle: %v", err)
 	}
 	const doc = `{"name":"Alice"}`
-	if err := store.Bucket(h.Bucket).Put(ctx, h.Catalog, h.Key, []byte(doc)); err != nil {
+	if err := upload(store, h, doc); err != nil {
 		t.Fatalf("upload: %v", err)
 	}
 	if err := c.WriteNotify(ctx, h); err != nil {

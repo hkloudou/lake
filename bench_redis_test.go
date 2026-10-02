@@ -37,7 +37,7 @@ func benchClient(b *testing.B, nDeltas int) (*Client, context.Context) {
 			b.Fatalf("NewWriteHandle: %v", err)
 		}
 		body := fmt.Sprintf(`{"n":%d,"payload":"0123456789abcdef"}`, i)
-		if err := store.Bucket(h.Bucket).Put(ctx, h.Catalog, h.Key, []byte(body)); err != nil {
+		if err := upload(store, h, body); err != nil {
 			b.Fatalf("upload: %v", err)
 		}
 		if err := c.WriteNotify(ctx, h); err != nil {

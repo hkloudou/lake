@@ -25,7 +25,6 @@ type Client struct {
 	snapProvider  string // WithSnapTarget; "" disables auto-snapshotting
 	snapBucket    string
 	snapMinDeltas int
-	handleSecret  []byte
 
 	storMu sync.Mutex
 	stores map[string]storage.Storage // memoised per (kind, provider, bucket)
@@ -42,7 +41,6 @@ type option struct {
 	snapProvider  string
 	snapBucket    string
 	snapMinDeltas int
-	handleSecret  []byte
 }
 
 // New creates a Lake client. prefix namespaces every Redis key; rdb is the
@@ -64,7 +62,6 @@ func New(prefix string, rdb *redis.Client, resolve storage.Resolver, opts ...fun
 		snapProvider:  o.snapProvider,
 		snapBucket:    o.snapBucket,
 		snapMinDeltas: o.snapMinDeltas,
-		handleSecret:  o.handleSecret,
 		stores:        map[string]storage.Storage{},
 		sampleFlight:  xsync.NewSingleFlight[string](),
 	}
@@ -102,18 +99,6 @@ func WithSnapMinDeltas(n int) func(*option) {
 // separate, evictable Redis. Defaults to the index Redis.
 func WithSampleCacheRedis(rdb *redis.Client) func(*option) {
 	return func(o *option) { o.sampleRdb = rdb }
-}
-
-// WithHandleSecret turns on WriteHandle signing: NewWriteHandle, given the
-// same secret, stamps an HMAC-SHA256 over the handle's identity fields, and
-// WriteNotify rejects a handle whose signature is missing or wrong, or whose
-// ExpiresAt has passed. Every minting process needs the same secret. Panics
-// on empty.
-func WithHandleSecret(secret []byte) func(*option) {
-	if len(secret) == 0 {
-		panic("lake: WithHandleSecret requires a non-empty secret")
-	}
-	return func(o *option) { o.handleSecret = append([]byte(nil), secret...) }
 }
 
 // storageFor resolves and memoises the Storage for (kind, provider, bucket);

@@ -31,7 +31,7 @@ func TestDeleteCatalog_Redis(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_ = store.Bucket(h.Bucket).Put(ctx, h.Catalog, h.Key, []byte(body))
+		_ = upload(store, h, body)
 		if err := c.WriteNotify(ctx, h); err != nil {
 			t.Fatal(err)
 		}

@@ -35,7 +35,7 @@ func TestPoisonBodyFailsLoudly_Redis(t *testing.T) {
 	}
 	// The "upload": invalid JSON, exactly what a buggy or malicious client
 	// can put at the presigned URL.
-	if err := store.Bucket(h.Bucket).Put(ctx, h.Catalog, h.Key, []byte(`{invalid`)); err != nil {
+	if err := upload(store, h, `{invalid`); err != nil {
 		t.Fatalf("upload: %v", err)
 	}
 	if err := c.WriteNotify(ctx, h); err != nil {

@@ -35,7 +35,7 @@ func writeDelta(t *testing.T, c *Client, store *mem.Store, catalog, path string,
 	if err != nil {
 		t.Fatalf("NewWriteHandle: %v", err)
 	}
-	if err := store.Bucket(h.Bucket).Put(ctx, h.Catalog, h.Key, []byte(body)); err != nil {
+	if err := upload(store, h, body); err != nil {
 		t.Fatalf("upload: %v", err)
 	}
 	if err := c.WriteNotify(ctx, h); err != nil {

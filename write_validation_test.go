@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/hkloudou/lake/v3/internal/objkey"
-	"github.com/hkloudou/lake/v3/storage/mem"
+	"github.com/hkloudou/lake/v3/storage"
 )
 
 func TestWriteNotify_RejectsInvalidMergeTypeBeforeRedis(t *testing.T) {
@@ -109,7 +109,7 @@ func TestNewWriteHandle_RejectsAmbiguousProviderBucket(t *testing.T) {
 		_, err := NewWriteHandle(context.Background(), WriteRequest{
 			Catalog: "users", Path: "/", MergeType: MergeTypeReplace,
 			Provider: tc.provider, Bucket: tc.bucket,
-		}, failingResolver, nil)
+		}, failingResolver)
 		if err == nil || !strings.Contains(err.Error(), "invalid storage") {
 			t.Fatalf("provider=%q bucket=%q: expected invalid storage error, got %v", tc.provider, tc.bucket, err)
 		}
@@ -171,14 +171,26 @@ func TestWithSnapTarget_PanicsOnAmbiguousTarget(t *testing.T) {
 }
 
 func TestNewWriteHandle_ZeroTTLUsesDefaultTTL(t *testing.T) {
-	h, err := NewWriteHandle(context.Background(), WriteRequest{
+	var got time.Duration
+	rec := func(_ storage.Kind, _, _ string) (storage.Storage, error) {
+		return ttlRecorder{&got}, nil
+	}
+	if _, err := NewWriteHandle(context.Background(), WriteRequest{
 		Catalog: "users", Path: "/", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data",
-	}, presignResolver(mem.New()), nil, WithUploadTTL(0))
-	if err != nil {
+	}, rec, WithUploadTTL(0)); err != nil {
 		t.Fatalf("NewWriteHandle: %v", err)
 	}
-	ttl := h.ExpiresAt - time.Now().Unix()
-	if ttl < 14*60 || ttl > 16*60 {
-		t.Fatalf("ExpiresAt delta = %ds, want about 15m", ttl)
+	if got != 15*time.Minute {
+		t.Fatalf("presign TTL = %v, want the 15m default", got)
 	}
+}
+
+// ttlRecorder is a presign-capable Storage that records the TTL it is asked for.
+type ttlRecorder struct{ ttl *time.Duration }
+
+func (ttlRecorder) Get(context.Context, string, string) ([]byte, error) { return nil, nil }
+func (ttlRecorder) Put(context.Context, string, string, []byte) error   { return nil }
+func (r ttlRecorder) PresignPut(_ context.Context, _, _ string, o storage.PresignOptions) (storage.PresignedUpload, error) {
+	*r.ttl = o.TTL
+	return storage.PresignedUpload{URL: "x://upload", Method: "PUT"}, nil
 }

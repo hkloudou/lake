@@ -149,14 +149,15 @@ func main() {
         MergeType: lake.MergeTypeReplace,
         Provider:  "oss",
         Bucket:    "my-bucket",
-    }, resolve, nil /* handle secret, see WithHandleSecret */)
+    }, resolve)
     if err != nil {
         log.Fatal(err)
     }
 
-    // 3. Upload the body directly to OSS. Bytes never pass through Lake.
-    req, _ := http.NewRequestWithContext(ctx, h.UploadMethod, h.UploadURL, bytes.NewReader(body))
-    for k, v := range h.UploadHeaders {
+    // 3. Upload the body directly to OSS — the caller's own PUT, bytes never
+    //    pass through Lake. Send every header in h.Upload.Headers verbatim.
+    req, _ := http.NewRequestWithContext(ctx, h.Upload.Method, h.Upload.URL, bytes.NewReader(body))
+    for k, v := range h.Upload.Headers {
         req.Header.Set(k, v)
     }
     if _, err := http.DefaultClient.Do(req); err != nil {
@@ -224,14 +225,12 @@ func New(prefix string, rdb *redis.Client, resolve storage.Resolver, opts ...fun
 | `WithSnapTarget(provider, bucket)` | Where Lake writes auto-generated snapshots. Omit — or pass both empty — → no auto-snapshotting (reads replay all deltas) |
 | `WithSnapMinDeltas(n)` | Snapshot only once `n` deltas have accumulated past the current snap (default 1). Each snapshot uploads the whole document, so on a large, frequently written catalog the default turns every write into a full-document upload; `n` trades that for replaying up to `n-1` deltas per read |
 | `WithSampleCacheRedis(rdb)` | Route the Sampler memo hash (`<prefix>:m:*`) to a separate, evictable Redis |
-| `WithHandleSecret(secret)` | HMAC-sign every `WriteHandle`; `WriteNotify` then rejects tampered or expired handles (see **Write** below). Every process sharing the prefix needs the same secret |
 | `(*Client) Use(handler EventHandler)` | Register an event handler (safe on a live Client; copy-on-write) |
 
 A Client has no background goroutines and nothing to close. `New` panics on an
 empty `prefix`, nil `rdb`, or nil `resolve`; option constructors panic on
 invalid input (`WithSnapTarget` on an ambiguous provider/bucket,
-`WithSnapMinDeltas(0)`, `WithHandleSecret` on an empty secret) — all programmer
-errors, caught at construction time.
+`WithSnapMinDeltas(0)`) — all programmer errors, caught at construction time.
 
 > **Redis compatibility**: developed and tested against Redis 7.x. The notify
 > script calls `TIME` before writing, which relies on effect-based script
@@ -299,8 +298,8 @@ name different places.
 
 | Function | Description |
 |----------|-------------|
-| `NewWriteHandle(ctx, WriteRequest, resolve, secret, opts...) (*WriteHandle, error)` | Reserve a UUID, derive the object path, presign a PUT against `resolve(Delta, Provider, Bucket)` (which must implement `storage.Presigner`). `secret` is the notifying Client's `WithHandleSecret`, or nil. **No Redis op.** |
-| (HTTP PUT to `handle.UploadURL`) | The client uploads bytes directly using the signed URL + `handle.UploadHeaders`. |
+| `NewWriteHandle(ctx, WriteRequest, resolve, opts...) (*WriteHandle, error)` | Reserve a UUID, derive the object path, presign a PUT against `resolve(Delta, Provider, Bucket)` (which must implement `storage.Presigner`). **No Redis op, no Client.** |
+| (caller's HTTP PUT) | The caller uploads the body itself to `handle.Upload.URL` with `handle.Upload.Method` and every `handle.Upload.Headers` entry verbatim. Lake never performs the upload. |
 | `(*Client) WriteNotify(ctx, *WriteHandle) error` | Allocate the tsSeq and atomically record the delta (carrying `handle.URI`). **No storage op.** Idempotent per handle for an hour — safe to retry |
 
 ```go
@@ -313,19 +312,15 @@ type WriteRequest struct {
 }
 
 type WriteHandle struct {
-    Catalog       string            `json:"catalog"`
-    Path          string            `json:"path"`
-    MergeType     MergeType         `json:"mergeType"`
-    UUID          string            `json:"uuid"`
-    Provider      string            `json:"provider"`
-    Bucket        string            `json:"bucket"`
-    Key           string            `json:"key"` // object path within the bucket
-    URI           string            `json:"uri"` // provider://bucket/key — recorded in the delta
-    UploadURL     string            `json:"uploadURL"`
-    UploadMethod  string            `json:"uploadMethod"`
-    UploadHeaders map[string]string `json:"uploadHeaders"`
-    ExpiresAt     int64             `json:"expiresAt"` // unix seconds
-    Signature     string            `json:"signature,omitempty"` // set iff WithHandleSecret; echo back unchanged
+    Catalog   string    `json:"catalog"`
+    Path      string    `json:"path"`
+    MergeType MergeType `json:"mergeType"`
+    UUID      string    `json:"uuid"`
+    URI       string    `json:"uri"` // provider://bucket/key — recorded in the delta
+
+    // The presigned PUT the caller performs itself. Ignored by WriteNotify,
+    // so a client may drop it when it notifies.
+    Upload storage.PresignedUpload `json:"upload,omitzero"` // {url, method, headers}
 }
 ```
 
@@ -338,8 +333,8 @@ that issues handles can be a different one from the process that owns the
 index. A typical split: an API server that holds the object-store credentials
 mints handles for browsers or mobile apps; the clients upload directly; a
 notify service with the index Redis commits them. The two processes share
-only the resolver's `(provider, bucket)` naming and, if signing is on, the
-secret.
+only the resolver's `(provider, bucket)` naming. Who may call either endpoint
+(a JWT, a session cookie, an API key) is the HTTP layer's job, not Lake's.
 
 ```go
 // Issuing side — object-store credentials, no Redis, no lake.Client.
@@ -350,26 +345,24 @@ resolve := func(_ storage.Kind, provider, bucket string) (storage.Storage, error
     }
     return oss.Bucket(bucket), nil // cheap: the OSS client caches bucket handles
 }
-secret := []byte(os.Getenv("LAKE_HANDLE_SECRET"))
-
 http.HandleFunc("POST /write/begin", func(w http.ResponseWriter, r *http.Request) {
     var req lake.WriteRequest
     if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
         http.Error(w, err.Error(), http.StatusBadRequest)
         return
     }
-    h, err := lake.NewWriteHandle(r.Context(), req, resolve, secret)
+    h, err := lake.NewWriteHandle(r.Context(), req, resolve)
     if err != nil {
         http.Error(w, err.Error(), http.StatusBadRequest) // validation / unknown bucket / no presign
         return
     }
-    json.NewEncoder(w).Encode(h) // the client PUTs to h.UploadURL with h.UploadHeaders
+    json.NewEncoder(w).Encode(h) // the client PUTs to h.Upload.URL with h.Upload.Headers
 })
 ```
 
 ```go
-// Notify side — index Redis and the SAME resolver + secret, no presigning.
-client := lake.New("my-lake", rdb, resolve, lake.WithHandleSecret(secret))
+// Notify side — index Redis and the SAME resolver, no presigning.
+client := lake.New("my-lake", rdb, resolve)
 
 http.HandleFunc("POST /write/notify", func(w http.ResponseWriter, r *http.Request) {
     var h lake.WriteHandle
@@ -386,22 +379,25 @@ http.HandleFunc("POST /write/notify", func(w http.ResponseWriter, r *http.Reques
 ```
 
 Three things make the split safe. The handle is untrusted on the notify side:
-its URI is re-derived from `(Catalog, UUID)` and, with the secret, its
-`Path` / `MergeType` / `ExpiresAt` are pinned by the signature. The resolver is
+its URI is re-derived from `(Catalog, UUID)`, so it can only ever commit the
+object it was issued for, into the catalog it was issued for. The resolver is
 the single definition of what `(provider, bucket)` means, so the URI the
 issuing side records and the backend the notify side's readers fetch from can
 never disagree. And the resolver is called once per handle, possibly
 concurrently, so it must stay cheap: build SDK clients outside the closure, as
-above.
+above. Lake does not authenticate callers: the presigned URL is the object
+store's own credential for the upload, and whether a caller may begin or
+notify a write to a given catalog is decided by whatever guards the two
+endpoints.
 
 **Handle integrity**: handles round-trip through clients Lake does not trust,
 so `WriteNotify` always re-derives the object path from the handle's own
-`(Catalog, UUID)` and rejects a URI that doesn't match — a tampered handle can
-never point one catalog's index at another catalog's objects. With
-`WithHandleSecret` configured, `NewWriteHandle` given the same secret stamps `Signature`
-(HMAC-SHA256 over the identity fields) and WriteNotify rejects handles whose
-signature is missing/invalid or whose `ExpiresAt` has passed (no indefinite
-replay of a leaked handle).
+`(Catalog, UUID)` and rejects a URI that doesn't match (the provider, bucket
+and key live only in the URI — there are no separate fields to disagree with
+it) — a tampered handle can
+never point one catalog's index at another catalog's objects. That is a data
+integrity check, not authentication: who may mint or notify handles for a
+catalog is decided at the HTTP layer in front of Lake.
 
 `Provider` / `Bucket` must be ASCII `[a-zA-Z0-9][a-zA-Z0-9._-]*`, at most 128
 bytes — Lake's own backend-agnostic sanity bound (both parts are recorded in
@@ -577,7 +573,7 @@ catalogs.
 
 ```
 NewWriteHandle: UUID v4 → object path → resolve(provider, bucket).PresignPut(path)  (NO Redis op, NO Client)
-(client uploads bytes directly to handle.UploadURL)
+(the caller PUTs the body to handle.Upload.URL)
 WriteNotify: Lua → dedup by uri (a replay returns the original entry) → monotonic tsSeq alloc; ZADD [mergeType, path, tsSeq, uri]  (NO storage op)
 ```
 
