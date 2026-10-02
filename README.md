@@ -832,16 +832,24 @@ being unique and monotonic per catalog: **everything sorting before the live
 snapshot's stop is dead.** `Collectable(ctx, catalog)` tells you how much.
 
 - **Index:** `ZREMRANGEBYSCORE {prefix}:d:{catalog} -inf {snap stop score}`.
-  Safe at any time from any process — reads observe the pointer and the log
-  in one atomic Lua call, and the pointer is monotonic, so a trim can never
-  take a delta a concurrent read still needs. (This is *not* true of a
-  `ZREM` on a live delta; that is what `RemoveDelta` is for.)
+  Safe against concurrent reads and writes from any process — reads observe
+  the pointer and the log in one atomic Lua call, and the pointer only moves
+  forward — with one exception: `DeleteCatalog`. It resets the catalog's
+  sequence, so a catalog deleted and re-created within the same second as the
+  stop you read could mint live deltas at or below it. Do not interleave a
+  trim (or trust a `Collectable` count) with deleting that same catalog; both
+  are your operator calls, so serialise them. (A `ZREM` on a live delta is
+  never safe; that is what `RemoveDelta` is for.)
 - **Objects:** delta objects named by the trimmed entries' URIs, and snapshot
-  objects under the catalog's prefix whose name sorts before the live stop.
-  Delete them only once the snapshot has been published for a few minutes
-  (five is generous; the snap object's Last-Modified tells you): a read that
-  listed just before the pointer moved may still be fetching the bodies it
-  absorbed.
+  objects under the catalog's prefix whose stop is older than the live one.
+  Parse the name (`{tsSeq}[-g{gen}].snap`) with `lake.ParseTimeSeqID` and
+  compare `Score()`; names do not sort lexically (`…_10` sorts before `…_2`).
+  Delete them only after the pointer has been live for longer than your
+  longest read: a read that listed the old pointer may still be fetching
+  what it absorbed. Measure from when *you* first observed the pointer (via
+  `Collectable` or `IterateSnaps`), not from the object's Last-Modified,
+  which predates the pointer's publication. Reads are bounded only by the
+  caller's context; five minutes is generous for most deployments.
 
 Where that sweep lives is up to you — a cron, a bucket lifecycle rule for the
 objects, or nothing at all.

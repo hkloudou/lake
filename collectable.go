@@ -17,11 +17,15 @@ import (
 // entry and every snapshot object sorting before the live snap stop is dead.
 //
 //   - Index: ZREMRANGEBYSCORE <prefix>:d:<catalog> -inf <snap stop score>.
-//     Safe at any time — reads observe the pointer and the log atomically.
-//   - Objects: delete them only once the snapshot has been published for a
-//     few minutes (five is generous; use the snap object's Last-Modified). A
-//     read that listed just before the pointer moved may still be fetching
-//     the bodies it absorbed.
+//     Safe against concurrent reads and writes (reads observe the pointer
+//     and the log atomically; the pointer only moves forward). Not against a
+//     concurrent DeleteCatalog of the same catalog, which resets its
+//     sequence — serialise the two; both are yours.
+//   - Objects: delete them only after the pointer has been live for longer
+//     than your longest read, measured from when you first observed it (a
+//     read that listed the old pointer may still be fetching what it
+//     absorbed). Compare snapshot names by ParseTimeSeqID(...).Score(), not
+//     lexically.
 func (c *Client) Collectable(ctx context.Context, catalog string) (int64, error) {
 	if err := utils.ValidateCatalog(catalog); err != nil {
 		return 0, err

@@ -130,8 +130,10 @@ func (x *Index) GetLatestSnap(ctx context.Context, catalog string) (*SnapInfo, e
 
 // Absorbed counts the delta entries at or before the catalog's snap stop —
 // the ones no read fetches any more. 0 without a snapshot. Not atomic with
-// the pointer read, which is fine: the pointer only moves forward, so the
-// count can only be an undercount.
+// the pointer read: against writes and snapshots that is fine (the pointer
+// only moves forward, so the count can only lag), but a DeleteCatalog in
+// between resets the sequence and the count may include the re-created
+// catalog's live deltas. Both are operator calls; they serialise them.
 func (x *Index) Absorbed(ctx context.Context, catalog string) (int64, error) {
 	snap, err := x.GetLatestSnap(ctx, catalog)
 	if err != nil || snap == nil {
