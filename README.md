@@ -272,9 +272,12 @@ type Kind uint8 // Delta | Snap — which object class is being resolved
 type Resolver func(kind Kind, provider, bucket string) (Storage, error)
 ```
 
-Lake memoises the resolved `Storage` per `(kind, provider, bucket)`, so your
-resolver is called at most once per distinct triple. Put credential / endpoint /
-pooling / multi-account routing inside the closure.
+A `Client` memoises the resolved `Storage` per `(kind, provider, bucket)` on
+the read path, but `NewWriteHandle` calls the resolver for every handle it
+mints, possibly concurrently. So keep the resolver cheap and concurrency-safe:
+build SDK clients once outside the closure and only look them up inside (the
+bundled backends and `cached.Resolver` all work this way); routing by
+credential / endpoint / account lives in the closure.
 
 `storage/cached` is a decorator, not a backend: `cached.Wrap(namespace, backend, cache)`
 adds read-through (Get) and write-through (Put) caching to any `Storage`, and

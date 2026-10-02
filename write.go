@@ -78,10 +78,14 @@ func WithUploadContentType(ct string) WriteOption {
 // call — so anything that holds the object store's credentials (an API
 // server, a gateway, a batch job pre-minting uploads) can produce handles and
 // hand them to WriteNotify. secret must match the notifying Client's
-// WithHandleSecret (nil if none).
+// WithHandleSecret (nil if none). resolve is called once per handle, so it
+// must be cheap and safe for concurrent use (see storage.Resolver).
 func NewWriteHandle(ctx context.Context, req WriteRequest, resolve storage.Resolver, secret []byte, opts ...WriteOption) (*WriteHandle, error) {
 	if err := validateWrite(req.Catalog, req.Path, req.MergeType, req.Provider, req.Bucket); err != nil {
 		return nil, err
+	}
+	if resolve == nil {
+		return nil, errors.New("lake: NewWriteHandle requires a storage.Resolver")
 	}
 	st, err := resolve(storage.Delta, req.Provider, req.Bucket)
 	if err != nil {

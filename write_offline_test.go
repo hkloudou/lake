@@ -38,6 +38,13 @@ func TestNewWriteHandle_OfflineMintAccepted_Redis(t *testing.T) {
 	}
 }
 
+func TestNewWriteHandle_NilResolverIsAnError(t *testing.T) {
+	req := WriteRequest{Catalog: "users", Path: "/", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data"}
+	if _, err := NewWriteHandle(context.Background(), req, nil, nil); err == nil {
+		t.Fatal("nil resolver must be an error, not a panic")
+	}
+}
+
 // TestNewWriteHandle_RequiresPresigner: a backend without presign capability
 // (file / memory) cannot start a write.
 func TestNewWriteHandle_RequiresPresigner(t *testing.T) {
