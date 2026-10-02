@@ -17,8 +17,3 @@ type SnapInfo = index.SnapInfo
 
 // TimeSeqID is the (timestamp, seqid) pair Lake stamps onto every write.
 type TimeSeqID = index.TimeSeqID
-
-// ParseTimeSeqID parses the "{timestamp}_{seqid}" form found in merge
-// errors, delta members and snapshot object names, so a sweep can compare
-// snapshots by Score() instead of by name (which does not sort).
-var ParseTimeSeqID = index.ParseTimeSeqID

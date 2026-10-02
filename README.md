@@ -828,31 +828,34 @@ That is correct — reads only ever touch the snapshot and the deltas after it �
 just not free.
 
 When you want the space back, the rule is one comparison, courtesy of tsSeq
-being unique and monotonic per catalog: **everything sorting before the live
-snapshot's stop is dead.** `Collectable(ctx, catalog)` tells you how much.
+being unique and monotonic per catalog: **everything the live snapshot
+absorbed is dead** — the delta entries at or before its stop, and every
+snapshot object of the catalog other than the one the pointer names.
+`Collectable(ctx, catalog)` tells you whether there is work.
 
-- **Index:** `ZREMRANGEBYSCORE {prefix}:d:{catalog} -inf {snap stop score}`.
-  Safe against concurrent reads and writes from any process — reads observe
-  the pointer and the log in one atomic Lua call, and the pointer only moves
-  forward — with one exception: `DeleteCatalog`. It resets the catalog's
-  sequence, so a catalog deleted and re-created within the same second as the
-  stop you read could mint live deltas at or below it. Do not interleave a
-  trim (or trust a `Collectable` count) with deleting that same catalog; both
-  are your operator calls, so serialise them. (A `ZREM` on a live delta is
-  never safe; that is what `RemoveDelta` is for.)
-- **Objects:** delta objects named by the trimmed entries' URIs, and snapshot
-  objects under the catalog's prefix whose stop is older than the live one.
-  Parse the name (`{tsSeq}[-g{gen}].snap`) with `lake.ParseTimeSeqID` and
-  compare `Score()`; names do not sort lexically (`…_10` sorts before `…_2`).
-  Delete them only after the pointer has been live for longer than your
-  longest read: a read that listed the old pointer may still be fetching
-  what it absorbed. Measure from when *you* first observed the pointer (via
-  `Collectable` or `IterateSnaps`), not from the object's Last-Modified,
-  which predates the pointer's publication. Reads are bounded only by the
-  caller's context; five minutes is generous for most deployments.
+A sweep is a tool of yours, not part of Lake, and a correct one needs three
+things this README will not pretend fit in a one-liner:
 
-Where that sweep lives is up to you — a cron, a bucket lifecycle rule for the
-objects, or nothing at all.
+- **The live pointer, observed as an identity (stop + URI) through `List` or
+  `IterateSnaps`**, with the grace restarted whenever it changes. Reads are
+  bounded only by the caller's context, so before any *object* goes the
+  grace must exceed your longest read (a read that listed the old pointer may
+  still be fetching what it absorbed). The index trim itself —
+  `ZREMRANGEBYSCORE {prefix}:d:{catalog} -inf {stop score}` — needs no grace:
+  reads observe the pointer and the log in one atomic call.
+- **Mutual exclusion with `DeleteCatalog` of the same catalog** for the whole
+  cycle, grace included: deletion resets the catalog's sequence, so a
+  same-second re-creation can mint live tsSeqs at or below a stop you
+  recorded earlier.
+- **Object selection by reference, not by name.** Dead delta objects are the
+  URIs of the entries you trimmed; dead snapshot objects are everything under
+  the catalog's snapshot prefix except the URI the live pointer names
+  (`{stop}[-g{gen}].snap` names do not sort, and several generations can
+  share one stop). A `ZREM` on a live delta is never safe; that is what
+  `RemoveDelta` is for.
+
+Or do none of it: a bucket lifecycle rule, or nothing at all, is a valid
+choice while history is cheap.
 
 ## 🔄 Migrating from v2 to v3
 
