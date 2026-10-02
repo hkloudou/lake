@@ -27,7 +27,7 @@ func TestPoisonBodyFailsLoudly_Redis(t *testing.T) {
 	c := New(prefix, rdb, resolve, WithSnapTarget("mem", "snaps"))
 
 	ctx := context.Background()
-	h, err := beginWrite(c, store, WriteRequest{
+	h, err := beginWrite(c, WriteRequest{
 		Catalog: "users", Path: "/profile", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data",
 	})
 	if err != nil {

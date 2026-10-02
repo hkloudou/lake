@@ -28,7 +28,7 @@ func TestWriteNotify_IdempotentRetry_Redis(t *testing.T) {
 
 	begin := func(body string) *WriteHandle {
 		t.Helper()
-		h, err := beginWrite(c, store, WriteRequest{
+		h, err := beginWrite(c, WriteRequest{
 			Catalog: "acct", Path: "/x", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data",
 		})
 		if err != nil {

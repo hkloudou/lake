@@ -109,7 +109,7 @@ func TestNewWriteHandle_RejectsAmbiguousProviderBucket(t *testing.T) {
 		_, err := NewWriteHandle(context.Background(), WriteRequest{
 			Catalog: "users", Path: "/", MergeType: MergeTypeReplace,
 			Provider: tc.provider, Bucket: tc.bucket,
-		}, failingPresigner{}, nil)
+		}, failingResolver, nil)
 		if err == nil || !strings.Contains(err.Error(), "invalid storage") {
 			t.Fatalf("provider=%q bucket=%q: expected invalid storage error, got %v", tc.provider, tc.bucket, err)
 		}
@@ -173,7 +173,7 @@ func TestWithSnapTarget_PanicsOnAmbiguousTarget(t *testing.T) {
 func TestNewWriteHandle_ZeroTTLUsesDefaultTTL(t *testing.T) {
 	h, err := NewWriteHandle(context.Background(), WriteRequest{
 		Catalog: "users", Path: "/", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data",
-	}, presignBucket{mem.New().Bucket("data")}, nil, WithUploadTTL(0))
+	}, presignResolver(mem.New()), nil, WithUploadTTL(0))
 	if err != nil {
 		t.Fatalf("NewWriteHandle: %v", err)
 	}

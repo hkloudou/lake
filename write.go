@@ -71,15 +71,21 @@ func WithUploadContentType(ct string) WriteOption {
 }
 
 // NewWriteHandle starts a write: it reserves a UUID, derives the object path
-// and signs a PUT URL against st (the bucket-scoped Storage for req.Provider /
-// req.Bucket, which must implement storage.Presigner). It needs no Client and
-// no Redis — pure local computation plus one presign call — so anything that
-// holds the object store's credentials (an API server, a gateway, a batch job
-// pre-minting uploads) can produce handles and hand them to WriteNotify.
-// secret must match the notifying Client's WithHandleSecret (nil if none).
-func NewWriteHandle(ctx context.Context, req WriteRequest, st storage.Storage, secret []byte, opts ...WriteOption) (*WriteHandle, error) {
+// and signs a PUT URL against the storage that resolve maps req.Provider /
+// req.Bucket to — the same Resolver reads use, so the URI recorded in the
+// index and the URL the client uploads to can never name different places.
+// It needs no Client and no Redis — pure local computation plus one presign
+// call — so anything that holds the object store's credentials (an API
+// server, a gateway, a batch job pre-minting uploads) can produce handles and
+// hand them to WriteNotify. secret must match the notifying Client's
+// WithHandleSecret (nil if none).
+func NewWriteHandle(ctx context.Context, req WriteRequest, resolve storage.Resolver, secret []byte, opts ...WriteOption) (*WriteHandle, error) {
 	if err := validateWrite(req.Catalog, req.Path, req.MergeType, req.Provider, req.Bucket); err != nil {
 		return nil, err
+	}
+	st, err := resolve(storage.Delta, req.Provider, req.Bucket)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %s://%s: %w", req.Provider, req.Bucket, err)
 	}
 	presigner, ok := st.(storage.Presigner)
 	if !ok {

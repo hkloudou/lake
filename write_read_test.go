@@ -36,7 +36,7 @@ func TestWriteReadRoundTrip_Redis(t *testing.T) {
 	ctx := context.Background()
 	write := func(path string, mt MergeType, body string) {
 		t.Helper()
-		h, err := beginWrite(c, store, WriteRequest{
+		h, err := beginWrite(c, WriteRequest{
 			Catalog: "users", Path: path, MergeType: mt, Provider: "mem", Bucket: "data",
 		})
 		if err != nil {
@@ -102,7 +102,7 @@ func TestReadBytesMutationDoesNotCorruptSnapshot(t *testing.T) {
 	c := New(prefix, rdb, resolve, WithSnapTarget("mem", "snaps"))
 
 	ctx := context.Background()
-	h, err := beginWrite(c, store, WriteRequest{
+	h, err := beginWrite(c, WriteRequest{
 		Catalog: "users", Path: "/", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data",
 	})
 	if err != nil {

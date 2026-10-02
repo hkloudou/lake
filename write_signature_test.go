@@ -31,7 +31,7 @@ func beginSigned(t *testing.T, c *Client) *WriteHandle {
 	t.Helper()
 	h, err := NewWriteHandle(context.Background(), WriteRequest{
 		Catalog: "users", Path: "/profile", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data",
-	}, presignBucket{mem.New().Bucket("data")}, c.handleSecret)
+	}, presignResolver(mem.New()), c.handleSecret)
 	if err != nil {
 		t.Fatalf("NewWriteHandle: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestHandleSignature_SignedRoundTrip_Redis(t *testing.T) {
 	c := New(prefix, rdb, resolve, WithHandleSecret([]byte("s3cret")))
 
 	ctx := context.Background()
-	h, err := beginWrite(c, store, WriteRequest{
+	h, err := beginWrite(c, WriteRequest{
 		Catalog: "users", Path: "/", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data",
 	})
 	if err != nil {
