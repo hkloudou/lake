@@ -460,9 +460,25 @@ jsonStr, err := lake.ReadString(ctx, list)
 profile, err := lake.Read[UserProfile](ctx, list)
 ```
 
-Read resolves each delta/snap by its stored URI (`provider://bucket/path` →
-resolver → `Get`), merges in score order, and — if `WithSnapTarget` is set —
-asynchronously persists a fresh snapshot off the read critical path.
+A `Read*` call takes the `ListResult` through five steps:
+
+1. **Prune.** Entries a later `Replace` fully overwrites (same path or below)
+   can never affect the document, so their bodies are never fetched — and a
+   poison body among them cannot wedge the read.
+2. **Fetch.** The snapshot (`resolve(Snap, …).Get`) and the surviving delta
+   bodies (`resolve(Delta, …).Get`, at most 10 in flight) load concurrently;
+   the first failure cancels the rest. A 0-byte object is an error naming the
+   delta's tsSeq (the client uploaded nothing — unblock with `RemoveDelta`).
+3. **Memoise.** Fetched bodies are kept on the `ListResult`, so reading the
+   same `ListResult` again — or handing it to a `Sampler` loader that reads it
+   — fetches nothing twice.
+4. **Merge** in score order, `Replace` then `RFC 7396` as recorded. The result
+   never aliases a cached body, so callers may mutate it.
+5. **Snapshot.** With `WithSnapTarget` set and at least `WithSnapMinDeltas`
+   entries past the current snap, the merged document is handed to a detached
+   goroutine (at most one per catalog in flight, bounded to 5 minutes) that
+   uploads it and publishes the pointer behind the monotonic + removal-
+   generation guard. Reads never wait for it.
 
 ### Sample (computed, cached)
 
