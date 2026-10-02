@@ -75,3 +75,24 @@ func TestParseURIRejectsMalformed(t *testing.T) {
 		}
 	}
 }
+
+func TestIsDeltaPath(t *testing.T) {
+	const uuid = "0123456789abcdef0123456789abcdef"
+	if !IsDeltaPath("users", DeltaPath("users", uuid)) {
+		t.Fatal("DeltaPath output must be recognised as this catalog's delta")
+	}
+	for _, bad := range []string{
+		DeltaPath("other", uuid),                               // another catalog
+		SnapPath("users", "1700000000_1"),                      // a snap
+		DeltaPath("users", "short"),                            // uuid too short
+		DeltaPath("users", uuid+"ff"),                          // too long
+		DeltaPath("users", "../"+uuid[3:]),                     // path metacharacters
+		DeltaPath("users", "ABCDEF0123456789ABCDEF0123456789"), // uppercase hex
+		"arbitrary/object.dat",
+		"",
+	} {
+		if IsDeltaPath("users", bad) {
+			t.Errorf("IsDeltaPath(users, %q) = true, want false", bad)
+		}
+	}
+}
