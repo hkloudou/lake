@@ -79,6 +79,11 @@ the read's critical path (every read with new deltas by default; raise
 document); wrap the resolver in the recommended `storage/cached` decorator and
 bodies come from cache, not a cold fetch.
 
+**Derived data** (`NewSampler`) is memoised in Redis keyed by the catalog's
+version, so a service that reads samples rather than raw documents never
+touches object storage on its hot path — see *Lake is a lazily materialized
+view system* under Design Philosophy.
+
 ## 🚀 Quick Start
 
 ### Installation
@@ -750,6 +755,47 @@ storage alone cannot reconstruct the sequence), so the index Redis must persist.
 What *is* pure cache — the tsSeq allocator key aside — is the sample memo and any
 `storage/cached` read-path cache: recomputed on miss, so failing to write them
 never fails a user-visible operation.
+
+### Lake is a lazily materialized view system
+
+Put the Sampler next to the log and the shape is familiar: the **raw log** lives
+in object storage, the **views** (sample values) live in Redis, and a view is
+invalidated by the log's own version — the catalog's `LastUpdated()` score and
+its removal generation, both recorded with each cached sample. So on the paths
+a service actually runs, nothing touches object storage:
+
+| Path | What it costs |
+|------|---------------|
+| Write commit (`WriteNotify`) | one Redis Lua call |
+| Derived read (`Sample` on a hit) | `List` + `HGET`: two Redis round-trips |
+| Derived read, many catalogs (`Batch`) | `BatchList` + `HMGET`: two round-trips for the whole set |
+| Recompute (first read after a change) | the snapshot + the deltas since it, then the loader |
+
+Object storage is left with two jobs — holding history cheaply, and supplying
+the raw material when a view is recomputed. The recompute is lazy: a catalog
+nobody reads is never recomputed, which is the opposite trade-off from a
+streaming materializer (Flink, Materialize) that recomputes on every write
+whether or not anyone looks. The closest relative is a CouchDB view, which is
+also refreshed on read and keyed by a sequence number.
+
+Snapshots bound the recompute's I/O, not just a plain read's: `List` returns
+the snapshot pointer and only the deltas *after* its stop, so a loader's
+`ReadMap` fetches one snapshot body plus at most `WithSnapMinDeltas`-ish
+deltas, never the catalog's whole history. The loader itself still runs over
+the full current document (there is no incremental-update hook; carry any
+running state inside `T` if a metric can be updated incrementally).
+
+Three consequences to plan around:
+
+- The first reader after a change pays the recompute. `Sample` single-flights
+  that per process; two processes can both recompute and both `HSET` — correct,
+  just redundant.
+- Sample values are Redis-resident, so they are priced as memory:
+  `size(T) × catalogs × indicators`. Route large samples to an evictable
+  instance with `WithSampleCacheRedis`; that option exists for exactly this.
+- Freshness is read-driven, not time-driven. Nothing recomputes until someone
+  calls `Sample`; a push-style "recompute on write" belongs in your
+  `WriteNotify` handler or `client.Use` middleware, not in Lake.
 
 ### A patch body is the client's responsibility
 
