@@ -48,7 +48,7 @@ Two stores, with distinct jobs:
   *order* of writes — which object storage alone can't reconstruct — so it is
   **authoritative and must persist**.
 - **Object storage — the bodies.** Every delta and snapshot body lives here (OSS
-  / S3 / file / memory). Lake core imports no cloud SDK: you pass a **Resolver**,
+  / S3 / memory). Lake core imports no cloud SDK: you pass a **Resolver**,
   `func(kind, provider, bucket) (Storage, error)`, and Lake only ever calls `Get`
   / `Put` on what it returns.
 
@@ -263,7 +263,6 @@ your resolver:
 | Package | Constructor | Presign |
 |---------|-------------|---------|
 | `storage/oss` | `oss.New(oss.Config{...}) → (*Client).Bucket(name)` | ✅ |
-| `storage/file` | `file.New(basePath) → (*FS).Bucket(name)` | ❌ |
 | `storage/mem` | `mem.New() → (*Store).Bucket(name)` | ❌ (tests) |
 
 ```go
@@ -413,7 +412,7 @@ catalog is decided at the HTTP layer in front of Lake.
 
 `Provider` / `Bucket` must be ASCII `[a-zA-Z0-9][a-zA-Z0-9._-]*`, at most 128
 bytes — Lake's own backend-agnostic sanity bound (both parts are recorded in
-every delta's URI; a bucket is one path component on the file backend). Real
+every delta's URI). Real
 object stores impose tighter rules of their own (OSS / S3 buckets: 63 chars),
 surfaced by the backend itself. They are embedded in the recorded URI, so `/`
 `:` `|` are rejected by `NewWriteHandle` (an ambiguous name would make the URI parse
@@ -421,7 +420,7 @@ back to a different object), and WriteNotify re-checks the parsed parts of the
 handle's URI (the handle is untrusted input).
 
 > **Presign capability**: `NewWriteHandle` requires the resolved storage to
-> implement `storage.Presigner`. OSS supports it; file / memory return
+> implement `storage.Presigner`. OSS supports it; the memory backend returns
 > `lake.ErrPresignNotSupported`.
 >
 > **Create-once uploads**: the OSS URL is signed with `x-oss-forbid-overwrite`,
@@ -571,7 +570,9 @@ and the catalog may be written again immediately from an empty document.
 ### Path format (the JSON field path)
 
 - Must start with `/`; must not end with `/`
-- Each segment starts with a letter / `_` / `$` (no leading digit)
+- Each segment is `[a-zA-Z_$][a-zA-Z0-9_$]*` — starts with a letter / `_` /
+  `$`, no leading digit, no `.` (so `/` is the only separator and a path maps
+  to a gjson path with nothing to escape)
 - `/` alone means the whole document
 - New writes cap the path at 512 bytes (it is recorded verbatim in every
   delta's index entry); reads accept longer paths recorded before the cap

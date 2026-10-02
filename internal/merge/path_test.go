@@ -24,29 +24,9 @@ func TestToGjsonPath(t *testing.T) {
 			expected: "user.profile",
 		},
 		{
-			name:     "segment with dot",
-			path:     "/user.info",
-			expected: `user\.info`,
-		},
-		{
-			name:     "segment with multiple dots",
-			path:     "/user.profile.name",
-			expected: `user\.profile\.name`,
-		},
-		{
-			name:     "multiple segments with dots",
-			path:     "/user.info/profile.data",
-			expected: `user\.info.profile\.data`,
-		},
-		{
 			name:     "deep nesting",
 			path:     "/a/b/c/d/e",
 			expected: "a.b.c.d.e",
-		},
-		{
-			name:     "complex path with dots and slashes",
-			path:     "/config.app/database.settings/host.name",
-			expected: `config\.app.database\.settings.host\.name`,
 		},
 		{
 			name:     "underscore and dollar",

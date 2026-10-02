@@ -39,7 +39,7 @@ func TestNewWriteHandle_NilResolverIsAnError(t *testing.T) {
 }
 
 // TestNewWriteHandle_RequiresPresigner: a backend without presign capability
-// (file / memory) cannot start a write.
+// (the memory backend) cannot start a write.
 func TestNewWriteHandle_RequiresPresigner(t *testing.T) {
 	req := WriteRequest{Catalog: "users", Path: "/", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data"}
 	if _, err := NewWriteHandle(context.Background(), req, memResolver()); err != ErrPresignNotSupported {

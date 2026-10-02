@@ -1,6 +1,5 @@
 // Package cached is a ready-made caching decorator for any storage.Storage,
-// composed in a storage.Resolver (alongside storage/oss, storage/file,
-// storage/mem). Lake core is cache-agnostic: it only ever calls Get/Put on the
+// composed in a storage.Resolver (alongside storage/oss and storage/mem). Lake core is cache-agnostic: it only ever calls Get/Put on the
 // Storage the Resolver returns, so caching is entirely an embedder concern wired
 // here.
 //

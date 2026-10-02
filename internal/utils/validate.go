@@ -18,8 +18,10 @@ const (
 
 var (
 	// Field path: starts with "/", no trailing "/", segments follow JS
-	// variable naming (dots allowed inside a segment).
-	fieldPathRegex = regexp.MustCompile(`^/([a-zA-Z_$][a-zA-Z0-9_$.]*(/[a-zA-Z_$][a-zA-Z0-9_$.]*)*)?$`)
+	// variable naming. No "." inside a segment: "/" is the only separator,
+	// so a path maps to a gjson path by replacing "/" with "." and nothing
+	// ever needs escaping.
+	fieldPathRegex = regexp.MustCompile(`^/([a-zA-Z_$][a-zA-Z0-9_$]*(/[a-zA-Z_$][a-zA-Z0-9_$]*)*)?$`)
 	// Catalog (and sample indicator): ASCII segments joined by single "/".
 	// ":" "|" "(" ")" are Redis / member delimiters and path-encoding markers.
 	catalogRegex = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9_.\-]*(/[a-zA-Z0-9_][a-zA-Z0-9_.\-]*)*$`)
@@ -33,7 +35,7 @@ func ValidateFieldPath(path string) error {
 		return fmt.Errorf("invalid field path: %d bytes exceeds the %d-byte limit", len(path), MaxFieldPathLen)
 	}
 	if !fieldPathRegex.MatchString(path) {
-		return fmt.Errorf("invalid field path %q: start with /, no trailing /, segments must follow JS variable naming", path)
+		return fmt.Errorf("invalid field path %q: start with /, no trailing /, segments [a-zA-Z_$][a-zA-Z0-9_$]* (no dots)", path)
 	}
 	return nil
 }
