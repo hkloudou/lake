@@ -822,40 +822,41 @@ and read continuously, raise it so each upload absorbs several writes.
 
 There is no compaction, no reaper, no sweep. Every delta entry, every delta
 object and every snapshot object stays where it landed; `DeleteCatalog` and
-`RemoveDelta` are the only subtractions, and both are explicit operator calls
-on the index alone. Left alone, the index and the bucket grow with history.
-That is correct — reads only ever touch the snapshot and the deltas after it —
-just not free.
+`RemoveDelta` are the only subtractions, both explicit operator calls on the
+index alone. Left alone, the index and the bucket grow with history. That is
+correct — reads only ever touch the snapshot and the deltas after it — just
+not free, and keeping history is the supported choice today.
 
-When you want the space back, the rule is one comparison, courtesy of tsSeq
-being unique and monotonic per catalog: **everything the live snapshot
-absorbed is dead** — the delta entries at or before its stop, and every
-snapshot object of the catalog other than the one the pointer names.
-`Collectable(ctx, catalog)` tells you whether there is work.
+What is dead is still well defined, courtesy of tsSeq being unique and
+monotonic per catalog: the delta entries at or before the live snapshot's
+stop, the objects they name, and every snapshot object of the catalog other
+than the one the pointer names. `Collectable(ctx, catalog)` reports the first
+of these, so you can see how much history a catalog carries.
 
-A sweep is a tool of yours, not part of Lake, and a correct one needs three
-things this README will not pretend fit in a one-liner:
+If you build a sweep on that definition, it is yours — and these are the ways
+a naive one loses data:
 
-- **The live pointer, observed as an identity (stop + URI) through `List` or
-  `IterateSnaps`**, with the grace restarted whenever it changes. Reads are
-  bounded only by the caller's context, so before any *object* goes the
-  grace must exceed your longest read (a read that listed the old pointer may
-  still be fetching what it absorbed). The index trim itself —
-  `ZREMRANGEBYSCORE {prefix}:d:{catalog} -inf {stop score}` — needs no grace:
-  reads observe the pointer and the log in one atomic call.
-- **Mutual exclusion with `DeleteCatalog` of the same catalog** for the whole
-  cycle, grace included: deletion resets the catalog's sequence, so a
-  same-second re-creation can mint live tsSeqs at or below a stop you
-  recorded earlier.
-- **Object selection by reference, not by name.** Dead delta objects are the
-  URIs of the entries you trimmed; dead snapshot objects are everything under
-  the catalog's snapshot prefix except the URI the live pointer names
-  (`{stop}[-g{gen}].snap` names do not sort, and several generations can
-  share one stop). A `ZREM` on a live delta is never safe; that is what
-  `RemoveDelta` is for.
-
-Or do none of it: a bucket lifecycle rule, or nothing at all, is a valid
-choice while history is cheap.
+- **In-flight reads.** A read is bounded only by its caller's context and may
+  still be fetching what the pointer it listed had absorbed. Objects need a
+  grace longer than your longest read, started when *you* observed the
+  pointer's identity (stop + URI, via `List` or `IterateSnaps`) and restarted
+  whenever it changes. The index trim itself
+  (`ZREMRANGEBYSCORE {prefix}:d:{catalog} -inf {stop score}`) needs no grace:
+  reads observe pointer and log in one atomic call. (A `ZREM` on a *live*
+  delta is never safe; that is what `RemoveDelta` is for.)
+- **In-flight snapshot saves.** A snapshot object exists before its pointer is
+  published — for up to the save timeout, five minutes. Never delete an object
+  younger than the grace, whatever the pointer says.
+- **`DeleteCatalog`.** It resets the catalog's sequence, so a same-second
+  re-creation can mint live tsSeqs at or below a stop you recorded. Exclude
+  the whole sweep cycle, grace included, from deleting the same catalog.
+- **Names.** `{stop}[-g{gen}].snap` names do not sort, and several generations
+  can share one stop. Select by reference — the trimmed entries' URIs, the
+  live pointer's URI — never by name.
+- **Replayed handles.** The notify dedup record lives one hour; a handle
+  notified again after that commits a *new* entry with the *same* URI. If a
+  sweep has already deleted that object, the replay is a poison delta: repair
+  it with `RemoveDelta`, and treat a replay that late as the client bug it is.
 
 ## 🔄 Migrating from v2 to v3
 
