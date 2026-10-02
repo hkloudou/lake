@@ -208,7 +208,7 @@ func (s *Sampler[T]) loadAndCache(ctx context.Context, list *ListResult) (T, err
 	c := list.client
 	meta := SampleMeta{Score: list.LastUpdated(), RemoveGen: list.RemoveGen()}
 	key := list.catalog + ":" + s.indicator + ":" + strconv.FormatFloat(meta.Score, 'f', 6, 64) + ":" + meta.RemoveGen
-	raw, err := c.sampleFlight.Do(key, func() (string, error) {
+	raw, err, _ := c.sampleFlight.Do(key, func() (any, error) {
 		v, err := s.loader(list)
 		if err != nil {
 			return "", &loaderError{err}
@@ -226,7 +226,7 @@ func (s *Sampler[T]) loadAndCache(ctx context.Context, list *ListResult) (T, err
 	if err != nil {
 		return zero, err
 	}
-	_, v, err := unmarshalSampleCache[T]([]byte(raw))
+	_, v, err := unmarshalSampleCache[T]([]byte(raw.(string)))
 	return v, err
 }
 

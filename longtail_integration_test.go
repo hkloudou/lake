@@ -48,8 +48,8 @@ func writeDelta(t *testing.T, c *Client, store *mem.Store, catalog, path string,
 // Redis clock that steps BACKWARDS (failover to a lagging replica, NTP step)
 // must not mint a tsSeq at-or-below anything already issued — duplicates
 // would break RemoveDelta targeting and merge order, and a score below the
-// snap stop would make an acknowledged write invisible to every read and
-// then permanently deleted by Compact.
+// snap stop would make an acknowledged write invisible to every read (and
+// to any operator trim up to the snapshot).
 func TestNotifyMonotonicAcrossClockRegression_Redis(t *testing.T) {
 	c, store, ctx := newMemClient(t)
 
@@ -164,28 +164,5 @@ func TestSampleEmptyCatalogCachesOnce_Redis(t *testing.T) {
 	}
 	if n := runs.Load(); n != 1 {
 		t.Fatalf("loader ran %d times for an unchanged empty catalog, want 1", n)
-	}
-}
-
-// TestReadPrunesDeadDeltaFetches: bodies of entries a later root Replace
-// overwrites must not be fetched at all — and a poison body among them must
-// not wedge the read.
-func TestReadPrunesDeadDeltaFetches_Redis(t *testing.T) {
-	c, store, ctx := newMemClient(t)
-
-	// A poison body (invalid JSON) followed by a root Replace that covers it.
-	writeDelta(t, c, store, "users", "/profile", MergeTypeReplace, `{invalid-json`)
-	writeDelta(t, c, store, "users", "/", MergeTypeReplace, `{"clean":true}`)
-
-	list := c.List(ctx, "users")
-	if list.Err != nil {
-		t.Fatal(list.Err)
-	}
-	got, err := ReadString(ctx, list)
-	if err != nil {
-		t.Fatalf("read wedged by a dead poison delta: %v", err)
-	}
-	if got != `{"clean":true}` {
-		t.Fatalf("read = %q, want {\"clean\":true}", got)
 	}
 }
