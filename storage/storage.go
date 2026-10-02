@@ -28,7 +28,7 @@ type Storage interface {
 
 // Presigner is an optional capability: a Storage that can mint an HTTP-signed
 // URL for a direct client upload. Object stores (OSS / S3 / COS) implement it;
-// file / memory backends do not, and WriteBegin returns ErrPresignNotSupported
+// file / memory backends do not, and NewWriteHandle returns ErrPresignNotSupported
 // for them.
 type Presigner interface {
 	PresignPut(ctx context.Context, catalog, path string, opts PresignOptions) (PresignedUpload, error)

@@ -15,14 +15,12 @@ func isValidationErr(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "invalid catalog")
 }
 
-func TestCatalogValidation_WriteBegin(t *testing.T) {
-	c := newDeadClient(t)
-
-	_, err := c.WriteBegin(context.Background(), WriteBeginRequest{
+func TestCatalogValidation_NewWriteHandle(t *testing.T) {
+	_, err := NewWriteHandle(context.Background(), WriteRequest{
 		Catalog:   "/leading-slash",
 		Path:      "/x",
 		MergeType: MergeTypeReplace,
-	})
+	}, failingPresigner{}, nil)
 	if !isValidationErr(err) {
 		t.Fatalf("expected catalog validation error, got %v", err)
 	}
@@ -56,19 +54,17 @@ func TestCatalogValidation_BatchListMixesGoodAndBad(t *testing.T) {
 }
 
 func TestCatalogValidation_AcceptsHierarchy(t *testing.T) {
-	c := newDeadClient(t)
-
-	// Internal "/" is allowed. Call should fail later (missing Provider/Bucket)
+	// Internal "/" is allowed. The call fails later (missing Provider/Bucket)
 	// but NOT at catalog validation.
-	_, err := c.WriteBegin(context.Background(), WriteBeginRequest{
+	_, err := NewWriteHandle(context.Background(), WriteRequest{
 		Catalog:   "tenantA/users",
 		Path:      "/x",
 		MergeType: MergeTypeReplace,
-	})
+	}, failingPresigner{}, nil)
 	if isValidationErr(err) {
 		t.Fatalf("internal / should be allowed; got validation error: %v", err)
 	}
 	if err == nil {
-		t.Fatal("expected non-validation error (Redis unreachable), got nil")
+		t.Fatal("expected non-validation error (missing provider), got nil")
 	}
 }

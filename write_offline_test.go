@@ -8,14 +8,14 @@ import (
 	"github.com/hkloudou/lake/v3/storage/mem"
 )
 
-// TestNewWriteHandle_OfflineMintAccepted_Redis: a handle minted without a
-// Client (only a presigner and, if the notifying side signs, the same secret)
-// is accepted by WriteNotify exactly like one from WriteBegin.
+// TestNewWriteHandle_OfflineMintAccepted_Redis: a handle minted with only a
+// presigner and, if the notifying side signs, the same secret
+// is accepted by WriteNotify.
 func TestNewWriteHandle_OfflineMintAccepted_Redis(t *testing.T) {
 	secret := []byte("shared-secret")
 	c, store, ctx := newMemClient(t, WithHandleSecret(secret))
 	presigner := presignBucket{store.Bucket("data")}
-	req := WriteBeginRequest{Catalog: "users", Path: "/", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data"}
+	req := WriteRequest{Catalog: "users", Path: "/", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data"}
 
 	h, err := NewWriteHandle(ctx, req, presigner, secret)
 	if err != nil {
@@ -37,15 +37,23 @@ func TestNewWriteHandle_OfflineMintAccepted_Redis(t *testing.T) {
 		t.Fatal("handle signed with a different secret must be rejected")
 	}
 	// Validation runs offline too: no presigner call for an invalid request.
-	if _, err := NewWriteHandle(ctx, WriteBeginRequest{Catalog: "a|b", Path: "/", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data"}, failingPresigner{}, nil); err == nil {
+	if _, err := NewWriteHandle(ctx, WriteRequest{Catalog: "a|b", Path: "/", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data"}, failingPresigner{}, nil); err == nil {
 		t.Fatal("invalid catalog must fail before presigning")
 	}
 }
 
-type failingPresigner struct{}
+// failingPresigner is a Storage whose presign must never be reached.
+type failingPresigner struct{ storage.Storage }
 
 func (failingPresigner) PresignPut(context.Context, string, string, storage.PresignOptions) (storage.PresignedUpload, error) {
 	panic("presigner must not be called for an invalid request")
 }
 
-var _ storage.Presigner = presignBucket{mem.New().Bucket("x")}
+// TestNewWriteHandle_RequiresPresigner: a backend without presign capability
+// (file / memory) cannot start a write.
+func TestNewWriteHandle_RequiresPresigner(t *testing.T) {
+	req := WriteRequest{Catalog: "users", Path: "/", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data"}
+	if _, err := NewWriteHandle(context.Background(), req, mem.New().Bucket("data"), nil); err != ErrPresignNotSupported {
+		t.Fatalf("err = %v, want ErrPresignNotSupported", err)
+	}
+}

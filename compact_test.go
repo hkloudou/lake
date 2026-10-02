@@ -34,11 +34,11 @@ func TestCompactRoundTrip_Redis(t *testing.T) {
 	ctx := context.Background()
 	write := func(path string, mt MergeType, body string) {
 		t.Helper()
-		h, err := c.WriteBegin(ctx, WriteBeginRequest{
+		h, err := beginWrite(c, store, WriteRequest{
 			Catalog: "users", Path: path, MergeType: mt, Provider: "mem", Bucket: "data",
 		})
 		if err != nil {
-			t.Fatalf("WriteBegin(%s): %v", path, err)
+			t.Fatalf("NewWriteHandle(%s): %v", path, err)
 		}
 		if err := store.Bucket(h.Bucket).Put(ctx, h.Catalog, h.Key, []byte(body)); err != nil {
 			t.Fatalf("upload: %v", err)

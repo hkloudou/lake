@@ -119,7 +119,7 @@ func TestWrap_ReadThroughCachesMiss(t *testing.T) {
 }
 
 // TestWrap_PresignPassthrough: the wrapper is a storage.Presigner iff the
-// wrapped backend is. WriteBegin relies on this type assertion.
+// wrapped backend is. NewWriteHandle relies on this type assertion.
 func TestWrap_PresignPassthrough(t *testing.T) {
 	if _, ok := Wrap("p|b", presignStore{newCountingStore()}, NewNoOpCache()).(storage.Presigner); !ok {
 		t.Fatal("wrapped presign-capable backend must expose storage.Presigner")

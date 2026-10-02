@@ -17,15 +17,15 @@ import (
 	"github.com/hkloudou/lake/v3/storage"
 )
 
-// ErrPresignNotSupported is returned by WriteBegin when the resolved backend
+// ErrPresignNotSupported is returned by NewWriteHandle when the resolved backend
 // cannot mint presigned URLs (file / memory).
 var ErrPresignNotSupported = storage.ErrPresignNotSupported
 
 const defaultUploadTTL = 15 * time.Minute
 
-// WriteBeginRequest describes a write about to happen. Provider + Bucket pick
+// WriteRequest describes a write about to happen. Provider + Bucket pick
 // where the body lands, per write; the delta records it as provider://bucket/path.
-type WriteBeginRequest struct {
+type WriteRequest struct {
 	Catalog   string    `json:"catalog"`
 	Path      string    `json:"path"`      // JSON path; "/" means root
 	MergeType MergeType `json:"mergeType"` // Replace or RFC7396
@@ -33,7 +33,7 @@ type WriteBeginRequest struct {
 	Bucket    string    `json:"bucket"`
 }
 
-// WriteHandle is what WriteBegin returns and WriteNotify consumes. It is
+// WriteHandle is what NewWriteHandle returns and WriteNotify consumes. It is
 // JSON-serialisable so a non-Go client can upload to UploadURL and ship the
 // handle back to a notify endpoint.
 type WriteHandle struct {
@@ -52,57 +52,40 @@ type WriteHandle struct {
 	Signature     string            `json:"signature,omitempty"` // set iff WithHandleSecret; echo back unchanged
 }
 
-// WriteBeginOption tunes the presign call.
-type WriteBeginOption func(*writeBeginOpts)
+// WriteOption tunes the presign call.
+type WriteOption func(*writeOpts)
 
-type writeBeginOpts struct {
+type writeOpts struct {
 	ttl         time.Duration
 	contentType string
 }
 
 // WithUploadTTL overrides the signed URL validity (default 15 min).
-func WithUploadTTL(d time.Duration) WriteBeginOption {
-	return func(o *writeBeginOpts) { o.ttl = d }
+func WithUploadTTL(d time.Duration) WriteOption {
+	return func(o *writeOpts) { o.ttl = d }
 }
 
 // WithUploadContentType pins Content-Type into the signed URL.
-func WithUploadContentType(ct string) WriteBeginOption {
-	return func(o *writeBeginOpts) { o.contentType = ct }
+func WithUploadContentType(ct string) WriteOption {
+	return func(o *writeOpts) { o.contentType = ct }
 }
 
-// WriteBegin reserves a UUID, derives the object path and signs a PUT URL
-// against (Provider, Bucket) for direct client upload. No Redis op: it is
-// NewWriteHandle with the presigner looked up through the Client's Resolver.
-func (c *Client) WriteBegin(ctx context.Context, req WriteBeginRequest, opts ...WriteBeginOption) (*WriteHandle, error) {
-	if c.hasHandlers() {
-		c.emitEvent(req.Catalog, "WriteBegin", map[string]any{
-			"path": req.Path, "mergeType": int(req.MergeType), "provider": req.Provider, "bucket": req.Bucket,
-		})
-	}
+// NewWriteHandle starts a write: it reserves a UUID, derives the object path
+// and signs a PUT URL against st (the bucket-scoped Storage for req.Provider /
+// req.Bucket, which must implement storage.Presigner). It needs no Client and
+// no Redis — pure local computation plus one presign call — so anything that
+// holds the object store's credentials (an API server, a gateway, a batch job
+// pre-minting uploads) can produce handles and hand them to WriteNotify.
+// secret must match the notifying Client's WithHandleSecret (nil if none).
+func NewWriteHandle(ctx context.Context, req WriteRequest, st storage.Storage, secret []byte, opts ...WriteOption) (*WriteHandle, error) {
 	if err := validateWrite(req.Catalog, req.Path, req.MergeType, req.Provider, req.Bucket); err != nil {
-		return nil, err
-	}
-	st, err := c.storageFor(storage.Delta, req.Provider, req.Bucket)
-	if err != nil {
 		return nil, err
 	}
 	presigner, ok := st.(storage.Presigner)
 	if !ok {
 		return nil, ErrPresignNotSupported
 	}
-	return NewWriteHandle(ctx, req, presigner, c.handleSecret, opts...)
-}
-
-// NewWriteHandle builds a WriteHandle without a Client: pure local
-// computation plus one presign call, so anything that holds the object
-// store's credentials — a gateway, a batch job pre-minting uploads, a client
-// SDK — can produce handles itself and hand them to WriteNotify. secret must
-// match the notifying Client's WithHandleSecret (nil when it has none).
-func NewWriteHandle(ctx context.Context, req WriteBeginRequest, presigner storage.Presigner, secret []byte, opts ...WriteBeginOption) (*WriteHandle, error) {
-	if err := validateWrite(req.Catalog, req.Path, req.MergeType, req.Provider, req.Bucket); err != nil {
-		return nil, err
-	}
-	o := &writeBeginOpts{ttl: defaultUploadTTL}
+	o := &writeOpts{ttl: defaultUploadTTL}
 	for _, opt := range opts {
 		opt(o)
 	}
@@ -146,7 +129,7 @@ func NewWriteHandle(ctx context.Context, req WriteBeginRequest, presigner storag
 // response returns success without appending a second delta.
 //
 // Handles round-trip through clients Lake does not trust, so the URI must be
-// exactly the delta path WriteBegin derived for (Catalog, UUID) — a tampered
+// exactly the delta path NewWriteHandle derived for (Catalog, UUID) — a tampered
 // handle can never point one catalog's index at another's objects. With
 // WithHandleSecret, Path / MergeType / ExpiresAt are pinned by the signature.
 func (c *Client) WriteNotify(ctx context.Context, h *WriteHandle) error {
@@ -181,7 +164,7 @@ func (c *Client) WriteNotify(ctx context.Context, h *WriteHandle) error {
 	return err
 }
 
-// validateWrite is the single check both WriteBegin and WriteNotify apply
+// validateWrite is the single check both NewWriteHandle and WriteNotify apply
 // to a write's identity (the handle is untrusted input).
 func validateWrite(catalog, path string, mt MergeType, provider, bucket string) error {
 	if err := utils.ValidateCatalog(catalog); err != nil {

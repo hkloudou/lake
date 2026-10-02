@@ -39,7 +39,7 @@ func TestWithSnapMinDeltas_Redis(t *testing.T) {
 
 	writeAndRead := func() {
 		t.Helper()
-		h, err := c.WriteBegin(ctx, WriteBeginRequest{
+		h, err := beginWrite(c, store, WriteRequest{
 			Catalog: "doc", Path: "/n", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data",
 		})
 		if err != nil {

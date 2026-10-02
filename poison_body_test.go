@@ -27,11 +27,11 @@ func TestPoisonBodyFailsLoudly_Redis(t *testing.T) {
 	c := New(prefix, rdb, resolve, WithSnapTarget("mem", "snaps"))
 
 	ctx := context.Background()
-	h, err := c.WriteBegin(ctx, WriteBeginRequest{
+	h, err := beginWrite(c, store, WriteRequest{
 		Catalog: "users", Path: "/profile", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data",
 	})
 	if err != nil {
-		t.Fatalf("WriteBegin: %v", err)
+		t.Fatalf("NewWriteHandle: %v", err)
 	}
 	// The "upload": invalid JSON, exactly what a buggy or malicious client
 	// can put at the presigned URL.

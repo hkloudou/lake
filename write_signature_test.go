@@ -14,7 +14,7 @@ import (
 )
 
 // newSignedDeadClient is a Client with handle signing on and an unreachable
-// index Redis — WriteBegin never touches Redis and signature rejection in
+// index Redis — NewWriteHandle never touches Redis and signature rejection in
 // WriteNotify happens before the Redis call, so both are testable offline.
 func newSignedDeadClient(t *testing.T, secret string) *Client {
 	t.Helper()
@@ -29,11 +29,11 @@ func newSignedDeadClient(t *testing.T, secret string) *Client {
 
 func beginSigned(t *testing.T, c *Client) *WriteHandle {
 	t.Helper()
-	h, err := c.WriteBegin(context.Background(), WriteBeginRequest{
+	h, err := NewWriteHandle(context.Background(), WriteRequest{
 		Catalog: "users", Path: "/profile", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data",
-	})
+	}, presignBucket{mem.New().Bucket("data")}, c.handleSecret)
 	if err != nil {
-		t.Fatalf("WriteBegin: %v", err)
+		t.Fatalf("NewWriteHandle: %v", err)
 	}
 	if h.Signature == "" {
 		t.Fatal("WithHandleSecret client must sign the handle")
@@ -124,11 +124,11 @@ func TestHandleSignature_SignedRoundTrip_Redis(t *testing.T) {
 	c := New(prefix, rdb, resolve, WithHandleSecret([]byte("s3cret")))
 
 	ctx := context.Background()
-	h, err := c.WriteBegin(ctx, WriteBeginRequest{
+	h, err := beginWrite(c, store, WriteRequest{
 		Catalog: "users", Path: "/", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data",
 	})
 	if err != nil {
-		t.Fatalf("WriteBegin: %v", err)
+		t.Fatalf("NewWriteHandle: %v", err)
 	}
 	if err := store.Bucket(h.Bucket).Put(ctx, h.Catalog, h.Key, []byte(`{"name":"Alice"}`)); err != nil {
 		t.Fatalf("upload: %v", err)

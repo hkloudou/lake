@@ -11,7 +11,7 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// presignBucket wraps a mem bucket with a dummy presigner so WriteBegin works
+// presignBucket wraps a mem bucket with a dummy presigner so NewWriteHandle works
 // against the in-memory backend in tests (the "upload" is a direct Put).
 type presignBucket struct{ storage.Storage }
 
@@ -20,7 +20,7 @@ func (presignBucket) PresignPut(context.Context, string, string, storage.Presign
 }
 
 // TestWriteReadRoundTrip_Redis exercises the full new-model flow against a real
-// Redis: WriteBegin (presign) → direct upload → WriteNotify (URI in the delta)
+// Redis: NewWriteHandle (presign) → direct upload → WriteNotify (URI in the delta)
 // → List → Read (resolve URI → fetch → merge). Skips when Redis is unreachable.
 func TestWriteReadRoundTrip_Redis(t *testing.T) {
 	rdb := redisTestDB(t, 13)
@@ -36,11 +36,11 @@ func TestWriteReadRoundTrip_Redis(t *testing.T) {
 	ctx := context.Background()
 	write := func(path string, mt MergeType, body string) {
 		t.Helper()
-		h, err := c.WriteBegin(ctx, WriteBeginRequest{
+		h, err := beginWrite(c, store, WriteRequest{
 			Catalog: "users", Path: path, MergeType: mt, Provider: "mem", Bucket: "data",
 		})
 		if err != nil {
-			t.Fatalf("WriteBegin(%s): %v", path, err)
+			t.Fatalf("NewWriteHandle(%s): %v", path, err)
 		}
 		// Simulate the client's direct upload to the presigned location.
 		if err := store.Bucket(h.Bucket).Put(ctx, h.Catalog, h.Key, []byte(body)); err != nil {
@@ -102,11 +102,11 @@ func TestReadBytesMutationDoesNotCorruptSnapshot(t *testing.T) {
 	c := New(prefix, rdb, resolve, WithSnapTarget("mem", "snaps"))
 
 	ctx := context.Background()
-	h, err := c.WriteBegin(ctx, WriteBeginRequest{
+	h, err := beginWrite(c, store, WriteRequest{
 		Catalog: "users", Path: "/", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data",
 	})
 	if err != nil {
-		t.Fatalf("WriteBegin: %v", err)
+		t.Fatalf("NewWriteHandle: %v", err)
 	}
 	const doc = `{"name":"Alice"}`
 	if err := store.Bucket(h.Bucket).Put(ctx, h.Catalog, h.Key, []byte(doc)); err != nil {
