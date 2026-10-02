@@ -8,8 +8,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hkloudou/lake/v3/storage/mem"
 	"github.com/redis/go-redis/v9"
 )
+
+// beginWrite mints a handle the way an API server would: NewWriteHandle on
+// the in-memory bucket named by the request, signed with the Client's secret.
+func beginWrite(c *Client, store *mem.Store, req WriteRequest, opts ...WriteOption) (*WriteHandle, error) {
+	return NewWriteHandle(context.Background(), req, presignBucket{store.Bucket(req.Bucket)}, c.handleSecret, opts...)
+}
 
 // Integration tests talk to a developer's real Redis — 127.0.0.1:6379 unless
 // LAKE_TEST_REDIS_ADDR points elsewhere (devcontainers, docker-compose hosts).

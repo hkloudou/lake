@@ -7,9 +7,7 @@ import (
 	"time"
 
 	"github.com/hkloudou/lake/v3/internal/objkey"
-	"github.com/hkloudou/lake/v3/storage"
 	"github.com/hkloudou/lake/v3/storage/mem"
-	"github.com/redis/go-redis/v9"
 )
 
 func TestWriteNotify_RejectsInvalidMergeTypeBeforeRedis(t *testing.T) {
@@ -50,7 +48,7 @@ func TestWriteNotify_RejectsMalformedURIBeforeRedis(t *testing.T) {
 }
 
 // TestWriteNotify_RejectsTamperedUUID: a handle whose UUID is not the exact
-// 32-hex form WriteBegin mints is rejected before any Redis call — the UUID
+// 32-hex form NewWriteHandle mints is rejected before any Redis call — the UUID
 // participates in the recomputed delta path, so it must not carry path
 // metacharacters.
 func TestWriteNotify_RejectsTamperedUUID(t *testing.T) {
@@ -93,13 +91,12 @@ func TestWriteNotify_RejectsForeignURI(t *testing.T) {
 	}
 }
 
-// TestWriteBegin_RejectsAmbiguousProviderBucket: provider and bucket are
+// TestNewWriteHandle_RejectsAmbiguousProviderBucket: provider and bucket are
 // embedded in the delta URI "provider://bucket/path", which ParseURI splits
 // on the first "://" and the first "/" — a "/" or ":" inside either part
 // would make the recorded locator resolve to a different object than the one
-// presigned. WriteBegin must reject such names before presigning anything.
-func TestWriteBegin_RejectsAmbiguousProviderBucket(t *testing.T) {
-	c := newDeadClient(t)
+// presigned. NewWriteHandle must reject such names before presigning anything.
+func TestNewWriteHandle_RejectsAmbiguousProviderBucket(t *testing.T) {
 	for _, tc := range []struct{ provider, bucket string }{
 		{"oss/x", "data"},   // "/" in provider
 		{"oss:x", "data"},   // ":" in provider (would nest into "://")
@@ -109,10 +106,10 @@ func TestWriteBegin_RejectsAmbiguousProviderBucket(t *testing.T) {
 		{".oss", "data"},    // leading dot
 		{"oss", "-data"},    // leading dash
 	} {
-		_, err := c.WriteBegin(context.Background(), WriteBeginRequest{
+		_, err := NewWriteHandle(context.Background(), WriteRequest{
 			Catalog: "users", Path: "/", MergeType: MergeTypeReplace,
 			Provider: tc.provider, Bucket: tc.bucket,
-		})
+		}, failingPresigner{}, nil)
 		if err == nil || !strings.Contains(err.Error(), "invalid storage") {
 			t.Fatalf("provider=%q bucket=%q: expected invalid storage error, got %v", tc.provider, tc.bucket, err)
 		}
@@ -121,7 +118,7 @@ func TestWriteBegin_RejectsAmbiguousProviderBucket(t *testing.T) {
 
 // TestWriteNotify_RejectsAmbiguousURIParts: the handle URI is untrusted
 // input recorded verbatim into the index, where reads feed its parsed
-// provider/bucket to the resolver — so notify holds both to WriteBegin's
+// provider/bucket to the resolver — so notify holds both to NewWriteHandle's
 // charset even when the path component binds correctly.
 func TestWriteNotify_RejectsAmbiguousURIParts(t *testing.T) {
 	c := newDeadClient(t)
@@ -173,26 +170,13 @@ func TestWithSnapTarget_PanicsOnAmbiguousTarget(t *testing.T) {
 	}
 }
 
-func TestWriteBegin_ZeroTTLUsesDefaultTTL(t *testing.T) {
-	store := mem.New()
-	resolve := func(_ storage.Kind, _, bucket string) (storage.Storage, error) {
-		return presignBucket{store.Bucket(bucket)}, nil
-	}
-	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"})
-	t.Cleanup(func() { _ = rdb.Close() })
-	c := New("ttltest", rdb, resolve)
-
-	h, err := c.WriteBegin(context.Background(), WriteBeginRequest{
-		Catalog:   "users",
-		Path:      "/",
-		MergeType: MergeTypeReplace,
-		Provider:  "mem",
-		Bucket:    "data",
-	}, WithUploadTTL(0))
+func TestNewWriteHandle_ZeroTTLUsesDefaultTTL(t *testing.T) {
+	h, err := NewWriteHandle(context.Background(), WriteRequest{
+		Catalog: "users", Path: "/", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data",
+	}, presignBucket{mem.New().Bucket("data")}, nil, WithUploadTTL(0))
 	if err != nil {
-		t.Fatalf("WriteBegin: %v", err)
+		t.Fatalf("NewWriteHandle: %v", err)
 	}
-
 	ttl := h.ExpiresAt - time.Now().Unix()
 	if ttl < 14*60 || ttl > 16*60 {
 		t.Fatalf("ExpiresAt delta = %ds, want about 15m", ttl)

@@ -36,7 +36,7 @@ func (s cachedStorage) Put(ctx context.Context, catalog, path string, data []byt
 
 // cachedPresignStorage additionally exposes Presigner when the wrapped backend
 // supports it, so a caching wrapper never hides an object store's presign
-// capability from WriteBegin. Presign mints a URL; it is never cached.
+// capability from NewWriteHandle. Presign mints a URL; it is never cached.
 type cachedPresignStorage struct {
 	cachedStorage
 	presigner storage.Presigner

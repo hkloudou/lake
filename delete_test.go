@@ -25,7 +25,7 @@ func TestDeleteCatalog_Redis(t *testing.T) {
 
 	write := func(body string) {
 		t.Helper()
-		h, err := c.WriteBegin(ctx, WriteBeginRequest{
+		h, err := beginWrite(c, store, WriteRequest{
 			Catalog: "users", Path: "/", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data",
 		})
 		if err != nil {

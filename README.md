@@ -56,9 +56,9 @@ bodies may even span buckets or clouds.
 **A write is three steps, and document bytes never pass through Lake:**
 
 ```
-WriteBegin  → reserve a UUID + a presigned PUT URL   (no Redis write)
-your client → PUT the body straight to object storage
-WriteNotify → append the delta to the Redis log      (no storage write)
+NewWriteHandle → reserve a UUID + a presigned PUT URL   (no Redis, no Client)
+your client    → PUT the body straight to object storage
+WriteNotify    → append the delta to the Redis log      (no storage write)
 ```
 
 The index entry is created only at `WriteNotify`, *after* the upload succeeded —
@@ -140,14 +140,16 @@ func main() {
     ctx := context.Background()
     body := []byte(`{"name":"Alice","age":30}`)
 
-    // 2. Reserve a UUID + signed PUT URL for the chosen (provider, bucket).
-    h, err := client.WriteBegin(ctx, lake.WriteBeginRequest{
+    // 2. Mint a handle: UUID + signed PUT URL for the chosen (provider, bucket).
+    //    Pure local computation against the bucket — no Redis, no Client — so
+    //    any process holding the OSS credentials can do this step.
+    h, err := lake.NewWriteHandle(ctx, lake.WriteRequest{
         Catalog:   "users",
         Path:      "/profile",
         MergeType: lake.MergeTypeReplace,
         Provider:  "oss",
         Bucket:    "my-bucket",
-    })
+    }, oss.Bucket("my-bucket"), nil /* handle secret, see WithHandleSecret */)
     if err != nil {
         log.Fatal(err)
     }
@@ -284,17 +286,20 @@ object-store fetch — see **Configuration** below.
 ### Write — three-step direct upload
 
 Client bytes never traverse the Lake process. The write target (provider +
-bucket) is chosen **per write** and recorded in the delta.
+bucket) is chosen **per write** and recorded in the delta. Starting a write
+needs no Client and no Redis: `NewWriteHandle` is pure local computation plus
+one presign call against the bucket, so an API server, a gateway or a batch
+job that holds the storage credentials mints handles, and only `WriteNotify`
+touches the index.
 
 | Function | Description |
 |----------|-------------|
-| `(*Client) WriteBegin(ctx, WriteBeginRequest, opts...) (*WriteHandle, error)` | Reserve a UUID, derive the object path, presign a PUT against `(Provider, Bucket)`. **No Redis op.** |
-| `NewWriteHandle(ctx, WriteBeginRequest, presigner, secret, opts...) (*WriteHandle, error)` | The same without a Client: pure local computation plus one presign call. Lets a gateway, a batch job or a client SDK that holds the storage credentials mint handles offline and hand them to `WriteNotify` |
+| `NewWriteHandle(ctx, WriteRequest, storage, secret, opts...) (*WriteHandle, error)` | Reserve a UUID, derive the object path, presign a PUT against `storage` (the bucket-scoped `storage.Storage` for `(Provider, Bucket)`; must implement `storage.Presigner`). `secret` is the notifying Client's `WithHandleSecret`, or nil. **No Redis op.** |
 | (HTTP PUT to `handle.UploadURL`) | The client uploads bytes directly using the signed URL + `handle.UploadHeaders`. |
 | `(*Client) WriteNotify(ctx, *WriteHandle) error` | Allocate the tsSeq and atomically record the delta (carrying `handle.URI`). **No storage op.** Idempotent per handle for an hour — safe to retry |
 
 ```go
-type WriteBeginRequest struct {
+type WriteRequest struct {
     Catalog   string    `json:"catalog"`
     Path      string    `json:"path"`      // "/" means root
     MergeType MergeType `json:"mergeType"` // 1=Replace, 2=RFC7396
@@ -319,13 +324,13 @@ type WriteHandle struct {
 }
 ```
 
-**Begin options**: `WithUploadTTL(d)`, `WithUploadContentType(ct)`.
+**Options**: `WithUploadTTL(d)`, `WithUploadContentType(ct)`.
 
 **Handle integrity**: handles round-trip through clients Lake does not trust,
 so `WriteNotify` always re-derives the object path from the handle's own
 `(Catalog, UUID)` and rejects a URI that doesn't match — a tampered handle can
 never point one catalog's index at another catalog's objects. With
-`WithHandleSecret` configured, WriteBegin additionally stamps `Signature`
+`WithHandleSecret` configured, `NewWriteHandle` given the same secret stamps `Signature`
 (HMAC-SHA256 over the identity fields) and WriteNotify rejects handles whose
 signature is missing/invalid or whose `ExpiresAt` has passed (no indefinite
 replay of a leaked handle).
@@ -335,12 +340,12 @@ bytes — Lake's own backend-agnostic sanity bound (both parts are recorded in
 every delta's URI; a bucket is one path component on the file backend). Real
 object stores impose tighter rules of their own (OSS / S3 buckets: 63 chars),
 surfaced by the backend itself. They are embedded in the recorded URI, so `/`
-`:` `|` are rejected at WriteBegin (an ambiguous name would make the URI parse
+`:` `|` are rejected by `NewWriteHandle` (an ambiguous name would make the URI parse
 back to a different object), and WriteNotify re-checks the parsed parts of the
 handle's URI (the handle is untrusted input).
 
-> **Presign capability**: WriteBegin requires the resolved backend to implement
-> `storage.Presigner`. OSS supports it; file / memory return
+> **Presign capability**: `NewWriteHandle` requires the storage it is given to
+> implement `storage.Presigner`. OSS supports it; file / memory return
 > `lake.ErrPresignNotSupported`.
 >
 > **Create-once uploads**: the OSS URL is signed with `x-oss-forbid-overwrite`,
@@ -496,7 +501,7 @@ catalogs.
 ### Three-step direct upload
 
 ```
-WriteBegin:  UUID v4 → object path → PresignPut(provider, bucket, path)  (NO Redis op)
+NewWriteHandle: UUID v4 → object path → PresignPut(provider, bucket, path)  (NO Redis op, NO Client)
 (client uploads bytes directly to handle.UploadURL)
 WriteNotify: Lua → dedup by uri (a replay returns the original entry) → monotonic tsSeq alloc; ZADD [mergeType, path, tsSeq, uri]  (NO storage op)
 ```
@@ -607,7 +612,6 @@ client.Use(func(catalog, event string, attrs map[string]any) {
 |-------|-------|
 | `List` / `BatchList` | — |
 | `Read` | — (every `Read*` call, before bodies are fetched) |
-| `WriteBegin` | `path`, `mergeType`, `provider`, `bucket` |
 | `WriteNotify` | `path`, `uri` |
 | `Sample` / `BatchSample` | `indicator` |
 | `SampleCacheError` | `op`, `err` |
@@ -700,7 +704,7 @@ v3 is **not** wire-compatible with v2. The headline changes:
 - **Construction**: `NewLake(metaUrl, opts)` + Redis `lake.setting` → explicit
   `New(prefix, rdb, resolve, opts)`. `lake.setting`, `WithStorage`, and the
   `internal/config` layer are gone; storage is injected via a `Resolver`.
-- **Storage is per-write + self-describing**: `WriteBeginRequest` gains
+- **Storage is per-write + self-describing**: `WriteRequest` gains
   `Provider` + `Bucket`; the delta records `provider://bucket/path`. The delta
   member is now a JSON array `[mergeType, path, tsSeq, uri]` and the snap value
   `[tsSeq, uri]` — old members/snaps don't decode; flush and repopulate.

@@ -30,11 +30,11 @@ func benchClient(b *testing.B, nDeltas int) (*Client, context.Context) {
 
 	ctx := context.Background()
 	for i := 0; i < nDeltas; i++ {
-		h, err := c.WriteBegin(ctx, WriteBeginRequest{
+		h, err := beginWrite(c, store, WriteRequest{
 			Catalog: "bench", Path: "/", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data",
 		})
 		if err != nil {
-			b.Fatalf("WriteBegin: %v", err)
+			b.Fatalf("NewWriteHandle: %v", err)
 		}
 		body := fmt.Sprintf(`{"n":%d,"payload":"0123456789abcdef"}`, i)
 		if err := store.Bucket(h.Bucket).Put(ctx, h.Catalog, h.Key, []byte(body)); err != nil {
@@ -80,11 +80,11 @@ func BenchmarkBatchList100(b *testing.B) {
 // BenchmarkNotify measures the write-commit script (seqid alloc + ZADD).
 func BenchmarkNotify(b *testing.B) {
 	c, ctx := benchClient(b, 0)
-	h, err := c.WriteBegin(ctx, WriteBeginRequest{
+	h, err := beginWrite(c, mem.New(), WriteRequest{
 		Catalog: "bench", Path: "/", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data",
 	})
 	if err != nil {
-		b.Fatalf("WriteBegin: %v", err)
+		b.Fatalf("NewWriteHandle: %v", err)
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

@@ -67,20 +67,6 @@ func TestEmit_BatchListFiresOnInitFailure(t *testing.T) {
 	}
 }
 
-func TestEmit_WriteBeginFiresOnPathValidationFailure(t *testing.T) {
-	c, spy := newClientWithSpy(t)
-
-	// Invalid path: missing leading slash. Fails before init.
-	_, _ = c.WriteBegin(context.Background(), WriteBeginRequest{
-		Catalog:   "users",
-		Path:      "no-leading-slash",
-		MergeType: MergeTypeReplace,
-	})
-	if !spy.seen("WriteBegin") {
-		t.Fatal("WriteBegin event must be emitted even when path validation fails")
-	}
-}
-
 func TestEmit_SampleFiresOnListErr(t *testing.T) {
 	c, spy := newClientWithSpy(t)
 

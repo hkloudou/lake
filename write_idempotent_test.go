@@ -28,11 +28,11 @@ func TestWriteNotify_IdempotentRetry_Redis(t *testing.T) {
 
 	begin := func(body string) *WriteHandle {
 		t.Helper()
-		h, err := c.WriteBegin(ctx, WriteBeginRequest{
+		h, err := beginWrite(c, store, WriteRequest{
 			Catalog: "acct", Path: "/x", MergeType: MergeTypeReplace, Provider: "mem", Bucket: "data",
 		})
 		if err != nil {
-			t.Fatalf("WriteBegin: %v", err)
+			t.Fatalf("NewWriteHandle: %v", err)
 		}
 		if err := store.Bucket(h.Bucket).Put(ctx, h.Catalog, h.Key, []byte(body)); err != nil {
 			t.Fatalf("upload: %v", err)
